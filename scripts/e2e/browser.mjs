@@ -35,9 +35,12 @@ const KEYS = {
 }
 
 export async function launchBrowser({ width = 1200, height = 800, port = 9444 } = {}) {
+  const chrome = findChrome()
+  // A full Chrome needs to be told to run without a display; the headless shell always does.
+  const headless = chrome.includes('headless') ? [] : ['--headless=new']
   const process_ = spawn(
-    findChrome(),
-    ['--no-sandbox', '--disable-gpu', `--remote-debugging-port=${port}`, `--window-size=${width},${height}`, 'about:blank'],
+    chrome,
+    [...headless, '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${port}`, `--window-size=${width},${height}`, 'about:blank'],
     { stdio: 'ignore' },
   )
 

@@ -1,0 +1,6 @@
+# Same line endings everywhere: tests compare generated files byte for byte.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
+*.sf2 binary
