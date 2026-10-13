@@ -198,8 +198,14 @@ pub fn run() {
         });
 
     with_commands(builder)
-        .run(tauri::generate_context!())
+        .run(context())
         .expect("error while running the Music Part application");
+}
+
+/// The app's configuration and assets. The macro defines a symbol on macOS, so it may only be
+/// expanded once: the tests use this too.
+fn context<R: tauri::Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
 }
 
 #[cfg(test)]
@@ -214,9 +220,7 @@ mod tests {
     /// An app with the real commands, configuration and permissions, and the demo score, but no
     /// window system and no audio.
     fn app() -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
-        let app = with_commands(mock_builder())
-            .build(tauri::generate_context!())
-            .unwrap();
+        let app = with_commands(mock_builder()).build(context()).unwrap();
         app.manage(AudioController::unavailable("no audio in tests".into()));
         app.manage(Mutex::new(Document::new(score_model::demo_score(), None)));
         app.manage(Startup {

@@ -49,12 +49,14 @@ async function startVite() {
     cwd: root,
     stdio: 'ignore',
   })
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // pnpm and Vite can take a while to start on a busy machine.
+  for (let attempt = 0; attempt < 600; attempt++) {
     try {
       if ((await fetch(`http://127.0.0.1:${uiPort}/`)).ok) return server
     } catch {
-      await sleep(100)
+      // not listening yet
     }
+    await sleep(100)
   }
   server.kill()
   throw new Error('the UI dev server did not start')
