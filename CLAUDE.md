@@ -6,7 +6,7 @@ runtime, no heavy web stack.
 
 ## Project structure
 
-Cargo workspace with a Tauri + Svelte front end (not created yet).
+Cargo workspace plus a pnpm workspace: a Tauri 2 shell (`src-tauri`) around a Svelte 5 + Vite front end (`ui`).
 
 ```
 root/
@@ -14,8 +14,10 @@ root/
 │   ├── score-model/   # Score > Track > Measure > Voice > Beat > Note. Pure data, no I/O
 │   ├── io-midi/       # MIDI import to Score
 │   └── audio-engine/  # Sequencer (Score -> timed events), SoundFont Player, cpal output
-├── src-tauri/         # (planned) Tauri commands exposing the engine to the UI
-├── ui/                # (planned) Svelte + TypeScript front end, score and tab rendering
+├── src-tauri/         # Tauri shell: commands exposing the engines to the UI (`demo_score` for now)
+├── ui/                # Svelte + TypeScript front end
+│   ├── public/        # demo-score.json: export of the Rust demo score, checked by a Rust test
+│   └── src/lib/       # tab-layout.ts (pure layout, unit tested), score types, Tauri/browser loader
 └── docs/              # (planned) Design notes, one file per feature
 ```
 
@@ -29,6 +31,9 @@ samples, then Guitar Pro import and more instruments.
 - Audio hardware stays in `audio-engine/src/output.rs`. Everything else there (sequencer, `Player`)
   must stay testable without a sound card.
 - The UI never touches audio. It sends commands to the engine through Tauri.
+- Layout lives in pure TypeScript functions (`ui/src/lib/tab-layout.ts`) that return plain geometry;
+  Svelte components only draw it. Test layout with vitest, not through the DOM.
+- `ui/src/lib/score-types.ts` mirrors the serde JSON of `score-model` by hand. Change both together.
 
 ## Development
 
@@ -42,7 +47,22 @@ SOUNDFONT=/usr/share/sounds/sf2/TimGM6mb.sf2 cargo test -p audio-engine   # Incl
 cargo run -p audio-engine --example play_midi -- song.mid font.sf2        # Listen to a MIDI file
 ```
 
-Run from the repo root and target a crate with `-p <name>`, never `cd` into a crate.
+```bash
+pnpm install                     # JS dependencies (UI and Tauri CLI)
+pnpm dev                         # Run the desktop app (Tauri + Vite dev server on port 1420)
+pnpm ui:dev                      # UI alone in a browser, loads ui/public/demo-score.json
+pnpm ui:check                    # svelte-check + tsc
+pnpm ui:test                     # vitest
+UPDATE_DEMO=1 cargo test -p score-model demo_json   # Regenerate ui/public/demo-score.json
+```
+
+Run from the repo root and target a crate with `-p <name>`, never `cd` into a crate. Target a UI
+script with `pnpm --filter ui <script>`.
+
+`src-tauri` embeds `ui/dist` at compile time, so run `pnpm --filter ui build` once before
+`cargo build`, `cargo clippy` or `cargo test --workspace` on a fresh checkout.
+
+The dev server uses port 1420 (fixed, Tauri needs it). Port 5173 is often taken by other projects.
 
 Linux needs system packages for Tauri and ALSA:
 `pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libasound2-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev`.
@@ -50,8 +70,9 @@ Linux needs system packages for Tauri and ALSA:
 ### Naming
 
 - Crates: kebab-case (`score-model`). Rust files and modules: snake_case, as Rust requires.
-- Front end files (`ui/`): kebab-case. Exceptions: `README.md`, `CLAUDE.md`, `CHANGELOG.md`.
-- Svelte components: PascalCase. TypeScript functions and variables: camelCase.
+- Front end files (`ui/`): kebab-case, except Svelte components in PascalCase (`TabView.svelte`).
+  Other exceptions: `README.md`, `CLAUDE.md`, `CHANGELOG.md`.
+- TypeScript functions and variables: camelCase.
 
 ### Rust coding patterns
 

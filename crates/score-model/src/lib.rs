@@ -1,5 +1,9 @@
 //! Score model: Score > Track > Measure > Voice > Beat > Note.
 
+mod demo;
+
+pub use demo::demo_score;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
