@@ -1,0 +1,10 @@
+[package]
+name = "io-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+score-model = { path = "../score-model" }
+serde.workspace = true
+serde_json.workspace = true
