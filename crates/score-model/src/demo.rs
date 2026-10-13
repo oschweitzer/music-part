@@ -51,6 +51,21 @@ fn quarters(string: u8, fret: u8) -> Measure {
     )
 }
 
+/// An empty score to start writing in: one guitar track and four measures of rest.
+pub fn blank_score(title: &str) -> Score {
+    let rests = vec![beat(NoteValue::Whole, 0, vec![])];
+    Score {
+        title: title.into(),
+        tempo_bpm: 120,
+        tracks: vec![Track {
+            name: "Guitar".into(),
+            instrument: Instrument::Guitar,
+            tuning: GUITAR_STANDARD.to_vec(),
+            measures: (0..4).map(|_| measure(rests.clone())).collect(),
+        }],
+    }
+}
+
 pub fn demo_score() -> Score {
     use NoteValue::{Eighth, Half, Quarter, Whole};
 

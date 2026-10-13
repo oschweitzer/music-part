@@ -1,8 +1,12 @@
 //! Score model: Score > Track > Measure > Voice > Beat > Note.
 
 mod demo;
+mod edit;
+mod validate;
 
-pub use demo::demo_score;
+pub use demo::{blank_score, demo_score};
+pub use edit::{apply_edit, Edit, EditError};
+pub use validate::ScoreError;
 
 use serde::{Deserialize, Serialize};
 
@@ -105,7 +109,15 @@ impl NoteValue {
     }
 }
 
+/// Highest fret a note can be placed on.
+pub const MAX_FRET: u8 = 24;
+
 impl Duration {
+    /// At most two dots, and none on a 32nd note (its dotted length is not a multiple of a 32nd).
+    pub fn is_valid(self) -> bool {
+        self.dots <= 2 && (self.value != NoteValue::ThirtySecond || self.dots == 0)
+    }
+
     pub fn ticks(self) -> u32 {
         let base = self.value.ticks();
         let mut total = base;
@@ -119,9 +131,39 @@ impl Duration {
 }
 
 impl TimeSignature {
+    /// Length of a measure in 128th notes. A denominator of 0 counts as an empty measure.
     pub fn ticks(self) -> u32 {
-        self.numerator as u32 * 128 / self.denominator as u32
+        (self.numerator as u32 * 128)
+            .checked_div(self.denominator as u32)
+            .unwrap_or(0)
     }
+}
+
+/// Splits a length into valid durations, taking the largest that fits each time. `None` if the length is not a
+/// multiple of a 32nd note, which no combination of valid durations can add up to.
+pub fn decompose_ticks(mut len: u32) -> Option<Vec<Duration>> {
+    const VALUES: [NoteValue; 6] = [
+        NoteValue::Whole,
+        NoteValue::Half,
+        NoteValue::Quarter,
+        NoteValue::Eighth,
+        NoteValue::Sixteenth,
+        NoteValue::ThirtySecond,
+    ];
+    let mut candidates: Vec<Duration> = VALUES
+        .iter()
+        .flat_map(|&value| (0..=2).map(move |dots| Duration { value, dots }))
+        .filter(|d| d.is_valid())
+        .collect();
+    candidates.sort_by_key(|d| std::cmp::Reverse(d.ticks()));
+
+    let mut out = Vec::new();
+    while len > 0 {
+        let d = *candidates.iter().find(|d| d.ticks() <= len)?;
+        len -= d.ticks();
+        out.push(d);
+    }
+    Some(out)
 }
 
 impl Track {
@@ -193,6 +235,63 @@ mod tests {
             assert!(tuning.windows(2).all(|w| w[0] > w[1]), "{instrument:?}");
         }
         assert_eq!(Instrument::Bass.standard_tuning().len(), 4);
+    }
+
+    #[test]
+    fn decompose_uses_the_largest_durations_first() {
+        let d = |value, dots| Duration { value, dots };
+        assert_eq!(decompose_ticks(128), Some(vec![d(NoteValue::Whole, 0)]));
+        assert_eq!(decompose_ticks(48), Some(vec![d(NoteValue::Quarter, 1)]));
+        assert_eq!(
+            decompose_ticks(36),
+            Some(vec![
+                d(NoteValue::Quarter, 0),
+                d(NoteValue::ThirtySecond, 0)
+            ])
+        );
+        assert_eq!(decompose_ticks(0), Some(vec![]));
+    }
+
+    #[test]
+    fn decompose_always_adds_back_up_and_refuses_what_is_not_a_32nd_multiple() {
+        for len in (0..=512).step_by(4) {
+            let parts = decompose_ticks(len).unwrap();
+            assert_eq!(parts.iter().map(|d| d.ticks()).sum::<u32>(), len);
+            assert!(parts.iter().all(|d| d.is_valid()));
+        }
+        assert_eq!(decompose_ticks(6), None);
+        assert_eq!(decompose_ticks(3), None);
+    }
+
+    #[test]
+    fn a_dotted_32nd_is_not_a_valid_duration() {
+        assert!(!Duration {
+            value: NoteValue::ThirtySecond,
+            dots: 1
+        }
+        .is_valid());
+        assert!(!Duration {
+            value: NoteValue::Quarter,
+            dots: 3
+        }
+        .is_valid());
+        assert!(Duration {
+            value: NoteValue::Sixteenth,
+            dots: 2
+        }
+        .is_valid());
+    }
+
+    #[test]
+    fn a_zero_denominator_does_not_divide_by_zero() {
+        assert_eq!(
+            TimeSignature {
+                numerator: 4,
+                denominator: 0
+            }
+            .ticks(),
+            0
+        );
     }
 
     #[test]

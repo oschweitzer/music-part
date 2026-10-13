@@ -15,21 +15,25 @@ use std::fmt;
 
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use score_model::{
-    Beat, Duration, Instrument, Measure, Note, NoteValue, Score, TimeSignature, Track, Voice,
+    decompose_ticks, Beat, Duration, Instrument, Measure, Note, Score, TimeSignature, Track, Voice,
+    MAX_FRET,
 };
 
 /// Smallest unit: 1/128 of a whole note. Notes are quantized to a 32nd note (4).
 const GRID: u32 = 4;
-const MAX_FRET: u8 = 24;
 const PERCUSSION_CHANNEL: u8 = 9;
 /// Longest piece accepted. Protects against files that would allocate millions of measures.
 const MAX_MEASURES: u32 = 5000;
+/// Fastest tempo the score model accepts.
+const MAX_TEMPO: u16 = 999;
 
 #[derive(Debug)]
 pub enum MidiImportError {
     Parse(midly::Error),
     UnsupportedTiming,
     TooLong,
+    /// The imported score failed its own checks. This is a bug in the importer.
+    Invalid(String),
 }
 
 impl fmt::Display for MidiImportError {
@@ -41,6 +45,9 @@ impl fmt::Display for MidiImportError {
                 f,
                 "the piece is too long (more than {MAX_MEASURES} measures)"
             ),
+            Self::Invalid(reason) => {
+                write!(f, "the MIDI file could not be converted: {reason}")
+            }
         }
     }
 }
@@ -94,7 +101,7 @@ pub fn import_midi(bytes: &[u8]) -> Result<MidiImport, MidiImportError> {
             match ev.kind {
                 TrackEventKind::Meta(MetaMessage::Tempo(us)) if !tempo_seen => {
                     let bpm = 60_000_000 / us.as_int().max(1);
-                    tempo_bpm = u16::try_from(bpm).unwrap_or(u16::MAX).max(1);
+                    tempo_bpm = u16::try_from(bpm).unwrap_or(MAX_TEMPO).clamp(1, MAX_TEMPO);
                     tempo_seen = true;
                 }
                 TrackEventKind::Meta(MetaMessage::TimeSignature(n, d, _, _))
@@ -171,14 +178,42 @@ pub fn import_midi(bytes: &[u8]) -> Result<MidiImport, MidiImportError> {
         }
     }
 
+    pad_to_same_length(&mut tracks, time_signature);
+    let score = Score {
+        title: title.unwrap_or_else(|| "Untitled".into()),
+        tempo_bpm,
+        tracks,
+    };
+    score
+        .validate()
+        .map_err(|e| MidiImportError::Invalid(e.to_string()))?;
+
     Ok(MidiImport {
-        score: Score {
-            title: title.unwrap_or_else(|| "Untitled".into()),
-            tempo_bpm,
-            tracks,
-        },
+        score,
         skipped_notes,
     })
+}
+
+/// Every track ends up with the same number of measures, so that measures can be inserted and
+/// deleted for the whole score at once.
+fn pad_to_same_length(tracks: &mut [Track], ts: TimeSignature) {
+    let longest = tracks.iter().map(|t| t.measures.len()).max().unwrap_or(0);
+    for track in tracks {
+        while track.measures.len() < longest {
+            track.measures.push(Measure {
+                time_signature: ts,
+                voices: vec![Voice {
+                    beats: decompose(ts.ticks())
+                        .into_iter()
+                        .map(|duration| Beat {
+                            duration,
+                            notes: vec![],
+                        })
+                        .collect(),
+                }],
+            });
+        }
+    }
 }
 
 /// A time signature the grid can represent: whole multiples of a 32nd note per measure.
@@ -269,32 +304,9 @@ fn place_chord(tuning: &[u8], pitches: &[u8]) -> (Vec<Note>, usize) {
     (notes, skipped)
 }
 
-/// Splits a length into representable durations, largest first. `len` is a multiple of `GRID`.
-fn decompose(mut len: u32) -> Vec<Duration> {
-    const VALUES: [NoteValue; 6] = [
-        NoteValue::Whole,
-        NoteValue::Half,
-        NoteValue::Quarter,
-        NoteValue::Eighth,
-        NoteValue::Sixteenth,
-        NoteValue::ThirtySecond,
-    ];
-    let mut candidates: Vec<Duration> = VALUES
-        .iter()
-        .flat_map(|&value| (0..=2).map(move |dots| Duration { value, dots }))
-        .collect();
-    candidates.sort_by_key(|d| std::cmp::Reverse(d.ticks()));
-
-    let mut out = Vec::new();
-    while len > 0 {
-        let d = *candidates
-            .iter()
-            .find(|d| d.ticks() <= len)
-            .expect("len >= GRID");
-        len -= d.ticks();
-        out.push(d);
-    }
-    out
+/// Splits a length into durations. `len` is a multiple of `GRID`, so this always succeeds.
+fn decompose(len: u32) -> Vec<Duration> {
+    decompose_ticks(len).expect("len is a multiple of GRID")
 }
 
 fn build_track(
@@ -587,6 +599,24 @@ mod tests {
     }
 
     #[test]
+    fn tracks_of_different_lengths_are_padded_to_the_same_number_of_measures() {
+        let long = vec![program(0, 24)]
+            .into_iter()
+            .chain(quarters(&[64; 12]))
+            .collect::<Vec<_>>();
+        let short: Vec<_> = vec![program(1, 33)]
+            .into_iter()
+            .chain([on_channel(1, 0, 40, true), on_channel(1, 480, 40, false)])
+            .collect();
+        let score = import_midi(&write(PPQ, vec![long, short])).unwrap().score;
+
+        assert_eq!(score.tracks[0].measures.len(), 3);
+        assert_eq!(score.tracks[1].measures.len(), 3);
+        assert!(score.tracks[1].measures[2].is_complete());
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
     fn channels_of_one_track_become_separate_tracks() {
         let events = vec![
             on_channel(0, 0, 64, true),
@@ -745,7 +775,7 @@ mod tests {
         let mut events = vec![tempo];
         events.extend(quarters(&[64]));
         let score = import(&write(PPQ, vec![events])).unwrap();
-        assert_eq!(score.tempo_bpm, u16::MAX);
+        assert_eq!(score.tempo_bpm, 999);
     }
 
     /// Small deterministic generator, so a failure can be replayed from its seed.
