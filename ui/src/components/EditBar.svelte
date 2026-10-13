@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Editor } from '../lib/editor.svelte'
-  import type { NoteValue } from '../lib/score-types'
+  import type { NoteValue, Technique } from '../lib/score-types'
 
   let { editor }: { editor: Editor } = $props()
 
@@ -13,7 +13,17 @@
     { value: 'ThirtySecond', label: '1/32', name: 'Thirty-second note', key: 'T' },
   ]
 
+  const techniques: { value: Technique; label: string; name: string }[] = [
+    { value: 'HammerOn', label: 'H', name: 'Hammer-on' },
+    { value: 'PullOff', label: 'P', name: 'Pull-off' },
+    { value: 'Slide', label: '/', name: 'Slide (/)' },
+    { value: 'Bend', label: 'B', name: 'Bend (B)' },
+    { value: 'PalmMute', label: 'PM', name: 'Palm mute (M)' },
+    { value: 'Harmonic', label: '◇', name: 'Harmonic' },
+  ]
+
   const beat = $derived(editor.currentBeat)
+  const note = $derived(editor.currentNote)
   const canEdit = $derived(editor.canEdit)
 
   // Keep keyboard focus where it was, so that typing a fret still works after a click here.
@@ -75,6 +85,35 @@
     >
       •
     </button>
+  </div>
+
+  <div class="group" role="group" aria-label="Note effects">
+    <button
+      type="button"
+      class="tool text"
+      class:active={note?.tied === true}
+      aria-pressed={note?.tied === true}
+      title="Tie to the previous note (L)"
+      disabled={!canEdit}
+      onmousedown={keepFocus}
+      onclick={() => editor.run({ type: 'tie' })}
+    >
+      Tie
+    </button>
+    {#each techniques as t (t.value)}
+      <button
+        type="button"
+        class="tool text"
+        class:active={note?.technique === t.value}
+        aria-pressed={note?.technique === t.value}
+        title={t.name}
+        disabled={!canEdit}
+        onmousedown={keepFocus}
+        onclick={() => editor.run({ type: 'technique', technique: t.value })}
+      >
+        {t.label}
+      </button>
+    {/each}
   </div>
 
   <div class="group">

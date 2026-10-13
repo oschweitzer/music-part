@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from './score-source'
-import type { Duration, Score } from './score-types'
+import type { Duration, Instrument, Score, Technique } from './score-types'
 
 /** Same shapes as the `Edit` enum of `crates/score-model`, in camelCase. */
 export type Edit =
@@ -10,6 +10,11 @@ export type Edit =
   | { type: 'insertMeasure'; at: number }
   | { type: 'deleteMeasure'; index: number }
   | { type: 'setTempo'; bpm: number }
+  | { type: 'setTied'; track: number; measure: number; beat: number; string: number; tied: boolean }
+  | { type: 'setTechnique'; track: number; measure: number; beat: number; string: number; technique: Technique | null }
+  | { type: 'addTrack'; instrument: Instrument }
+  | { type: 'removeTrack'; index: number }
+  | { type: 'setTuning'; track: number; tuning: number[] }
 
 export type DocumentState = {
   score: Score

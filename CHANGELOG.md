@@ -21,6 +21,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Editing: click a note or a string to select it, type a fret (two digits for 10 to 24), delete,
   change the duration and dots, insert and delete measures, change the tempo. A measure always
   stays exactly full. Undo and redo (200 steps). See `docs/editing.md`.
+- Editing: ties (`L`) and techniques (hammer-on, pull-off, slide, bend, palm mute, harmonic),
+  adding and removing tracks, and choosing the tuning of a track by note names.
+- `score-model`: `Edit` variants `SetTied`, `SetTechnique`, `AddTrack`, `RemoveTrack`, `SetTuning`.
 - Native score files (`.mpart`): New, Open, Save and Save as, with a versioned format and safe
   writing. The app asks before discarding unsaved changes, and shows them in the title.
 - `score-model`: `Edit` and `apply_edit`, `Score::validate`, and `blank_score`.

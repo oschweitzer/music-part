@@ -17,6 +17,8 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | `Delete` / `Backspace`      | Removes the note on the selected string (a beat left empty becomes a rest)    |
 | `W` `H` `Q` `E` `S` `T`     | Whole, half, quarter, eighth, sixteenth and thirty-second note                |
 | `.`                         | Adds or removes a dot                                                         |
+| `L`                         | Ties the note to the one before it on the same string (again: unties)         |
+| `B` `M` `/`                 | Bend, palm mute, slide on the note (again: clears). Others are in the toolbar |
 | `Ctrl+Enter`                | Inserts a measure after the selected one                                      |
 | `Ctrl+Z`                    | Undo                                                                          |
 | `Ctrl+Shift+Z` / `Ctrl+Y`   | Redo                                                                          |
@@ -34,8 +36,19 @@ A measure is always exactly full. Changing the length of a beat keeps it that wa
 - **Longer**: the beats that follow are overwritten, notes included. If the measure has no room left
   after the beat, nothing changes and the app says so.
 - A fret is 0 to 24. A dotted thirty-second note is not available.
+- A tie copies the fret of the note it continues, and needs a note on the same string just before
+  (across a barline too). Retyping the fret of a tied note unties it.
+- Ties and techniques apply to a note; on a rest the app asks for a note first.
 - Inserting or deleting a measure applies to every track, so tracks always have the same length. The
   last measure cannot be deleted.
+
+## Tracks and tuning
+
+`+ Track` adds a guitar, bass or violin in standard tuning with empty measures matching the first
+track. `Remove track` deletes the current one (the last track cannot be removed). The tuning field
+takes note names from the highest string to the lowest, for example `E4 B3 G3 D3 A2 D2` (`#` and `b`
+are accepted, middle C is `C4`); the number of strings follows the number of names, up to 12. A
+tuning that would leave a note without a string, or above MIDI pitch 127, is refused.
 
 Edits are recorded one by one, up to 200 steps. An edit that changes nothing is not recorded. Undoing
 back to the state that was opened or saved clears the unsaved mark.
@@ -52,6 +65,6 @@ back to the state that was opened or saved clears the unsaved mark.
 
 ## Not there yet
 
-Ties and techniques (hammer-on, slide, bends) can be read and played but not yet entered. There is no
-way to add a track, change the tuning or the time signature, select several notes, copy and paste, or
-click on the score to place the playback cursor.
+There is no way to change the time signature, rename a track or change its instrument, select several
+notes, copy and paste, or click on the score to place the playback cursor. Techniques are drawn and
+saved but do not change the sound yet (the SoundFont player only honours ties).

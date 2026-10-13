@@ -68,7 +68,7 @@ export const scenarios = [
     'shows the demo with its tracks and the file buttons enabled',
     async ({ page }) => {
       assert.match(await text(page, '.brand h1'), /Demo in A minor/)
-      assert.equal(await page.eval(`document.querySelectorAll('.tracks button').length`), 2)
+      assert.equal(await page.eval(`document.querySelectorAll('.tracks > button:not(.remove-track)').length`), 2)
       assert.equal(await page.eval(`[...document.querySelectorAll('.file-button')].every(b => !b.disabled)`), true)
       assert.equal(await isDirty(page), false)
       assert.equal((await frets(page))[0], '0')
@@ -411,6 +411,70 @@ export const scenarios = [
       assert.equal(await isDirty(page), false)
       await context.fresh(join(out, 'missing.mpart')) // not a file that exists: ignored
       assert.match(await text(page, '.brand h1'), /Demo in A minor/)
+    },
+  ],
+
+  [
+    'L ties the note to the one before it and a letter sets a technique',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 0)
+      await page.press('ArrowRight') // beat 1 holds a note on string 4; string 5 is free
+      await page.press('3')
+      await page.press('l')
+      await settle()
+
+      let note = beatsOf(await document_(context), 0)[1].notes.find((n) => n.string === 5)
+      assert.deepEqual([note.tied, note.fret], [true, 0], 'the tie copies the fret of the note it continues')
+      assert.equal(await exists(page, 'svg.tab path.tie'), true)
+
+      await page.press('b')
+      await settle()
+      note = beatsOf(await document_(context), 0)[1].notes.find((n) => n.string === 5)
+      assert.equal(note.technique, 'Bend')
+      await page.press('b') // the same key again clears it
+      await settle()
+      note = beatsOf(await document_(context), 0)[1].notes.find((n) => n.string === 5)
+      assert.equal(note.technique, null)
+    },
+  ],
+
+  [
+    'a tie on a string with no note before it is refused with a message',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 1) // beat 1, string 4: the beat before has its note on string 5
+      await page.press('l')
+      await settle()
+
+      assert.match(await text(page, '.notice span'), /no note to tie/)
+      assert.equal(await isDirty(page), false)
+    },
+  ],
+
+  [
+    'a track can be added, retuned and removed',
+    async (context) => {
+      const { page } = context
+      await page.eval(`document.querySelector('.add-track summary').click()`)
+      await clickButton(page, 'Bass')
+      assert.equal((await document_(context)).score.tracks.length, 3)
+      assert.equal(await page.eval(`document.querySelector('.tracks > button.active').textContent.includes('Bass')`), true)
+
+      await page.eval(`(() => { const i = document.querySelector('.tuning input'); i.value = 'G2 D2 A1 D1'; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      assert.deepEqual((await document_(context)).score.tracks[2].tuning, [43, 38, 33, 26])
+      assert.equal(await page.eval(`document.querySelector('.tuning input').value`), 'G2 D2 A1 D1')
+
+      // A tuning that is not note names is explained and leaves the track as it was.
+      await page.eval(`(() => { const i = document.querySelector('.tuning input'); i.value = 'banana'; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      assert.match(await text(page, '.notice span'), /note names/)
+      assert.equal(await page.eval(`document.querySelector('.tuning input').value`), 'G2 D2 A1 D1')
+
+      await clickButton(page, 'Remove track')
+      assert.equal((await document_(context)).score.tracks.length, 2)
+      assert.equal(await page.eval(`document.querySelectorAll('.tracks > button:not(.remove-track)').length`), 2)
     },
   ],
 ]

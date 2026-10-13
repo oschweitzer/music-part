@@ -2,8 +2,9 @@ import type { DocumentApi, DocumentState, Edit, OpenedDocument } from './documen
 import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
-import type { Beat, NoteValue } from './score-types'
+import type { Beat, Instrument, Note, NoteValue, Technique } from './score-types'
 import { clampSelection, FIRST_NOTE, moveSelection, nextFret, type Selection } from './selection'
+import { parseTuning } from './tuning'
 
 export type Message = { tone: 'error' | 'info'; text: string }
 
@@ -53,6 +54,12 @@ export class Editor {
     return this.document?.isDirty ?? false
   }
 
+  /** The note under the selection, if the selected string has one in this beat. */
+  get currentNote(): Note | null {
+    const string = this.selection?.string
+    return this.currentBeat?.notes.find((n) => n.string === string) ?? null
+  }
+
   /** The beat under the selection, to show its duration. */
   get currentBeat(): Beat | null {
     const { document, selection, track } = this
@@ -94,6 +101,14 @@ export class Editor {
         return this.#setDuration(() => ({ value: command.value, dots: 0 }))
       case 'dot':
         return this.#setDuration((beat) => ({ value: beat.duration.value, dots: beat.duration.dots === 0 ? 1 : 0 }))
+      case 'tie':
+        return this.#withNote((at, note) => ({ type: 'setTied', ...at, tied: !note.tied }))
+      case 'technique':
+        return this.#withNote((at, note) => ({
+          type: 'setTechnique',
+          ...at,
+          technique: note.technique === command.technique ? null : command.technique,
+        }))
       case 'insertMeasure':
         return this.insertMeasure()
       case 'undo':
@@ -128,6 +143,32 @@ export class Editor {
     const index = this.selection?.measure
     if (index === undefined) return Promise.resolve()
     return this.#send({ type: 'deleteMeasure', index })
+  }
+
+  /** Adds a track after the others and shows it. */
+  addTrack(instrument: Instrument): Promise<void> {
+    const index = this.document?.score.tracks.length ?? 0
+    return this.#send({ type: 'addTrack', instrument }, () => {
+      this.track = index
+      this.selection = FIRST_NOTE
+    })
+  }
+
+  removeTrack(): Promise<void> {
+    return this.#send({ type: 'removeTrack', index: this.track })
+  }
+
+  /** Retunes the current track from note names such as "E4 B3 G3 D3 A2 D2". */
+  setTuning(text: string): Promise<void> {
+    const tuning = parseTuning(text)
+    if (tuning === null) {
+      this.message = {
+        tone: 'error',
+        text: 'Write the tuning as note names from the highest string to the lowest, for example "E4 B3 G3 D3 A2 E2".',
+      }
+      return Promise.resolve()
+    }
+    return this.#send({ type: 'setTuning', track: this.track, tuning })
   }
 
   undo(): Promise<void> {
@@ -187,6 +228,24 @@ export class Editor {
   #withTarget(build: (at: Where) => Edit): Promise<void> {
     const at = this.#where()
     return at ? this.#send(build(at)) : Promise.resolve()
+  }
+
+  /**
+   * Looks at the note when the edit's turn comes, not when the key was pressed: a note typed just
+   * before may not have come back from the desktop app yet.
+   */
+  #withNote(build: (at: Where, note: Note) => Edit): Promise<void> {
+    const at = this.#where()
+    if (!at) return Promise.resolve()
+    if (!this.#api.canEdit) return this.#send(build(at, { string: at.string, fret: 0, technique: null, tied: false }))
+    return this.#enqueue(async () => {
+      const note = this.currentNote
+      if (!note) {
+        this.message = { tone: 'info', text: 'Select a note first: this applies to a note, not a rest.' }
+        return
+      }
+      await this.#apply(await this.#api.edit(build(at, note)))
+    })
   }
 
   #typeFret(digit: number): Promise<void> {

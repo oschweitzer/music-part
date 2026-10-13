@@ -57,6 +57,14 @@ describe('interpretKey', () => {
     expect(press('Escape')).toEqual({ type: 'clearSelection' })
   })
 
+  it('should read L as a tie and a few letters as techniques', () => {
+    expect(press('l')).toEqual({ type: 'tie' })
+    expect(press('b')).toEqual({ type: 'technique', technique: 'Bend' })
+    expect(press('m')).toEqual({ type: 'technique', technique: 'PalmMute' })
+    expect(press('/')).toEqual({ type: 'technique', technique: 'Slide' })
+    expect(press('l', { ctrlKey: true })).toBeNull()
+  })
+
   it('should ignore every other key', () => {
     expect(press('a')).toBeNull()
     expect(press('F5')).toBeNull()

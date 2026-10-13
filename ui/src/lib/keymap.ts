@@ -1,4 +1,4 @@
-import type { NoteValue } from './score-types'
+import type { NoteValue, Technique } from './score-types'
 import type { Direction } from './selection'
 
 export type Command =
@@ -7,6 +7,8 @@ export type Command =
   | { type: 'remove' }
   | { type: 'duration'; value: NoteValue }
   | { type: 'dot' }
+  | { type: 'tie' }
+  | { type: 'technique'; technique: Technique }
   | { type: 'insertMeasure' }
   | { type: 'undo' }
   | { type: 'redo' }
@@ -32,6 +34,12 @@ const DURATION_KEYS: Record<string, NoteValue> = {
   e: 'Eighth',
   s: 'Sixteenth',
   t: 'ThirtySecond',
+}
+
+const TECHNIQUE_KEYS: Record<string, Technique> = {
+  b: 'Bend',
+  m: 'PalmMute',
+  '/': 'Slide',
 }
 
 const ARROWS: Record<string, Direction> = {
@@ -65,6 +73,8 @@ export function interpretKey(input: KeyInput): Command | null {
   if (key === 'Delete' || key === 'Backspace') return { type: 'remove' }
   if (key === 'Escape') return { type: 'clearSelection' }
   if (key === '.') return { type: 'dot' }
+  if (!shiftKey && lower === 'l') return { type: 'tie' }
+  if (!shiftKey && lower in TECHNIQUE_KEYS) return { type: 'technique', technique: TECHNIQUE_KEYS[lower] as Technique }
   if (!shiftKey && lower in DURATION_KEYS) return { type: 'duration', value: DURATION_KEYS[lower] as NoteValue }
   return null
 }

@@ -210,6 +210,93 @@ describe('Editor', () => {
     })
   })
 
+  describe('ties, techniques, tracks and tuning', () => {
+    it('should tie the selected note, then untie it when it already is', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 1, string: 4 })
+      await editor.run({ type: 'tie' })
+
+      expect(edits).toEqual([{ type: 'setTied', track: 0, measure: 0, beat: 1, string: 4, tied: true }])
+    })
+
+    it('should set a technique, and clear it when pressed again on the same technique', async () => {
+      const marked = structuredClone(score)
+      marked.tracks[0]!.measures[0]!.voices[0]!.beats[1]!.notes[0]!.technique = 'Bend'
+      const { api, edits } = fakeApi({
+        edit: async (edit) => {
+          edits.push(edit)
+          return state({ score: marked })
+        },
+      })
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 1, string: 4 })
+      await editor.run({ type: 'technique', technique: 'Slide' })
+      await editor.run({ type: 'technique', technique: 'Bend' })
+
+      expect(edits.map((e) => (e.type === 'setTechnique' ? e.technique : null))).toEqual(['Slide', null])
+    })
+
+    it('should tell the user a rest has no tie or technique, and send nothing', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 1, string: 1 }) // the note of that beat is on string 4
+      await editor.run({ type: 'tie' })
+
+      expect(edits).toEqual([])
+      expect(editor.message?.text).toMatch(/select a note/i)
+    })
+
+    it('should add a track and move to it', async () => {
+      const longer = structuredClone(score)
+      longer.tracks.push(structuredClone(score.tracks[0]!))
+      const { api, edits } = fakeApi({
+        edit: async (edit) => {
+          edits.push(edit)
+          return state({ score: longer })
+        },
+      })
+      const { editor } = setup({ api })
+      await editor.start()
+      await editor.addTrack('Bass')
+
+      expect(edits).toEqual([{ type: 'addTrack', instrument: 'Bass' }])
+      expect(editor.track).toBe(score.tracks.length)
+    })
+
+    it('should remove the current track', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.selectTrack(1)
+      await editor.removeTrack()
+
+      expect(edits).toEqual([{ type: 'removeTrack', index: 1 }])
+    })
+
+    it('should retune the current track from note names', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      await editor.setTuning('E4 B3 G3 D3 A2 D2')
+
+      expect(edits).toEqual([{ type: 'setTuning', track: 0, tuning: [64, 59, 55, 50, 45, 38] }])
+    })
+
+    it('should explain a tuning it cannot read instead of sending it', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      await editor.setTuning('banana')
+
+      expect(edits).toEqual([])
+      expect(editor.message?.tone).toBe('error')
+    })
+  })
+
   describe('sending edits', () => {
     it('should send edits one at a time, in the order they were made', async () => {
       const order: string[] = []

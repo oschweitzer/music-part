@@ -5,6 +5,8 @@
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
   import { interpretKey } from './lib/keymap'
+  import type { Instrument } from './lib/score-types'
+  import { formatTuning } from './lib/tuning'
   import { Playback } from './lib/playback.svelte'
   import { formatClock, ticksToSeconds, totalTicks } from './lib/score-time'
   import { layoutTab, locateTick } from './lib/tab-layout'
@@ -95,6 +97,20 @@
     else input.value = String(score?.tempo_bpm ?? 120)
   }
 
+  const instruments: Instrument[] = ['Guitar', 'Bass', 'Violin']
+
+  function addTrack(event: MouseEvent, instrument: Instrument) {
+    ;(event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
+    void editor.addTrack(instrument)
+  }
+
+  async function changeTuning(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    await editor.setTuning(input.value)
+    // Show the tuning the score really has, whether or not the new one was accepted.
+    input.value = formatTuning(track?.tuning ?? [])
+  }
+
   // Keep focus where it was, so that typing a fret still works after clicking a toolbar button.
   function keepFocus(event: MouseEvent) {
     event.preventDefault()
@@ -177,6 +193,40 @@
           <span class="strings">{t.tuning.length} strings</span>
         </button>
       {/each}
+
+      {#if editor.canEdit}
+        <details class="add-track">
+          <summary title="Add a track">+ Track</summary>
+          <div class="menu">
+            {#each instruments as instrument (instrument)}
+              <button type="button" onmousedown={keepFocus} onclick={(event) => addTrack(event, instrument)}>{instrument}</button>
+            {/each}
+          </div>
+        </details>
+
+        {#if track}
+          <label class="tuning" title="Open strings from the highest to the lowest, e.g. E4 B3 G3 D3 A2 D2">
+            Tuning
+            <input
+              type="text"
+              value={formatTuning(track.tuning)}
+              spellcheck="false"
+              aria-label="Tuning of this track"
+              onchange={changeTuning}
+            />
+          </label>
+          <button
+            type="button"
+            class="remove-track"
+            title="Remove this track"
+            disabled={(score?.tracks.length ?? 0) < 2}
+            onmousedown={keepFocus}
+            onclick={() => editor.removeTrack()}
+          >
+            Remove track
+          </button>
+        {/if}
+      {/if}
     </nav>
 
     <EditBar {editor} />
@@ -354,7 +404,7 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .tracks button {
+  .tracks > button {
     display: flex;
     align-items: baseline;
     gap: 8px;
@@ -369,13 +419,99 @@
     cursor: pointer;
   }
 
-  .tracks button:hover {
+  .tracks > button:hover {
     color: var(--ink);
   }
 
-  .tracks button.active {
+  .tracks > button.active {
     color: var(--ink);
     border-bottom-color: var(--accent);
+  }
+
+  .tracks {
+    align-items: center;
+  }
+
+  .add-track {
+    position: relative;
+  }
+
+  .add-track summary {
+    padding: 8px 10px;
+    color: var(--ink-muted);
+    font-size: 13px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .add-track summary:hover {
+    color: var(--ink);
+  }
+
+  .add-track .menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    min-width: 120px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .add-track .menu button {
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .add-track .menu button:hover {
+    background: var(--surface-2);
+  }
+
+  .tuning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    color: var(--ink-muted);
+    font-size: 12px;
+  }
+
+  .tuning input {
+    width: 170px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .remove-track {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: none;
+    color: var(--danger);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .remove-track:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .strings {
