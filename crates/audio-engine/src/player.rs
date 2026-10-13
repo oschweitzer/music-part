@@ -25,26 +25,81 @@ impl std::fmt::Display for PlayerError {
 
 impl std::error::Error for PlayerError {}
 
-/// Plays a score through a SoundFont synth. Does not touch audio hardware:
-/// `render` fills an interleaved stereo buffer, so it works offline.
-pub struct Player {
-    synth: Synth,
+/// Everything the player needs to play one score, precomputed so that handing it to a running
+/// player is a cheap swap. Build it away from the real-time audio thread.
+pub struct Program {
     events: Vec<Event>,
     /// Start position in samples of each event (same order as `events`).
     event_samples: Vec<u64>,
     end_sample: u64,
+    tempo_bpm: u16,
+    sample_rate: u32,
+    /// MIDI channel and General MIDI program of each track.
+    voices: Vec<(u8, u8)>,
+}
+
+impl Program {
+    pub fn new(score: &Score, sample_rate: u32) -> Self {
+        let events = sequencer::schedule(score);
+        let event_samples: Vec<u64> = events
+            .iter()
+            .map(|e| sequencer::tick_to_sample(e.tick, score.tempo_bpm, sample_rate))
+            .collect();
+        let end_sample = event_samples
+            .last()
+            .map_or(0, |last| last + RELEASE_TAIL_SECS * u64::from(sample_rate));
+
+        // One MIDI channel per track, skipping channel 9 (percussion).
+        let voices = score
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, track)| {
+                let channel = (i % 15) as u8;
+                let channel = if channel >= 9 { channel + 1 } else { channel };
+                let program = match track.instrument {
+                    Instrument::Guitar => 24, // Nylon Guitar
+                    Instrument::Bass => 33,   // Electric Bass (finger)
+                    Instrument::Violin => 40,
+                };
+                (channel, program)
+            })
+            .collect();
+
+        Self {
+            events,
+            event_samples,
+            end_sample,
+            tempo_bpm: score.tempo_bpm,
+            sample_rate,
+            voices,
+        }
+    }
+
+    fn empty(sample_rate: u32) -> Self {
+        Self {
+            events: Vec::new(),
+            event_samples: Vec::new(),
+            end_sample: 0,
+            tempo_bpm: 120,
+            sample_rate,
+            voices: Vec::new(),
+        }
+    }
+}
+
+/// Plays a score through a SoundFont synth. Does not touch audio hardware:
+/// `render` fills an interleaved stereo buffer, so it works offline.
+pub struct Player {
+    synth: Synth,
+    program: Program,
     next: usize,
     position: u64,
     playing: bool,
-    channels: Vec<u8>,
 }
 
 impl Player {
-    pub fn new<R: Read + Seek>(
-        score: &Score,
-        soundfont: &mut R,
-        sample_rate: u32,
-    ) -> Result<Self, PlayerError> {
+    pub fn new<R: Read + Seek>(soundfont: &mut R, sample_rate: u32) -> Result<Self, PlayerError> {
         let mut synth = Synth::new(SynthDescriptor {
             sample_rate: sample_rate as f32,
             ..Default::default()
@@ -57,49 +112,34 @@ impl Player {
                 .map_err(|e| PlayerError::SoundFont(format!("{e:?}")))?;
         synth.add_font(font, true);
 
-        // One MIDI channel per track, skipping channel 9 (percussion).
-        let channels: Vec<u8> = (0..score.tracks.len())
-            .map(|i| {
-                let c = (i % 15) as u8;
-                if c >= 9 {
-                    c + 1
-                } else {
-                    c
-                }
-            })
-            .collect();
-        for (track, &channel) in score.tracks.iter().zip(&channels) {
-            let program_id = match track.instrument {
-                Instrument::Guitar => 24, // Nylon Guitar
-                Instrument::Bass => 33,   // Electric Bass (finger)
-                Instrument::Violin => 40,
-            };
-            synth
-                .send_event(MidiEvent::ProgramChange {
-                    channel,
-                    program_id,
-                })
-                .map_err(|e| PlayerError::Synth(format!("{e:?}")))?;
-        }
-
-        let events = sequencer::schedule(score);
-        let event_samples: Vec<u64> = events
-            .iter()
-            .map(|e| sequencer::tick_to_sample(e.tick, score.tempo_bpm, sample_rate))
-            .collect();
-        let end_sample =
-            event_samples.last().copied().unwrap_or(0) + RELEASE_TAIL_SECS * u64::from(sample_rate);
-
         Ok(Self {
             synth,
-            events,
-            event_samples,
-            end_sample,
+            program: Program::empty(sample_rate),
             next: 0,
             position: 0,
             playing: false,
-            channels,
         })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.program.sample_rate
+    }
+
+    /// Replaces the score being played. Stops and rewinds.
+    pub fn load(&mut self, program: Program) {
+        self.stop();
+        for &(channel, program_id) in &program.voices {
+            let _ = self.synth.send_event(MidiEvent::ProgramChange {
+                channel,
+                program_id,
+            });
+        }
+        self.program = program;
+    }
+
+    /// Convenience for offline use: builds the `Program` for the player's sample rate.
+    pub fn load_score(&mut self, score: &Score) {
+        self.load(Program::new(score, self.program.sample_rate));
     }
 
     pub fn play(&mut self) {
@@ -127,13 +167,23 @@ impl Player {
         self.position
     }
 
+    /// Playback position in 1/128 of a whole note, to place a cursor on the score.
+    pub fn position_ticks(&self) -> f64 {
+        sequencer::sample_to_tick(
+            self.position,
+            self.program.tempo_bpm,
+            self.program.sample_rate,
+        )
+    }
+
     fn silence(&mut self) {
-        for &channel in &self.channels {
+        for &(channel, _) in &self.program.voices {
             let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
         }
     }
 
     /// Fills `out` (interleaved stereo L,R,L,R...). Writes silence when paused or finished.
+    /// When the score and its release tail are over, the player stops and rewinds by itself.
     pub fn render(&mut self, out: &mut [f32]) {
         let (frames, _) = out.as_chunks_mut::<2>();
         for frame in frames {
@@ -141,23 +191,26 @@ impl Player {
                 frame.fill(0.0);
                 continue;
             }
-            while self.next < self.events.len() && self.event_samples[self.next] <= self.position {
-                self.dispatch(self.events[self.next]);
+            while self.next < self.program.events.len()
+                && self.program.event_samples[self.next] <= self.position
+            {
+                self.dispatch(self.program.events[self.next]);
                 self.next += 1;
             }
             let (l, r) = self.synth.read_next();
             frame[0] = l;
             frame[1] = r;
             self.position += 1;
-            if self.position >= self.end_sample {
-                self.playing = false;
-                self.silence();
+            if self.position >= self.program.end_sample {
+                self.stop();
             }
         }
     }
 
     fn dispatch(&mut self, e: Event) {
-        let channel = self.channels[e.track];
+        let Some(&(channel, _)) = self.program.voices.get(e.track) else {
+            return;
+        };
         let event = if e.on {
             MidiEvent::NoteOn {
                 channel,
@@ -217,7 +270,7 @@ mod tests {
     fn invalid_soundfont_is_an_error() {
         let mut junk = std::io::Cursor::new(vec![0u8; 64]);
         assert!(matches!(
-            Player::new(&one_note_score(), &mut junk, 44_100),
+            Player::new(&mut junk, 44_100),
             Err(PlayerError::SoundFont(_))
         ));
     }
@@ -225,7 +278,8 @@ mod tests {
     /// Path of the SoundFont used by audible-path tests: `$SOUNDFONT`, or the one fetched by
     /// `pnpm fetch:soundfont`. `None` skips those tests.
     fn test_soundfont() -> Option<std::path::PathBuf> {
-        if let Some(path) = std::env::var_os("SOUNDFONT") {
+        // An empty variable counts as unset.
+        if let Some(path) = std::env::var_os("SOUNDFONT").filter(|p| !p.is_empty()) {
             return Some(path.into());
         }
         let default = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -239,8 +293,8 @@ mod tests {
             eprintln!("no SoundFont available, test skipped");
             return;
         };
-        let mut player =
-            Player::new(&one_note_score(), &mut File::open(path).unwrap(), 44_100).unwrap();
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&one_note_score());
         let mut buf = vec![0.0f32; 2 * 4410];
 
         player.render(&mut buf);
@@ -278,7 +332,8 @@ mod tests {
                 tracks: vec![track.clone()],
                 ..demo.clone()
             };
-            let mut player = Player::new(&score, &mut File::open(&path).unwrap(), 44_100).unwrap();
+            let mut player = Player::new(&mut File::open(&path).unwrap(), 44_100).unwrap();
+            player.load_score(&score);
             player.play();
 
             let mut buf = vec![0.0f32; 2 * 44_100];
@@ -287,5 +342,46 @@ mod tests {
             assert!(peak > 0.01, "{} is nearly silent (peak {peak})", track.name);
             assert!(peak <= 1.0, "{} clips (peak {peak})", track.name);
         }
+    }
+
+    #[test]
+    fn stops_and_rewinds_when_the_score_is_over() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&one_note_score());
+        player.play();
+
+        // A whole note at 120 bpm lasts 2 s (4 quarters of 0.5 s), plus a 2 s release tail.
+        let mut buf = vec![0.0f32; 2 * 44_100];
+        player.render(&mut buf);
+        assert!(player.is_playing());
+        // After 1 s at 120 bpm: 2 quarter notes = 64 ticks.
+        assert!((player.position_ticks() - 64.0).abs() < 0.5);
+
+        for _ in 0..4 {
+            player.render(&mut buf);
+        }
+        assert!(!player.is_playing());
+        assert_eq!(player.position(), 0);
+    }
+
+    #[test]
+    fn loading_a_new_score_rewinds() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&one_note_score());
+        player.play();
+        player.render(&mut vec![0.0f32; 2 * 1000]);
+        assert!(player.position() > 0);
+
+        player.load_score(&one_note_score());
+        assert_eq!(player.position(), 0);
+        assert!(!player.is_playing());
     }
 }

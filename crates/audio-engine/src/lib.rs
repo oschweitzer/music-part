@@ -5,5 +5,5 @@ pub mod output;
 pub mod player;
 pub mod sequencer;
 
-pub use output::AudioOutput;
-pub use player::{Player, PlayerError};
+pub use output::{AudioOutput, SharedState};
+pub use player::{Player, PlayerError, Program};

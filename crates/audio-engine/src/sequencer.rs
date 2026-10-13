@@ -93,6 +93,12 @@ pub fn tick_to_sample(tick: u32, tempo_bpm: u16, sample_rate: u32) -> u64 {
     (f64::from(tick) * seconds_per_tick * f64::from(sample_rate)).round() as u64
 }
 
+/// Inverse of [`tick_to_sample`], fractional so that a cursor can move smoothly.
+pub fn sample_to_tick(sample: u64, tempo_bpm: u16, sample_rate: u32) -> f64 {
+    let ticks_per_second = f64::from(tempo_bpm.max(1)) * TICKS_PER_QUARTER / 60.0;
+    sample as f64 / f64::from(sample_rate.max(1)) * ticks_per_second
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +205,12 @@ mod tests {
         };
         let events = schedule(&score_with(vec![beat(0, false), beat(2, true)]));
         assert_eq!(events.iter().filter(|e| e.on).count(), 2);
+    }
+
+    #[test]
+    fn sample_to_tick_inverts_tick_to_sample() {
+        let sample = tick_to_sample(96, 100, 48_000);
+        assert!((sample_to_tick(sample, 100, 48_000) - 96.0).abs() < 0.01);
     }
 
     #[test]

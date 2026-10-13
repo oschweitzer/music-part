@@ -13,7 +13,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let score = io_midi::import_midi(&std::fs::read(midi)?)?;
     let sample_rate = AudioOutput::default_sample_rate()?;
-    let player = Player::new(&score, &mut File::open(sf2)?, sample_rate)?;
+    let mut player = Player::new(&mut File::open(sf2)?, sample_rate)?;
+    player.load_score(&score);
     let output = AudioOutput::start(player)?;
     println!(
         "\"{}\": {} track(s), {} bpm",
