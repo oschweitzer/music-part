@@ -11,8 +11,8 @@ enum Command {
     Stop,
 }
 
-/// Flux de sortie `cpal`. Le `Player` vit dans le thread audio ; l'UI ne
-/// communique que par commandes, sans verrou dans le callback temps réel.
+/// `cpal` output stream. The `Player` lives in the audio thread; the UI
+/// talks to it through commands only, with no lock in the real-time callback.
 pub struct AudioOutput {
     _stream: cpal::Stream,
     commands: Sender<Command>,
@@ -20,25 +20,25 @@ pub struct AudioOutput {
 }
 
 impl AudioOutput {
-    /// Fréquence du périphérique de sortie par défaut, à passer à `Player::new`.
+    /// Sample rate of the default output device, to pass to `Player::new`.
     pub fn default_sample_rate() -> Result<u32, Box<dyn std::error::Error>> {
         let device = cpal::default_host()
             .default_output_device()
-            .ok_or("aucun périphérique de sortie audio")?;
+            .ok_or("no audio output device")?;
         Ok(device.default_output_config()?.sample_rate())
     }
 
     pub fn start(mut player: Player) -> Result<Self, Box<dyn std::error::Error>> {
         let device = cpal::default_host()
             .default_output_device()
-            .ok_or("aucun périphérique de sortie audio")?;
+            .ok_or("no audio output device")?;
         let supported = device
             .supported_output_configs()?
             .find_map(|r| {
                 (r.sample_format() == cpal::SampleFormat::F32 && r.channels() >= 2)
                     .then(|| r.with_max_sample_rate())
             })
-            .ok_or("le périphérique ne supporte pas la sortie f32 stéréo")?;
+            .ok_or("the device does not support f32 stereo output")?;
         let config = supported.config();
         let channels = usize::from(config.channels);
         let sample_rate = config.sample_rate;
@@ -66,7 +66,7 @@ impl AudioOutput {
                     frame[1] = lr[1];
                 }
             },
-            |err| eprintln!("erreur du flux audio : {err}"),
+            |err| eprintln!("audio stream error: {err}"),
             None,
         )?;
         stream.play()?;

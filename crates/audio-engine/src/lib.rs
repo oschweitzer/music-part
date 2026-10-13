@@ -1,5 +1,5 @@
-//! Moteur audio : séquenceur pur, lecteur SoundFont (`Player`, sans matériel)
-//! et sortie `cpal` (`AudioOutput`).
+//! Audio engine: pure sequencer, SoundFont player (`Player`, no hardware)
+//! and `cpal` output (`AudioOutput`).
 
 pub mod output;
 pub mod player;

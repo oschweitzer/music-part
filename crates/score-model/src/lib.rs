@@ -1,4 +1,4 @@
-//! Modèle de partition : Score > Track > Measure > Voice > Beat > Note.
+//! Score model: Score > Track > Measure > Voice > Beat > Note.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,7 @@ pub struct Score {
 pub struct Track {
     pub name: String,
     pub instrument: Instrument,
-    /// Hauteurs MIDI des cordes à vide, de la plus aiguë (corde 1) à la plus grave.
+    /// MIDI pitches of the open strings, from the highest (string 1) to the lowest.
     pub tuning: Vec<u8>,
     pub measures: Vec<Measure>,
 }
@@ -67,12 +67,12 @@ pub enum NoteValue {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
-    /// Numéro de corde, 1 = la plus aiguë.
+    /// String number, 1 = the highest.
     pub string: u8,
     pub fret: u8,
     pub technique: Option<Technique>,
-    /// Liaison : cette note prolonge la même hauteur du temps précédent de la
-    /// voix (y compris à travers une barre de mesure) sans être rejouée.
+    /// Tie: this note continues the same pitch from the previous beat of the
+    /// voice (across barlines too) without being replayed.
     #[serde(default)]
     pub tied: bool,
 }
@@ -88,7 +88,7 @@ pub enum Technique {
 }
 
 impl NoteValue {
-    /// Durée en 128e de note (ronde = 128).
+    /// Duration in 128th notes (whole note = 128).
     fn ticks(self) -> u32 {
         match self {
             NoteValue::Whole => 128,
@@ -121,7 +121,7 @@ impl TimeSignature {
 }
 
 impl Track {
-    /// Hauteur MIDI d'une note, ou `None` si la corde n'existe pas.
+    /// MIDI pitch of a note, or `None` if the string does not exist.
     pub fn pitch(&self, note: &Note) -> Option<u8> {
         let open = *self.tuning.get(note.string.checked_sub(1)? as usize)?;
         open.checked_add(note.fret).filter(|p| *p <= 127)
@@ -135,14 +135,14 @@ impl Voice {
 }
 
 impl Measure {
-    /// Vrai si chaque voix remplit exactement la mesure.
+    /// True if every voice fills the measure exactly.
     pub fn is_complete(&self) -> bool {
         let expected = self.time_signature.ticks();
         self.voices.iter().all(|v| v.ticks() == expected)
     }
 }
 
-/// Accordage standard de la guitare 6 cordes (E4 B3 G3 D3 A2 E2).
+/// Standard tuning of a 6-string guitar (E4 B3 G3 D3 A2 E2).
 pub const GUITAR_STANDARD: [u8; 6] = [64, 59, 55, 50, 45, 40];
 
 #[cfg(test)]

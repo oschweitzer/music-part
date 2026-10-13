@@ -5,7 +5,7 @@ use score_model::{Instrument, Score};
 
 use crate::sequencer::{self, Event};
 
-/// Silence laissé après le dernier événement pour la fin des résonances.
+/// Silence kept after the last event so the notes can ring out.
 const RELEASE_TAIL_SECS: u64 = 2;
 
 #[derive(Debug)]
@@ -17,20 +17,20 @@ pub enum PlayerError {
 impl std::fmt::Display for PlayerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SoundFont(e) => write!(f, "SoundFont invalide : {e}"),
-            Self::Synth(e) => write!(f, "erreur du synthétiseur : {e}"),
+            Self::SoundFont(e) => write!(f, "invalid SoundFont: {e}"),
+            Self::Synth(e) => write!(f, "synthesizer error: {e}"),
         }
     }
 }
 
 impl std::error::Error for PlayerError {}
 
-/// Lit une partition via un synthé SoundFont. Ne touche pas au matériel audio :
-/// `render` remplit un buffer stéréo entrelacé, donc utilisable hors-ligne.
+/// Plays a score through a SoundFont synth. Does not touch audio hardware:
+/// `render` fills an interleaved stereo buffer, so it works offline.
 pub struct Player {
     synth: Synth,
     events: Vec<Event>,
-    /// Position de départ en échantillons de chaque événement (même ordre que `events`).
+    /// Start position in samples of each event (same order as `events`).
     event_samples: Vec<u64>,
     end_sample: u64,
     next: usize,
@@ -50,14 +50,14 @@ impl Player {
             ..Default::default()
         })
         .map_err(|e| PlayerError::Synth(format!("{e:?}")))?;
-        // Le parseur SF2 panique sur certains fichiers corrompus : on le transforme en erreur.
+        // The SF2 parser panics on some corrupted files: turn that into an error.
         let font =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| SoundFont::load(soundfont)))
-                .map_err(|_| PlayerError::SoundFont("fichier corrompu ou non SF2".into()))?
+                .map_err(|_| PlayerError::SoundFont("corrupted file or not an SF2".into()))?
                 .map_err(|e| PlayerError::SoundFont(format!("{e:?}")))?;
         synth.add_font(font, true);
 
-        // Un canal MIDI par piste, en évitant le canal 9 (percussions).
+        // One MIDI channel per track, skipping channel 9 (percussion).
         let channels: Vec<u8> = (0..score.tracks.len())
             .map(|i| {
                 let c = (i % 15) as u8;
@@ -111,7 +111,7 @@ impl Player {
         self.silence();
     }
 
-    /// Arrête et revient au début.
+    /// Stops and rewinds to the start.
     pub fn stop(&mut self) {
         self.pause();
         self.next = 0;
@@ -122,7 +122,7 @@ impl Player {
         self.playing
     }
 
-    /// Position de lecture en échantillons.
+    /// Playback position in samples.
     pub fn position(&self) -> u64 {
         self.position
     }
@@ -133,7 +133,7 @@ impl Player {
         }
     }
 
-    /// Remplit `out` (stéréo entrelacé L,R,L,R...). Écrit du silence si en pause ou terminé.
+    /// Fills `out` (interleaved stereo L,R,L,R...). Writes silence when paused or finished.
     pub fn render(&mut self, out: &mut [f32]) {
         let (frames, _) = out.as_chunks_mut::<2>();
         for frame in frames {
@@ -170,7 +170,7 @@ impl Player {
                 key: e.pitch,
             }
         };
-        // Une note hors plage ne doit pas interrompre la lecture.
+        // An out-of-range note must not interrupt playback.
         let _ = self.synth.send_event(event);
     }
 }
@@ -222,12 +222,12 @@ mod tests {
         ));
     }
 
-    /// Nécessite un SoundFont : `SOUNDFONT=/usr/share/sounds/sf2/TimGM6mb.sf2 cargo test`.
-    /// Sans la variable, le test est ignoré.
+    /// Needs a SoundFont: `SOUNDFONT=/usr/share/sounds/sf2/TimGM6mb.sf2 cargo test`.
+    /// Skipped when the variable is unset.
     #[test]
     fn renders_sound_only_while_playing() {
         let Ok(path) = std::env::var("SOUNDFONT") else {
-            eprintln!("SOUNDFONT non défini, test ignoré");
+            eprintln!("SOUNDFONT not set, test skipped");
             return;
         };
         let mut player =
@@ -237,7 +237,7 @@ mod tests {
         player.render(&mut buf);
         assert!(
             buf.iter().all(|s| *s == 0.0),
-            "silence attendu avant play()"
+            "silence expected before play()"
         );
 
         player.play();
@@ -245,7 +245,7 @@ mod tests {
         player.render(&mut buf);
         assert!(
             buf.iter().any(|s| s.abs() > 1e-4),
-            "du son attendu après play()"
+            "sound expected after play()"
         );
 
         player.pause();

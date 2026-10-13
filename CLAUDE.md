@@ -87,8 +87,10 @@ Linux needs system packages for Tauri and ALSA:
 
 ## Git
 
-- Default branch is `main`. Work on a branch per change: `feat/<topic>`, `fix/<topic>`,
-  `docs/<topic>`, `refactor/<topic>`, `chore/<topic>`.
+- Default branch is `main`.
+- Until v1 is released, work directly on `main`. Once v1 is out, every change gets its own branch:
+  `feat/<topic>`, `fix/<topic>`, `docs/<topic>`, `refactor/<topic>`, `chore/<topic>`, merged back
+  into `main`. Update this rule when v1 ships.
 - Commit only when asked. One logical change per commit, and every commit builds and passes tests.
 - Commit messages follow Conventional Commits: `type(scope): summary`, with a lowercase imperative
   summary under 72 characters. Types: `feat`, `fix`, `docs`, `refactor`, `test`, `perf`, `chore`,

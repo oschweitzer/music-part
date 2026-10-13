@@ -1,7 +1,7 @@
 //! Import MIDI -> `Score`.
 //!
-//! Une note dont la durée n'est pas représentable en une seule valeur, ou qui
-//! traverse une barre de mesure, est découpée en notes liées (`Note::tied`).
+//! A note whose duration cannot be written as a single value, or that crosses
+//! a barline, is split into tied notes (`Note::tied`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -12,7 +12,7 @@ use score_model::{
     GUITAR_STANDARD,
 };
 
-/// Plus petite unité : 1/128 de ronde. On quantifie à la triple-croche (4).
+/// Smallest unit: 1/128 of a whole note. Notes are quantized to a 32nd note (4).
 const GRID: u32 = 4;
 const MAX_FRET: u8 = 24;
 
@@ -25,8 +25,8 @@ pub enum MidiImportError {
 impl fmt::Display for MidiImportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Parse(e) => write!(f, "fichier MIDI invalide : {e}"),
-            Self::UnsupportedTiming => write!(f, "timing SMPTE non supporté"),
+            Self::Parse(e) => write!(f, "invalid MIDI file: {e}"),
+            Self::UnsupportedTiming => write!(f, "SMPTE timing is not supported"),
         }
     }
 }
@@ -123,13 +123,13 @@ pub fn import_midi(bytes: &[u8]) -> Result<Score, MidiImportError> {
     })
 }
 
-/// Ticks MIDI -> unités de 1/128 de ronde, arrondi à la grille.
+/// MIDI ticks to 1/128-whole-note units, rounded to the grid.
 fn quantize(tick: u64, ppq: u32) -> u32 {
     let units = (tick * 32 + u64::from(ppq) / 2) / u64::from(ppq);
     (units as u32 + GRID / 2) / GRID * GRID
 }
 
-/// Choisit (corde, frette) avec la frette la plus basse.
+/// Picks the (string, fret) pair with the lowest fret.
 fn fret_position(tuning: &[u8], pitch: u8) -> Option<(u8, u8)> {
     tuning
         .iter()
@@ -141,7 +141,7 @@ fn fret_position(tuning: &[u8], pitch: u8) -> Option<(u8, u8)> {
         .min_by_key(|&(_, fret)| fret)
 }
 
-/// Découpe une longueur en durées représentables, de la plus grande à la plus petite.
+/// Splits a length into representable durations, largest first.
 fn decompose(mut len: u32) -> Vec<Duration> {
     const VALUES: [NoteValue; 6] = [
         NoteValue::Whole,
@@ -172,13 +172,13 @@ fn decompose(mut len: u32) -> Vec<Duration> {
 fn build_track(name: String, notes: &[(u32, u32, u8)], ts: TimeSignature) -> Track {
     let tuning = GUITAR_STANDARD.to_vec();
 
-    // Regroupe par début : accords.
+    // Group by start time: chords.
     let mut by_start: BTreeMap<u32, Vec<(u32, u8)>> = BTreeMap::new();
     for &(s, e, p) in notes {
         by_start.entry(s).or_default().push((e, p));
     }
 
-    // Segments (début, longueur, notes) avec silences intercalés.
+    // Segments (start, length, notes) with rests in the gaps.
     let starts: Vec<u32> = by_start.keys().copied().collect();
     let mut segments: Vec<(u32, u32, Vec<Note>)> = Vec::new();
     let mut cursor = 0;
@@ -209,7 +209,7 @@ fn build_track(name: String, notes: &[(u32, u32, u8)], ts: TimeSignature) -> Tra
         }
     }
 
-    // Découpe en mesures.
+    // Split into measures.
     let measure_len = ts.ticks();
     let total = segments.last().map_or(0, |&(s, l, _)| s + l);
     let measure_count = total.div_ceil(measure_len).max(1);
@@ -237,7 +237,7 @@ fn build_track(name: String, notes: &[(u32, u32, u8)], ts: TimeSignature) -> Tra
         }
     }
 
-    // Complète la dernière mesure avec un silence.
+    // Pad the last measure with a rest.
     let last_len: u32 = measures
         .last()
         .map_or(0, |b| b.iter().map(|b| b.duration.ticks()).sum());
@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(track.measures.len(), 1);
         assert!(track.measures[0].is_complete());
         let beats = &track.measures[0].voices[0].beats;
-        // 64 = Mi aigu à vide (corde 1), 40 = Mi grave à vide (corde 6).
+        // 64 = open high E (string 1), 40 = open low E (string 6).
         assert_eq!(
             beats[0].notes,
             vec![Note {
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn gap_becomes_rest_and_measures_split() {
-        // 4 noires, puis silence d'une noire, puis une noire : 2 mesures.
+        // 4 quarters, then a quarter rest, then a quarter: 2 measures.
         let mut ev = quarters(&[64, 64, 64, 64]);
         ev.extend([note(480, 64, true), note(480, 64, false)]);
         let score = import_midi(&smf_bytes(ev)).unwrap();
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn note_crossing_a_barline_is_split_into_tied_notes() {
-        // 3 noires de silence, puis une blanche (2 noires) à cheval sur 2 mesures.
+        // 3 quarter rests, then a half note (2 quarters) straddling 2 measures.
         let ev = vec![note(1440, 64, true), note(960, 64, false)];
         let score = import_midi(&smf_bytes(ev)).unwrap();
         let measures = &score.tracks[0].measures;

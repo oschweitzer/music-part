@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use score_model::Score;
 
-/// Vélocité MIDI utilisée tant que le modèle n'a pas de dynamiques.
+/// MIDI velocity used until the model has dynamics.
 const DEFAULT_VELOCITY: u8 = 90;
-/// Une noire = 32 unités (le modèle compte en 1/128 de ronde).
+/// A quarter note is 32 units (the model counts in 1/128 of a whole note).
 const TICKS_PER_QUARTER: f64 = 32.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Event {
-    /// Position en 1/128 de ronde depuis le début du morceau.
+    /// Position in 1/128 of a whole note since the start of the piece.
     pub tick: u32,
     pub track: usize,
     pub pitch: u8,
@@ -17,10 +17,10 @@ pub struct Event {
     pub on: bool,
 }
 
-/// Aplatit la partition en événements triés. À tick égal, les extinctions
-/// passent avant les attaques pour qu'une même hauteur répétée soit rejouée.
-/// Une note liée (`tied`) n'émet pas d'attaque : elle repousse l'extinction de
-/// la même hauteur jouée au temps précédent de la voix.
+/// Flattens the score into sorted events. At equal ticks, note-offs come
+/// before note-ons so a repeated pitch is retriggered.
+/// A tied note (`tied`) emits no note-on: it pushes back the note-off of the
+/// same pitch played on the previous beat of the voice.
 pub fn schedule(score: &Score) -> Vec<Event> {
     let mut events: Vec<Event> = Vec::new();
 
@@ -33,7 +33,7 @@ pub fn schedule(score: &Score) -> Vec<Event> {
             .unwrap_or(0);
 
         for voice_idx in 0..voice_count {
-            // Hauteur -> index de son événement d'extinction, pour les notes encore tenues.
+            // Pitch -> index of its note-off event, for notes still being held.
             let mut sounding: HashMap<u8, usize> = HashMap::new();
             let mut measure_start = 0;
 
@@ -87,7 +87,7 @@ pub fn schedule(score: &Score) -> Vec<Event> {
     events
 }
 
-/// Convertit une position en échantillons pour un tempo et une fréquence donnés.
+/// Converts a position to samples for a given tempo and sample rate.
 pub fn tick_to_sample(tick: u32, tempo_bpm: u16, sample_rate: u32) -> u64 {
     let seconds_per_tick = 60.0 / (f64::from(tempo_bpm.max(1)) * TICKS_PER_QUARTER);
     (f64::from(tick) * seconds_per_tick * f64::from(sample_rate)).round() as u64
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn repeated_pitch_is_retriggered() {
         let events = schedule(&score_with(vec![quarter_note(1, 0), quarter_note(1, 0)]));
-        // on@0, off@32, on@32, off@64 : l'extinction précède la ré-attaque.
+        // on@0, off@32, on@32, off@64: the note-off comes before the re-attack.
         let seq: Vec<(u32, bool)> = events.iter().map(|e| (e.tick, e.on)).collect();
         assert_eq!(seq, vec![(0, true), (32, false), (32, true), (64, false)]);
     }
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn tempo_conversion() {
-        // 120 bpm : une noire = 0,5 s = 22050 échantillons à 44,1 kHz.
+        // 120 bpm: a quarter note = 0.5 s = 22050 samples at 44.1 kHz.
         assert_eq!(tick_to_sample(32, 120, 44_100), 22_050);
     }
 
