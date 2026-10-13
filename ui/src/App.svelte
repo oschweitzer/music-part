@@ -1,48 +1,41 @@
 <script lang="ts">
+  import EditBar from './components/EditBar.svelte'
   import TabView from './components/TabView.svelte'
-  import {
-    canOpenFiles,
-    chooseMidiFile,
-    initialFile,
-    isMidiPath,
-    onFilesDropped,
-    openMidiFile,
-  } from './lib/files'
+  import { createDocumentApi } from './lib/document-api'
+  import { Editor } from './lib/editor.svelte'
+  import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
+  import { interpretKey } from './lib/keymap'
   import { Playback } from './lib/playback.svelte'
-  import { loadDemoScore } from './lib/score-source'
   import { formatClock, ticksToSeconds, totalTicks } from './lib/score-time'
-  import type { Score } from './lib/score-types'
   import { layoutTab, locateTick } from './lib/tab-layout'
   import { createTransport } from './lib/transport'
 
   const playback = new Playback(createTransport())
+  const editor = new Editor({ api: createDocumentApi(), playback, prompts: createFilePrompts() })
 
-  let score = $state<Score | null>(null)
   let loadError = $state<string | null>(null)
-  let selectedTrack = $state(0)
   let paperWidth = $state(0)
   let stage = $state<HTMLElement>()
   let paper = $state<HTMLElement>()
   let isDragging = $state(false)
-  let isOpening = $state(false)
-  let banner = $state<{ tone: 'error' | 'info'; text: string } | null>(null)
 
-  const track = $derived(score?.tracks[selectedTrack] ?? null)
+  const score = $derived(editor.document?.score ?? null)
+  const track = $derived(score?.tracks[editor.track] ?? null)
   const layout = $derived(track && paperWidth > 0 ? layoutTab({ track, width: paperWidth }) : null)
 
   const hasStarted = $derived(playback.isPlaying || playback.tick > 0)
   const cursor = $derived(layout && hasStarted ? locateTick({ layout, tick: playback.tick }) : null)
 
-  const shownBanner = $derived(banner ?? (playback.error ? { tone: 'error' as const, text: playback.error } : null))
+  const banner = $derived(
+    editor.message ?? (playback.error ? { tone: 'error' as const, text: playback.error } : null),
+  )
 
   const duration = $derived(score ? ticksToSeconds({ ticks: totalTicks(score), tempoBpm: score.tempo_bpm }) : 0)
   const elapsed = $derived(score ? ticksToSeconds({ ticks: playback.tick, tempoBpm: score.tempo_bpm }) : 0)
 
   $effect(() => {
     playback.start()
-    startWithScore().catch(
-      (error: unknown) => (loadError = error instanceof Error ? error.message : String(error)),
-    )
+    editor.start().catch((error: unknown) => (loadError = error instanceof Error ? error.message : String(error)))
     return () => playback.dispose()
   })
 
@@ -50,12 +43,22 @@
     const stopListening = onFilesDropped({
       onHover: (isHovering) => (isDragging = isHovering),
       onDrop: (paths) => {
-        const path = paths.find(isMidiPath)
-        if (path) void openPath(path)
-        else banner = { tone: 'error', text: 'Only MIDI files (.mid, .midi) can be opened for now.' }
+        const path = paths.find(isScoreFile)
+        if (path) void editor.openPath(path)
+        else editor.message = { tone: 'error', text: 'Only .mpart and MIDI files (.mid, .midi) can be opened.' }
       },
     })
     return () => void stopListening.then((stop) => stop())
+  })
+
+  // Closing the window with unsaved changes asks first.
+  $effect(() => {
+    const stopGuarding = guardWindowClose(() => editor.canDiscard())
+    return () => void stopGuarding.then((stop) => stop())
+  })
+
+  $effect(() => {
+    setWindowTitle(`${editor.isDirty ? '• ' : ''}${score?.title ?? 'Music Part'} — Music Part`)
   })
 
   // Keep the line being played in view: scroll when the cursor moves to a system that is hidden.
@@ -70,64 +73,36 @@
     if (isHidden) stage.scrollTo({ top: Math.max(top - 32, 0), behavior: 'smooth' })
   })
 
-  /** Opens the file the app was started with, or the demo when there is none. */
-  async function startWithScore() {
-    const path = await initialFile()
-    if (path) {
-      await openPath(path)
-      if (score) return
-    }
-    const demo = await loadDemoScore()
-    score = demo
-    await playback.setScore(demo)
+  function handleKeydown(event: KeyboardEvent) {
+    const target = event.target as HTMLElement
+    // Typing in a field (the tempo) is not editing the score.
+    if (target.closest('input, textarea, select, [contenteditable]')) return
+
+    const command = interpretKey(event)
+    if (!command) return
+    // On a focused button, Space and Enter belong to the button itself.
+    if (target.closest('button') && (event.key === ' ' || event.key === 'Enter') && !event.ctrlKey && !event.metaKey) return
+
+    event.preventDefault()
+    if (command.type === 'togglePlayback') void playback.toggle()
+    else void editor.run(command)
   }
 
-  async function chooseFile() {
-    const path = await chooseMidiFile()
-    if (path) await openPath(path)
+  function changeTempo(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const bpm = Math.round(Number(input.value))
+    if (Number.isFinite(bpm) && bpm >= 1 && bpm <= 999) void editor.setTempo(bpm)
+    else input.value = String(score?.tempo_bpm ?? 120)
   }
 
-  async function openPath(path: string) {
-    if (isOpening) return
-    isOpening = true
-    banner = null
-    playback.dismissError()
-    try {
-      const opened = await openMidiFile(path)
-      score = opened.score
-      selectedTrack = 0
-      loadError = null
-      stage?.scrollTo({ top: 0 })
-      await playback.setScore(opened.score)
-      if (opened.skippedNotes > 0) {
-        const count = opened.skippedNotes
-        banner = {
-          tone: 'info',
-          text: `${count} ${count === 1 ? 'note' : 'notes'} could not be placed on the strings and ${count === 1 ? 'was' : 'were'} left out.`,
-        }
-      }
-    } catch (error) {
-      banner = { tone: 'error', text: error instanceof Error ? error.message : String(error) }
-    } finally {
-      isOpening = false
-    }
+  // Keep focus where it was, so that typing a fret still works after clicking a toolbar button.
+  function keepFocus(event: MouseEvent) {
+    event.preventDefault()
   }
 
   function dismissBanner() {
-    banner = null
+    editor.dismissMessage()
     playback.dismissError()
-  }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') {
-      event.preventDefault()
-      if (canOpenFiles()) void chooseFile()
-      return
-    }
-    const target = event.target as HTMLElement
-    if (event.code !== 'Space' || target.closest('button, input, select, textarea')) return
-    event.preventDefault()
-    void playback.toggle()
   }
 </script>
 
@@ -137,22 +112,19 @@
   <header class="toolbar">
     <div class="brand">
       <span class="logo" aria-hidden="true"></span>
-      <h1>{score?.title ?? 'Music Part'}</h1>
-      <button
-        type="button"
-        class="open-button"
-        disabled={!canOpenFiles() || isOpening}
-        title={canOpenFiles() ? 'Open a MIDI file (Ctrl+O)' : 'Opening files needs the desktop app'}
-        onclick={chooseFile}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.38a1.5 1.5 0 0 1 1.06.44L11.5 7H19.5A1.5 1.5 0 0 1 21 8.5V17.5A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5Z" /></svg>
-        {isOpening ? 'Opening…' : 'Open'}
-      </button>
+      <h1 title={editor.document?.path ?? 'Not saved yet'}>
+        {score?.title ?? 'Music Part'}{#if editor.isDirty}<span class="dirty" title="Unsaved changes">•</span>{/if}
+      </h1>
+      <div class="file-buttons" role="group" aria-label="File">
+        <button type="button" class="file-button" disabled={!editor.canEdit} title="New score (Ctrl+N)" onmousedown={keepFocus} onclick={() => editor.newDocument()}>New</button>
+        <button type="button" class="file-button" disabled={!editor.canEdit} title="Open a score or MIDI file (Ctrl+O)" onmousedown={keepFocus} onclick={() => editor.openFile()}>Open</button>
+        <button type="button" class="file-button" disabled={!editor.canEdit} title="Save (Ctrl+S)" onmousedown={keepFocus} onclick={() => editor.save()}>Save</button>
+      </div>
     </div>
 
     {#if score}
       <div class="transport" role="group" aria-label="Playback">
-        <button type="button" class="icon-button" aria-label="Stop" title="Stop" onclick={() => playback.stop()}>
+        <button type="button" class="icon-button" aria-label="Stop" title="Stop" onmousedown={keepFocus} onclick={() => playback.stop()}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
         </button>
         <button
@@ -160,6 +132,7 @@
           class="icon-button primary"
           aria-label={playback.isPlaying ? 'Pause' : 'Play'}
           title={playback.isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+          onmousedown={keepFocus}
           onclick={() => playback.toggle()}
         >
           {#if playback.isPlaying}
@@ -174,33 +147,44 @@
         <span class="clock" aria-label="Position">{formatClock(elapsed)} / {formatClock(duration)}</span>
       </div>
 
-      <div class="tempo" title="Tempo">
-        <span class="tempo-note" aria-hidden="true">♩</span> = {score.tempo_bpm}
-      </div>
+      <label class="tempo" title="Tempo (beats per minute)">
+        <span class="tempo-note" aria-hidden="true">♩</span> =
+        <input
+          type="number"
+          min="1"
+          max="999"
+          value={score.tempo_bpm}
+          disabled={!editor.canEdit}
+          aria-label="Tempo in beats per minute"
+          onchange={changeTempo}
+        />
+      </label>
     {/if}
   </header>
 
-  {#if shownBanner}
-    <div class="notice {shownBanner.tone}" role={shownBanner.tone === 'error' ? 'alert' : 'status'}>
-      <span>{shownBanner.text}</span>
+  {#if banner}
+    <div class="notice {banner.tone}" role={banner.tone === 'error' ? 'alert' : 'status'}>
+      <span>{banner.text}</span>
       <button type="button" onclick={dismissBanner}>Dismiss</button>
     </div>
   {/if}
 
   {#if score}
     <nav class="tracks" aria-label="Tracks">
-      {#each score.tracks as t, i (t.name)}
-        <button type="button" class:active={i === selectedTrack} onclick={() => (selectedTrack = i)}>
+      {#each score.tracks as t, i (i)}
+        <button type="button" class:active={i === editor.track} onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
           {t.name}
           <span class="strings">{t.tuning.length} strings</span>
         </button>
       {/each}
     </nav>
+
+    <EditBar {editor} />
   {/if}
 
   <main class="stage" class:dragging={isDragging} bind:this={stage}>
     {#if isDragging}
-      <div class="drop-hint" aria-hidden="true">Drop a MIDI file to open it</div>
+      <div class="drop-hint" aria-hidden="true">Drop a score or MIDI file to open it</div>
     {/if}
     {#if loadError}
       <p class="message error" role="alert">{loadError}</p>
@@ -209,7 +193,13 @@
     {:else}
       <div class="paper" bind:this={paper} bind:clientWidth={paperWidth}>
         {#if layout}
-          <TabView {layout} label={track.name} {cursor} />
+          <TabView
+            {layout}
+            label={track.name}
+            {cursor}
+            selection={editor.selection}
+            onselect={editor.canEdit ? (target) => editor.select(target) : undefined}
+          />
         {/if}
       </div>
     {/if}
@@ -256,38 +246,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .open-button {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 11px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface);
-    color: var(--ink);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .open-button svg {
-    width: 15px;
-    height: 15px;
-    fill: currentColor;
-    opacity: 0.75;
-  }
-
-  .open-button:hover:not(:disabled) {
-    background: var(--surface-2);
-  }
-
-  .open-button:disabled {
-    color: var(--ink-muted);
-    cursor: not-allowed;
   }
 
   .transport {
@@ -350,6 +308,9 @@
   }
 
   .tempo {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     justify-self: end;
     padding: 4px 10px;
     border-radius: 999px;
@@ -472,5 +433,57 @@
     .tempo {
       display: none;
     }
+  }
+
+  .dirty {
+    margin-left: 6px;
+    color: var(--accent);
+  }
+
+  .file-buttons {
+    display: flex;
+    flex: none;
+    gap: 4px;
+    margin-left: 8px;
+  }
+
+  .file-button {
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .file-button:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+
+  .file-button:disabled {
+    color: var(--ink-muted);
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .tempo input {
+    width: 46px;
+    padding: 2px 4px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: left;
+  }
+
+  .tempo input:hover:not(:disabled),
+  .tempo input:focus {
+    border-color: var(--border);
+    background: var(--surface);
   }
 </style>

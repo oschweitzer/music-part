@@ -11,15 +11,21 @@ Cargo workspace plus a pnpm workspace: a Tauri 2 shell (`src-tauri`) around a Sv
 ```
 root/
 ├── crates/
-│   ├── score-model/   # Score > Track > Measure > Voice > Beat > Note. Pure data, no I/O
+│   ├── score-model/   # Score > Track > Measure > Voice > Beat > Note, edit operations, validation
 │   ├── io-midi/       # MIDI import to Score
+│   ├── io-native/     # The .mpart file: versioned JSON envelope, atomic write
 │   └── audio-engine/  # Sequencer (Score -> timed events), SoundFont Player, cpal output
 ├── src-tauri/         # Tauri shell: commands and events exposing the engines to the UI
-│   └── src/audio.rs   # Audio thread that owns the cpal stream; the app talks to it by message
+│   ├── src/document.rs  # The score being edited: undo history, dirty tracking, file path
+│   ├── src/service.rs   # What each command does, free of Tauri (also used by the e2e backend)
+│   ├── src/files.rs     # Opening and saving files
+│   ├── src/audio.rs     # Audio thread that owns the cpal stream; the app talks to it by message
+│   └── examples/headless.rs  # The document backend without window or audio, for the e2e tests
+├── scripts/           # fetch-soundfont.mjs, and e2e/ (headless Chrome + the real UI and Rust code)
 ├── ui/                # Svelte + TypeScript front end
 │   ├── public/        # demo-score.json: export of the Rust demo score, checked by a Rust test
-│   └── src/lib/       # tab-layout.ts (pure layout, unit tested), playback + transport, score types
-└── docs/              # (planned) Design notes, one file per feature
+│   └── src/lib/       # tab-layout.ts (pure layout), editor.svelte.ts (editing), keymap, selection, playback
+└── docs/              # Design notes: soundfonts.md, editing.md
 ```
 
 The roadmap is in the approved plan: foundations, playback, tab rendering, editing, realistic
@@ -38,7 +44,14 @@ samples, then Guitar Pro import and more instruments.
   (`ui/src/lib/transport.ts`), so every UI feature must work against both.
 - Layout lives in pure TypeScript functions (`ui/src/lib/tab-layout.ts`) that return plain geometry;
   Svelte components only draw it. Test layout with vitest, not through the DOM.
-- `ui/src/lib/score-types.ts` mirrors the serde JSON of `score-model` by hand. Change both together.
+- `ui/src/lib/score-types.ts` and `document-api.ts` mirror the serde JSON of `score-model` and of
+  the commands by hand. Change both sides together; `pnpm e2e` and the IPC tests in
+  `src-tauri/src/lib.rs` catch a mismatch.
+- The score lives in Rust (`Document`). The UI never changes a score itself: it sends an `Edit` and
+  shows the state that comes back. A new kind of edit is a new `Edit` variant in `score-model`
+  with its own tests, a case in `document-api.ts`, and a UI path in `editor.svelte.ts`.
+- A score must always pass `Score::validate`. Anything that builds or loads one (import, native
+  file, edit) keeps it true; a measure is always exactly full.
 
 ## Development
 
@@ -58,6 +71,7 @@ pnpm dev                         # Run the desktop app (Tauri + Vite dev server 
 pnpm ui:dev                      # UI alone in a browser, loads ui/public/demo-score.json
 pnpm ui:check                    # svelte-check + tsc
 pnpm ui:test                     # vitest
+pnpm e2e                         # End-to-end: the real UI in headless Chrome against the real document code
 cargo run -p music-part-app -- song.mid   # Start the app on a file (needs `pnpm ui:dev` running)
 UPDATE_DEMO=1 cargo test -p score-model demo_json   # Regenerate ui/public/demo-score.json
 ```
@@ -105,6 +119,9 @@ Linux needs system packages for Tauri and ALSA:
 
 ## Testing
 
+- Three levels: unit tests next to the code; IPC tests (`src-tauri/src/lib.rs`) that send real
+  commands through Tauri's mock runtime; and `pnpm e2e`, which drives the UI with clicks and keys.
+  Add a scenario to `scripts/e2e/scenarios.mjs` for each user-visible editing feature.
 - Tests are self-contained and hardware-free: no sound card, no network, no file outside the repo.
   A test that needs an external asset (the SoundFont) reads its path from an env var, falls back
   to the default fetched location, and skips with a message when neither exists.

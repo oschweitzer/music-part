@@ -34,7 +34,8 @@ function createTauriTransport(): Transport {
   }
 
   return {
-    load: (score) => call('load_score', { score }),
+    // The desktop app reloads the audio engine itself whenever the document changes.
+    load: async () => {},
     play: () => call('play'),
     pause: () => call('pause'),
     stop: () => call('stop'),

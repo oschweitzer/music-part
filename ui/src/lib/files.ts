@@ -1,47 +1,63 @@
-import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { open } from '@tauri-apps/plugin-dialog'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ask, open, save } from '@tauri-apps/plugin-dialog'
 import { isTauri } from './score-source'
-import type { Score } from './score-types'
 
-export type OpenedScore = {
-  score: Score
-  /** Notes the instrument could not play, left out of the score. */
-  skippedNotes: number
+/** The questions the editor asks the user about files. Injected so that tests can answer them. */
+export type FilePrompts = {
+  /** Resolves with a path, or null when the user cancels. */
+  chooseFileToOpen(): Promise<string | null>
+  chooseFileToSave(defaultName: string): Promise<string | null>
+  /** True if the user accepts to lose their unsaved changes. */
+  confirmDiscard(): Promise<boolean>
 }
 
-/** Opening files needs the desktop app: the importer is written in Rust. */
-export function canOpenFiles(): boolean {
-  return isTauri()
+const SCORE_EXTENSIONS = ['mpart', 'mid', 'midi']
+
+export function isScoreFile(path: string): boolean {
+  return /\.(mpart|midi?)$/i.test(path)
 }
 
-export function isMidiPath(path: string): boolean {
-  return /\.midi?$/i.test(path)
-}
-
-/** Asks the user for a MIDI file. Resolves with its path, or null if they cancel. */
-export async function chooseMidiFile(): Promise<string | null> {
-  const chosen = await open({
-    multiple: false,
-    directory: false,
-    filters: [{ name: 'MIDI files', extensions: ['mid', 'midi'] }],
-  })
-  return typeof chosen === 'string' ? chosen : null
-}
-
-/** The MIDI file the app was started with (command line or "Open with"), if any. */
-export async function initialFile(): Promise<string | null> {
-  if (!isTauri()) return null
-  return invoke<string | null>('initial_file')
-}
-
-/** Rejects with a message fit to show the user. */
-export async function openMidiFile(path: string): Promise<OpenedScore> {
-  try {
-    return await invoke<OpenedScore>('open_midi', { path })
-  } catch (error) {
-    throw new Error(typeof error === 'string' ? error : String(error))
+export function createFilePrompts(): FilePrompts {
+  if (!isTauri()) {
+    return {
+      chooseFileToOpen: async () => null,
+      chooseFileToSave: async () => null,
+      confirmDiscard: async () => true,
+    }
   }
+
+  return {
+    async chooseFileToOpen() {
+      const chosen = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: 'Scores', extensions: SCORE_EXTENSIONS },
+          { name: 'Music Part scores', extensions: ['mpart'] },
+          { name: 'MIDI files', extensions: ['mid', 'midi'] },
+        ],
+      })
+      return typeof chosen === 'string' ? chosen : null
+    },
+    async chooseFileToSave(defaultName) {
+      return save({ defaultPath: defaultName, filters: [{ name: 'Music Part scores', extensions: ['mpart'] }] })
+    },
+    confirmDiscard() {
+      return ask('You have unsaved changes. Discard them?', {
+        title: 'Unsaved changes',
+        kind: 'warning',
+        okLabel: 'Discard',
+        cancelLabel: 'Cancel',
+      })
+    },
+  }
+}
+
+/** A file name safe on every system, from a score title. */
+export function fileNameFor(title: string): string {
+  const cleaned = title.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
+  return `${cleaned || 'Untitled'}.mpart`
 }
 
 /**
@@ -66,4 +82,17 @@ export async function onFilesDropped({
       onDrop(event.payload.paths)
     }
   })
+}
+
+/** Asks `shouldClose` before the window closes; closing is cancelled when it resolves false. */
+export async function guardWindowClose(shouldClose: () => Promise<boolean>): Promise<() => void> {
+  if (!isTauri()) return () => {}
+
+  return getCurrentWindow().onCloseRequested(async (event) => {
+    if (!(await shouldClose())) event.preventDefault()
+  })
+}
+
+export function setWindowTitle(title: string): void {
+  if (isTauri()) void getCurrentWindow().setTitle(title)
 }

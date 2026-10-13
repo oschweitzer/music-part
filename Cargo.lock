@@ -1587,6 +1587,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-native"
+version = "0.1.0"
+dependencies = [
+ "score-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1976,8 +1985,10 @@ version = "0.1.0"
 dependencies = [
  "audio-engine",
  "io-midi",
+ "io-native",
  "score-model",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

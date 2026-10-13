@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
 import type { Beat, Measure, Score, Track } from './score-types'
-import { durationTicks, layoutTab, locateTick, measureTicks, METRICS } from './tab-layout'
+import { durationTicks, hitTest, layoutTab, locateTick, measureTicks, METRICS } from './tab-layout'
 
 const score = demo as Score
 const guitar = score.tracks[0] as Track
@@ -261,5 +261,53 @@ describe('locateTick', () => {
 
   it('should return null for an empty layout', () => {
     expect(locateTick({ layout: layoutTab({ track: trackWith([]), width: 900 }), tick: 0 })).toBeNull()
+  })
+})
+
+describe('hitTest', () => {
+  const layout = layoutTab({ track: guitar, width: 900 })
+  const system = layout.systems[0]!
+  const measure = system.measures[0]!
+  const beat = measure.beats[2]!
+
+  it('should find the beat and string under the point', () => {
+    const hit = hitTest({ layout, x: beat.x, y: system.stringYs[3]! })
+    expect(hit).toEqual({ measure: 0, beat: 2, string: 4 })
+  })
+
+  it('should pick the nearest beat when the click falls between two', () => {
+    const next = measure.beats[3]!
+    const nearThird = hitTest({ layout, x: beat.x + (next.x - beat.x) * 0.3, y: system.stringYs[0]! })
+    const nearFourth = hitTest({ layout, x: beat.x + (next.x - beat.x) * 0.7, y: system.stringYs[0]! })
+    expect(nearThird?.beat).toBe(2)
+    expect(nearFourth?.beat).toBe(3)
+  })
+
+  it('should pick the nearest string, with generous reach above and below the staff', () => {
+    expect(hitTest({ layout, x: beat.x, y: system.stringYs[0]! - 5 })?.string).toBe(1)
+    expect(hitTest({ layout, x: beat.x, y: system.stringYs[5]! + 5 })?.string).toBe(6)
+    expect(hitTest({ layout, x: beat.x, y: system.stringYs[2]! + 4 })?.string).toBe(3)
+  })
+
+  it('should not hit anything outside the staves', () => {
+    expect(hitTest({ layout, x: beat.x, y: system.staffTop - 30 })).toBeNull()
+    expect(hitTest({ layout, x: beat.x, y: system.staffBottom + 25 })).toBeNull()
+  })
+
+  it('should treat the clef area as the first measure of the line', () => {
+    expect(hitTest({ layout, x: system.left + 5, y: system.stringYs[0]! })?.measure).toBe(0)
+  })
+
+  it('should find measures on later systems', () => {
+    const narrow = layoutTab({ track: guitar, width: 500 })
+    const later = narrow.systems[1]!
+    const target = later.measures[0]!
+    const hit = hitTest({ layout: narrow, x: target.beats[0]!.x, y: later.stringYs[1]! })
+    expect(hit?.measure).toBe(target.index)
+    expect(hit?.string).toBe(2)
+  })
+
+  it('should return null for a layout without systems', () => {
+    expect(hitTest({ layout: layoutTab({ track: trackWith([]), width: 900 }), x: 50, y: 50 })).toBeNull()
   })
 })

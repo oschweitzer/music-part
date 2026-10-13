@@ -17,4 +17,9 @@ tauri-plugin-dialog = "2"
 score-model = { path = "../crates/score-model" }
 audio-engine = { path = "../crates/audio-engine" }
 io-midi = { path = "../crates/io-midi" }
+io-native = { path = "../crates/io-native" }
 serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

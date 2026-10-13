@@ -1,8 +1,31 @@
 <script lang="ts">
-  import { METRICS } from '../lib/tab-layout'
+  import type { Selection } from '../lib/selection'
+  import { hitTest, METRICS } from '../lib/tab-layout'
   import type { BeatLayout, CursorPosition, TabLayout } from '../lib/tab-layout'
 
-  let { layout, label, cursor = null }: { layout: TabLayout; label: string; cursor?: CursorPosition | null } = $props()
+  let {
+    layout,
+    label,
+    cursor = null,
+    selection = null,
+    onselect,
+  }: {
+    layout: TabLayout
+    label: string
+    cursor?: CursorPosition | null
+    selection?: Selection | null
+    onselect?: (target: Selection) => void
+  } = $props()
+
+  function handleClick(event: MouseEvent) {
+    if (!onselect) return
+    const svg = event.currentTarget as SVGSVGElement
+    const box = svg.getBoundingClientRect()
+    // The drawing is scaled if the page squeezes it; map the click back to drawing units.
+    const scale = box.width > 0 ? layout.width / box.width : 1
+    const target = hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
+    if (target) onselect({ measure: target.measure, beat: target.beat, string: target.string })
+  }
 
   const tabLetters = ['T', 'A', 'B']
 
@@ -34,8 +57,12 @@
   }
 </script>
 
+<!-- Keyboard editing is handled for the whole window (see App.svelte), so the click needs no key handler. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <svg
   class="tab"
+  class:editable={onselect !== undefined}
+  onclick={handleClick}
   width={layout.width}
   height={layout.height}
   viewBox="0 0 {layout.width} {layout.height}"
@@ -70,7 +97,7 @@
           </g>
         {/if}
 
-        {#each measure.beats as beat (beat.startTick)}
+        {#each measure.beats as beat, beatIndex (beat.startTick)}
           {#if beat.isRest}
             {@const top = restTop(system.staffBottom)}
             <g class="rest">
@@ -87,6 +114,19 @@
                 {/each}
               {/if}
             </g>
+          {/if}
+
+          {#if selection && selection.measure === measure.index && selection.beat === beatIndex}
+            {@const selectedY = system.stringYs[selection.string - 1] ?? system.stringYs[0] ?? 0}
+            <rect
+              class="beat-highlight"
+              x={beat.x - 13}
+              y={system.staffTop - 4}
+              width="26"
+              height={system.staffBottom - system.staffTop + 8}
+              rx="6"
+            />
+            <rect class="selection" x={beat.x - 12} y={selectedY - 9} width="24" height="18" rx="5" />
           {/if}
 
           {#each beat.notes as note, noteIndex (noteIndex)}
@@ -152,6 +192,21 @@
   .tab {
     display: block;
     font-family: var(--font-ui);
+  }
+
+  .tab.editable {
+    cursor: pointer;
+  }
+
+  .beat-highlight {
+    fill: var(--accent);
+    opacity: 0.1;
+  }
+
+  .selection {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
   }
 
   .string {

@@ -403,3 +403,41 @@ export function locateTick({ layout, tick }: { layout: TabLayout; tick: number }
 
   return { systemIndex, measureIndex: measure.index, measureX: measure.x, measureWidth: measure.width, x }
 }
+
+export type HitTarget = { measure: number; beat: number; string: number }
+
+/**
+ * Finds the beat and string under a point of the page, or null if the point is not on a staff.
+ * A click between two beats picks the nearest one, so no beat is hard to hit.
+ */
+export function hitTest({ layout, x, y }: { layout: TabLayout; x: number; y: number }): HitTarget | null {
+  const half = METRICS.stringGap / 2
+
+  for (const system of layout.systems) {
+    const top = system.staffTop - half
+    const bottom = system.staffBottom + half
+    if (y < top || y > bottom) continue
+
+    const measure = system.measures.find((m) => x >= m.x && x < m.x + m.width) ?? nearestMeasure(system, x)
+    if (!measure || measure.beats.length === 0) return null
+
+    let beat = 0
+    measure.beats.forEach((candidate, index) => {
+      const best = measure.beats[beat]
+      if (best && Math.abs(candidate.x - x) < Math.abs(best.x - x)) beat = index
+    })
+
+    const lines = system.stringYs.length
+    const string = Math.min(Math.max(Math.round((y - system.staffTop) / METRICS.stringGap), 0), lines - 1) + 1
+    return { measure: measure.index, beat, string }
+  }
+  return null
+}
+
+/** The first or last measure of a system, for a click in the clef area or past the last barline. */
+function nearestMeasure(system: SystemLayout, x: number): MeasureLayout | undefined {
+  const first = system.measures[0]
+  const last = system.measures.at(-1)
+  if (!first || !last) return undefined
+  return x < first.x ? first : last
+}

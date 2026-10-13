@@ -1,8 +1,13 @@
-//! Tauri shell: exposes the score and audio engines to the UI as commands and events.
+//! Tauri shell: exposes the document (score, edits, files) and the audio engine to the UI as
+//! commands and events. The score lives here; the UI shows what it is sent.
 
 mod audio;
+mod document;
+mod files;
+mod service;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -10,13 +15,17 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use audio::AudioController;
-use score_model::Score;
+use document::{Document, DocumentState};
+use score_model::Edit;
+use service::{OpenedDocument, Startup};
 
 /// Overrides the bundled SoundFont, for development.
 const SOUNDFONT_ENV: &str = "MUSIC_PART_SOUNDFONT";
 const SOUNDFONT_RESOURCE: &str = "soundfont/GeneralUser-GS.sf2";
 const POSITION_EVENT: &str = "playback-position";
 const POSITION_INTERVAL: Duration = Duration::from_millis(33);
+
+type SharedDocument = Mutex<Document>;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,79 +35,78 @@ struct PlaybackPosition {
     is_playing: bool,
 }
 
-/// Largest MIDI file read. Real files are a few hundred kilobytes at most.
-const MAX_MIDI_BYTES: u64 = 32 * 1024 * 1024;
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenedScore {
-    score: Score,
-    /// Notes the instrument could not play, left out of the score.
-    skipped_notes: usize,
+/// A panic while the document was locked must not make every later command fail.
+fn locked(document: &SharedDocument) -> MutexGuard<'_, Document> {
+    document
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// The MIDI file given on the command line (or by "Open with"), read once at startup.
-struct InitialFile(Option<String>);
-
-/// First argument that names an existing MIDI file. Flags and other arguments are ignored.
-fn midi_file_from_args(args: impl Iterator<Item = String>) -> Option<String> {
-    args.skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .find(|arg| {
-            let path = Path::new(arg);
-            let is_midi = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
-            is_midi && path.is_file()
-        })
+/// The audio engine plays whatever the document holds. If audio is unavailable the user finds out
+/// when pressing play, so a failure here is not worth interrupting an edit for.
+fn sync_audio(document: &Document, audio: &AudioController) {
+    let _ = audio.load(document.score().clone());
 }
 
 #[tauri::command]
-fn initial_file(initial: State<InitialFile>) -> Option<String> {
-    initial.0.clone()
+fn startup(document: State<SharedDocument>, startup: State<Startup>) -> OpenedDocument {
+    service::startup(&locked(&document), &startup)
 }
 
 #[tauri::command]
-fn demo_score() -> Score {
-    score_model::demo_score()
+fn new_document(document: State<SharedDocument>, audio: State<AudioController>) -> DocumentState {
+    let mut document = locked(&document);
+    let state = service::new_document(&mut document);
+    sync_audio(&document, &audio);
+    state
 }
 
 #[tauri::command]
-async fn open_midi(path: String) -> Result<OpenedScore, String> {
-    let path = Path::new(&path);
-    let bytes = read_midi_file(path)?;
-    import_midi_bytes(&bytes, path.file_stem().and_then(|s| s.to_str()))
-}
-
-fn read_midi_file(path: &Path) -> Result<Vec<u8>, String> {
-    let size = std::fs::metadata(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
-        .len();
-    if size > MAX_MIDI_BYTES {
-        return Err(format!("{} is too large to be a MIDI file", path.display()));
-    }
-    std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
-}
-
-/// `file_stem` names the score when the file does not carry a title.
-fn import_midi_bytes(bytes: &[u8], file_stem: Option<&str>) -> Result<OpenedScore, String> {
-    let mut imported = io_midi::import_midi(bytes).map_err(|e| e.to_string())?;
-    if imported.score.tracks.is_empty() {
-        return Err("This file has no notes that a string instrument can play.".into());
-    }
-    if let (Some(stem), "Untitled") = (file_stem, imported.score.title.as_str()) {
-        imported.score.title = stem.to_string();
-    }
-    Ok(OpenedScore {
-        score: imported.score,
-        skipped_notes: imported.skipped_notes,
-    })
+async fn open_file(
+    path: String,
+    document: State<'_, SharedDocument>,
+    audio: State<'_, AudioController>,
+) -> Result<OpenedDocument, String> {
+    let mut document = locked(&document);
+    let opened = service::open_file(&mut document, &path)?;
+    sync_audio(&document, &audio);
+    Ok(opened)
 }
 
 #[tauri::command]
-fn load_score(score: Score, audio: State<AudioController>) -> Result<(), String> {
-    audio.load(score)
+fn save_file(
+    path: Option<String>,
+    document: State<SharedDocument>,
+) -> Result<DocumentState, String> {
+    service::save_file(&mut locked(&document), path)
+}
+
+#[tauri::command]
+fn edit_score(
+    edit: Edit,
+    document: State<SharedDocument>,
+    audio: State<AudioController>,
+) -> Result<DocumentState, String> {
+    let mut document = locked(&document);
+    let state = service::edit_score(&mut document, &edit)?;
+    sync_audio(&document, &audio);
+    Ok(state)
+}
+
+#[tauri::command]
+fn undo(document: State<SharedDocument>, audio: State<AudioController>) -> DocumentState {
+    let mut document = locked(&document);
+    let state = service::undo(&mut document);
+    sync_audio(&document, &audio);
+    state
+}
+
+#[tauri::command]
+fn redo(document: State<SharedDocument>, audio: State<AudioController>) -> DocumentState {
+    let mut document = locked(&document);
+    let state = service::redo(&mut document);
+    sync_audio(&document, &audio);
+    state
 }
 
 #[tauri::command]
@@ -148,8 +156,25 @@ fn soundfont_path(app: &tauri::App) -> Result<PathBuf, String> {
         .map_err(|e| format!("cannot locate the bundled SoundFont: {e}"))
 }
 
+/// Registers every command. The app and the tests build on this, so the tests exercise the same
+/// command names, argument names and JSON the UI really uses.
+fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder.invoke_handler(tauri::generate_handler![
+        startup,
+        new_document,
+        open_file,
+        save_file,
+        edit_score,
+        undo,
+        redo,
+        play,
+        pause,
+        stop
+    ])
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let audio = match soundfont_path(app) {
@@ -162,20 +187,17 @@ pub fn run() {
                     AudioController::unavailable(reason)
                 }
             };
+
+            let (document, startup) = service::initial_document(std::env::args());
+            sync_audio(&document, &audio);
             app.manage(audio);
-            app.manage(InitialFile(midi_file_from_args(std::env::args())));
+            app.manage(Mutex::new(document));
+            app.manage(startup);
             spawn_position_emitter(app.handle().clone());
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            demo_score,
-            initial_file,
-            open_midi,
-            load_score,
-            play,
-            pause,
-            stop
-        ])
+        });
+
+    with_commands(builder)
         .run(tauri::generate_context!())
         .expect("error while running the Music Part application");
 }
@@ -183,79 +205,146 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, mock_builder, MockRuntime, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+    use tauri::{WebviewWindow, WebviewWindowBuilder};
 
-    #[test]
-    fn demo_score_command_returns_the_demo() {
-        assert_eq!(demo_score(), score_model::demo_score());
+    /// An app with the real commands, configuration and permissions, and the demo score, but no
+    /// window system and no audio.
+    fn app() -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
+        let app = with_commands(mock_builder())
+            .build(tauri::generate_context!())
+            .unwrap();
+        app.manage(AudioController::unavailable("no audio in tests".into()));
+        app.manage(Mutex::new(Document::new(score_model::demo_score(), None)));
+        app.manage(Startup {
+            skipped_notes: 0,
+            notice: None,
+        });
+        let window = WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        (app, window)
     }
 
-    /// One quarter note (E4) at 480 ticks per quarter, written by hand.
-    const ONE_NOTE_MIDI: &[u8] = &[
-        0x4D, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xE0, // header
-        0x4D, 0x54, 0x72, 0x6B, 0, 0, 0, 13, // track, 13 bytes
-        0x00, 0x90, 0x40, 0x64, // note on E4
-        0x83, 0x60, 0x80, 0x40, 0x00, // note off after 480 ticks
-        0x00, 0xFF, 0x2F, 0x00, // end of track
-    ];
-
-    #[test]
-    fn imports_a_midi_file_and_names_it_after_the_file() {
-        let opened = import_midi_bytes(ONE_NOTE_MIDI, Some("my-song")).unwrap();
-        assert_eq!(opened.score.title, "my-song");
-        assert_eq!(opened.score.tracks.len(), 1);
-        assert_eq!(opened.skipped_notes, 0);
-    }
-
-    #[test]
-    fn a_file_that_is_not_midi_gives_a_readable_error() {
-        let error = import_midi_bytes(b"definitely not midi", None).unwrap_err();
-        assert!(error.starts_with("invalid MIDI file"), "{error}");
-    }
-
-    #[test]
-    fn a_file_without_playable_notes_is_refused() {
-        // Same file with the note moved to the percussion channel.
-        let mut drums = ONE_NOTE_MIDI.to_vec();
-        drums[23] = 0x99;
-        drums[27] = 0x89;
-        let error = import_midi_bytes(&drums, None).unwrap_err();
-        assert!(error.contains("no notes"), "{error}");
-    }
-
-    #[test]
-    fn a_missing_file_names_the_path() {
-        let error = read_midi_file(Path::new("/nonexistent/song.mid")).unwrap_err();
-        assert!(error.contains("/nonexistent/song.mid"), "{error}");
-    }
-
-    fn args(list: &[&str]) -> impl Iterator<Item = String> {
-        list.iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .into_iter()
+    /// What the UI does: invoke a command with a JSON object of arguments.
+    fn invoke(window: &WebviewWindow<MockRuntime>, cmd: &str, args: Value) -> Result<Value, Value> {
+        let request = InvokeRequest {
+            cmd: cmd.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            // The origin of the app itself, as for a request coming from the real UI.
+            url: window.url().unwrap(),
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        };
+        get_ipc_response(window, request).map(|body| body.deserialize::<Value>().unwrap())
     }
 
     #[test]
-    fn the_command_line_file_must_exist_and_be_midi() {
-        let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
-        // Cargo.toml exists but is not MIDI; the program name (first argument) is skipped.
-        assert_eq!(midi_file_from_args(args(&["app", manifest])), None);
+    fn startup_gives_the_demo_with_the_camel_case_keys_the_ui_reads() {
+        let (_app, window) = app();
+        let opened = invoke(&window, "startup", json!({})).unwrap();
+
+        assert_eq!(opened["document"]["score"]["title"], "Demo in A minor");
+        assert_eq!(opened["document"]["isDirty"], false);
+        assert_eq!(opened["skippedNotes"], 0);
+    }
+
+    #[test]
+    fn an_edit_sent_the_way_the_ui_sends_it_changes_the_score_and_the_history() {
+        let (_app, window) = app();
+        let edit = json!({ "type": "setFret", "track": 0, "measure": 0, "beat": 0, "string": 1, "fret": 7 });
+        let state = invoke(&window, "edit_score", json!({ "edit": edit })).unwrap();
+
+        let note = &state["score"]["tracks"][0]["measures"][0]["voices"][0]["beats"][0]["notes"][0];
         assert_eq!(
-            midi_file_from_args(args(&["app", "/nonexistent/song.mid"])),
-            None
+            (note["string"].as_u64(), note["fret"].as_u64()),
+            (Some(1), Some(7))
         );
-        assert_eq!(midi_file_from_args(args(&["app"])), None);
+        assert_eq!(
+            (state["isDirty"].as_bool(), state["canUndo"].as_bool()),
+            (Some(true), Some(true))
+        );
+
+        let undone = invoke(&window, "undo", json!({})).unwrap();
+        assert_eq!(undone["isDirty"], false);
+        let redone = invoke(&window, "redo", json!({})).unwrap();
+        assert_eq!(redone["isDirty"], true);
     }
 
     #[test]
-    fn a_midi_file_on_the_command_line_is_found_whatever_the_case() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests-data");
-        std::fs::create_dir_all(dir).unwrap();
-        let path = format!("{dir}/SONG.MID");
-        std::fs::write(&path, ONE_NOTE_MIDI).unwrap();
+    fn a_refused_edit_comes_back_as_the_message_the_ui_shows() {
+        let (_app, window) = app();
+        let edit = json!({ "type": "setFret", "track": 0, "measure": 0, "beat": 0, "string": 1, "fret": 99 });
+        let error = invoke(&window, "edit_score", json!({ "edit": edit })).unwrap_err();
+        assert_eq!(error, json!("the fret must be between 0 and 24"));
+    }
 
-        let found = midi_file_from_args(args(&["app", "--flag", &path]));
-        std::fs::remove_dir_all(dir).unwrap();
-        assert_eq!(found.as_deref(), Some(path.as_str()));
+    #[test]
+    fn a_malformed_edit_is_an_error_and_not_a_crash() {
+        let (_app, window) = app();
+        assert!(invoke(
+            &window,
+            "edit_score",
+            json!({ "edit": { "type": "teleport" } })
+        )
+        .is_err());
+        assert!(invoke(&window, "edit_score", json!({})).is_err());
+    }
+
+    #[test]
+    fn saving_and_opening_use_the_argument_names_of_the_ui() {
+        let (_app, window) = app();
+        // No file yet, and the UI passes null: the app must ask for one.
+        let error = invoke(&window, "save_file", json!({ "path": null })).unwrap_err();
+        assert!(
+            error.as_str().unwrap().contains("choose where to save"),
+            "{error}"
+        );
+
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tauri-tests/ipc");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("song").to_string_lossy().into_owned();
+        let saved = invoke(&window, "save_file", json!({ "path": path })).unwrap();
+        assert_eq!(saved["path"], json!(format!("{path}.mpart")));
+
+        let opened = invoke(
+            &window,
+            "open_file",
+            json!({ "path": format!("{path}.mpart") }),
+        )
+        .unwrap();
+        assert_eq!(opened["document"]["isDirty"], false);
+
+        let error = invoke(
+            &window,
+            "open_file",
+            json!({ "path": "/nonexistent/x.mpart" }),
+        )
+        .unwrap_err();
+        assert!(
+            error.as_str().unwrap().contains("/nonexistent/x.mpart"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_new_document_is_blank_and_clean() {
+        let (_app, window) = app();
+        let state = invoke(&window, "new_document", json!({})).unwrap();
+        assert_eq!(state["score"]["title"], "Untitled");
+        assert_eq!(state["isDirty"], false);
+    }
+
+    #[test]
+    fn playing_without_audio_reports_why_instead_of_failing_silently() {
+        let (_app, window) = app();
+        let error = invoke(&window, "play", json!({})).unwrap_err();
+        assert_eq!(error, json!("no audio in tests"));
     }
 }

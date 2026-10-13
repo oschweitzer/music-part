@@ -18,6 +18,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `audio-engine`: sequencer turning a score into timed note events, honouring ties.
 - `audio-engine`: SoundFont player (play, pause, stop) with one MIDI channel and instrument per
   track, and a `cpal` audio output.
+- Editing: click a note or a string to select it, type a fret (two digits for 10 to 24), delete,
+  change the duration and dots, insert and delete measures, change the tempo. A measure always
+  stays exactly full. Undo and redo (200 steps). See `docs/editing.md`.
+- Native score files (`.mpart`): New, Open, Save and Save as, with a versioned format and safe
+  writing. The app asks before discarding unsaved changes, and shows them in the title.
+- `score-model`: `Edit` and `apply_edit`, `Score::validate`, and `blank_score`.
+- `io-native`: the `.mpart` format.
+- `pnpm e2e`: end-to-end tests of the UI in headless Chrome against the real document code, and
+  IPC tests of the commands through Tauri's mock runtime.
 - Open MIDI files: an Open button (Ctrl+O), drag and drop onto the window, and a file given on the
   command line or through "Open with". The score is named after the file when it has no title.
 - `io-midi`: each MIDI channel becomes its own track (so format 0 files are split), the instrument
