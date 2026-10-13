@@ -222,12 +222,21 @@ mod tests {
         ));
     }
 
-    /// Needs a SoundFont: `SOUNDFONT=/usr/share/sounds/sf2/TimGM6mb.sf2 cargo test`.
-    /// Skipped when the variable is unset.
+    /// Path of the SoundFont used by audible-path tests: `$SOUNDFONT`, or the one fetched by
+    /// `pnpm fetch:soundfont`. `None` skips those tests.
+    fn test_soundfont() -> Option<std::path::PathBuf> {
+        if let Some(path) = std::env::var_os("SOUNDFONT") {
+            return Some(path.into());
+        }
+        let default = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/soundfonts/GeneralUser-GS.sf2");
+        default.exists().then_some(default)
+    }
+
     #[test]
     fn renders_sound_only_while_playing() {
-        let Ok(path) = std::env::var("SOUNDFONT") else {
-            eprintln!("SOUNDFONT not set, test skipped");
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
             return;
         };
         let mut player =
@@ -254,5 +263,29 @@ mod tests {
         assert!(player.position() > 0);
         player.stop();
         assert_eq!(player.position(), 0);
+    }
+
+    #[test]
+    fn every_demo_track_is_audible() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let demo = score_model::demo_score();
+
+        for track in &demo.tracks {
+            let score = Score {
+                tracks: vec![track.clone()],
+                ..demo.clone()
+            };
+            let mut player = Player::new(&score, &mut File::open(&path).unwrap(), 44_100).unwrap();
+            player.play();
+
+            let mut buf = vec![0.0f32; 2 * 44_100];
+            player.render(&mut buf);
+            let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak > 0.01, "{} is nearly silent (peak {peak})", track.name);
+            assert!(peak <= 1.0, "{} clips (peak {peak})", track.name);
+        }
     }
 }

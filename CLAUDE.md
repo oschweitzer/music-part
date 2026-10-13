@@ -43,8 +43,8 @@ samples, then Guitar Pro import and more instruments.
 cargo test --workspace                          # Run all tests
 cargo fmt --all                                 # Format
 cargo clippy --workspace --all-targets -- -D warnings   # Lint, CI fails on any warning
-SOUNDFONT=/usr/share/sounds/sf2/TimGM6mb.sf2 cargo test -p audio-engine   # Includes the audible-path test
-cargo run -p audio-engine --example play_midi -- song.mid font.sf2        # Listen to a MIDI file
+pnpm fetch:soundfont                            # Download the SoundFont (assets/soundfonts, not in git)
+cargo run -p audio-engine --example play_midi -- song.mid assets/soundfonts/GeneralUser-GS.sf2
 ```
 
 ```bash
@@ -98,8 +98,8 @@ Linux needs system packages for Tauri and ALSA:
 ## Testing
 
 - Tests are self-contained and hardware-free: no sound card, no network, no file outside the repo.
-  A test that needs an external asset (a SoundFont) reads its path from an env var and skips with a
-  message when it is unset.
+  A test that needs an external asset (the SoundFont) reads its path from an env var, falls back
+  to the default fetched location, and skips with a message when neither exists.
 - One test verifies one behaviour. Name it after that behaviour
   (`note_crossing_a_barline_is_split_into_tied_notes`).
 - Build small scores and MIDI files in the test itself rather than committing binary fixtures.
@@ -123,8 +123,9 @@ Linux needs system packages for Tauri and ALSA:
   `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`
 - Never force-push `main`, never skip hooks (`--no-verify`), never rewrite published history.
 - Stage files by name, not `git add -A`, when the working tree holds unrelated changes.
-- Never commit secrets, local SoundFonts, or large binary samples. Sample libraries are fetched by
-  a script and stay out of git; their licences are listed in `docs/` (CC0 or CC-BY only).
+- Never commit secrets or large binary samples. SoundFonts and sample libraries are fetched by a
+  script with a pinned checksum and stay out of git; their licences are recorded in
+  `docs/soundfonts.md` and the licence text is committed next to the download location.
 
 ## Changelog
 

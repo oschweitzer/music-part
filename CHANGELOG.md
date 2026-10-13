@@ -18,6 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `audio-engine`: sequencer turning a score into timed note events, honouring ties.
 - `audio-engine`: SoundFont player (play, pause, stop) with one MIDI channel and instrument per
   track, and a `cpal` audio output.
+- `pnpm fetch:soundfont`: downloads the GeneralUser GS SoundFont with a pinned checksum. See
+  `docs/soundfonts.md` for its licence and the provenance caveat.
 - `audio-engine`: `play_midi` example to listen to a MIDI file with a SoundFont.
 - Desktop app (Tauri 2 + Svelte 5): window showing the guitar and bass tracks of a demo score as a
   tablature, with light and dark themes.
