@@ -45,7 +45,7 @@ class Backend {
 }
 
 async function startVite() {
-  const server = spawn('pnpm', ['--filter', 'ui', 'exec', 'vite', '--port', String(uiPort), '--strictPort'], {
+  const server = spawn('pnpm', ['--filter', 'ui', 'exec', 'vite', '--host', '127.0.0.1', '--port', String(uiPort), '--strictPort'], {
     cwd: root,
     stdio: 'ignore',
   })
