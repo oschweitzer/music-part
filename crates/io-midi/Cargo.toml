@@ -1,0 +1,9 @@
+[package]
+name = "io-midi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+midly = "0.5"
+score-model = { path = "../score-model" }

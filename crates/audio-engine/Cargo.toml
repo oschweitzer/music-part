@@ -1,0 +1,12 @@
+[package]
+name = "audio-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+score-model = { path = "../score-model" }
+
+[dev-dependencies]
+io-midi = { path = "../io-midi" }
+midly = "0.5"
