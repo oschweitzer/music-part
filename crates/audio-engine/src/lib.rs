@@ -1,4 +1,9 @@
-//! Moteur audio. Pour l'instant : séquenceur pur (Score -> événements datés),
-//! testable sans carte son. La sortie `cpal` et le synthé SoundFont viennent ensuite.
+//! Moteur audio : séquenceur pur, lecteur SoundFont (`Player`, sans matériel)
+//! et sortie `cpal` (`AudioOutput`).
 
+pub mod output;
+pub mod player;
 pub mod sequencer;
+
+pub use output::AudioOutput;
+pub use player::{Player, PlayerError};
