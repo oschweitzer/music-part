@@ -12,7 +12,10 @@
   --ink-muted: #6b6b7a;
   --staff-line: #9a9aa8;
   --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --on-accent: #ffffff;
   --danger: #c0392b;
+  --danger-bg: #fdecea;
   --shadow: 0 1px 2px rgb(20 20 40 / 6%), 0 8px 24px rgb(20 20 40 / 6%);
 }
 
@@ -27,7 +30,10 @@
     --ink-muted: #9a9aab;
     --staff-line: #5a5a6b;
     --accent: #8b85ff;
+    --accent-hover: #9d98ff;
+    --on-accent: #14141c;
     --danger: #ff7a6b;
+    --danger-bg: #3a2220;
     --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 30%);
   }
 }

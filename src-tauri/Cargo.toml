@@ -14,3 +14,5 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 score-model = { path = "../crates/score-model" }
+audio-engine = { path = "../crates/audio-engine" }
+serde.workspace = true

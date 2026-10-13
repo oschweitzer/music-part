@@ -14,10 +14,11 @@ root/
 │   ├── score-model/   # Score > Track > Measure > Voice > Beat > Note. Pure data, no I/O
 │   ├── io-midi/       # MIDI import to Score
 │   └── audio-engine/  # Sequencer (Score -> timed events), SoundFont Player, cpal output
-├── src-tauri/         # Tauri shell: commands exposing the engines to the UI (`demo_score` for now)
+├── src-tauri/         # Tauri shell: commands and events exposing the engines to the UI
+│   └── src/audio.rs   # Audio thread that owns the cpal stream; the app talks to it by message
 ├── ui/                # Svelte + TypeScript front end
 │   ├── public/        # demo-score.json: export of the Rust demo score, checked by a Rust test
-│   └── src/lib/       # tab-layout.ts (pure layout, unit tested), score types, Tauri/browser loader
+│   └── src/lib/       # tab-layout.ts (pure layout, unit tested), playback + transport, score types
 └── docs/              # (planned) Design notes, one file per feature
 ```
 
@@ -30,7 +31,9 @@ samples, then Guitar Pro import and more instruments.
 - `io-*` crates only convert between a file format and `Score`. No audio, no UI.
 - Audio hardware stays in `audio-engine/src/output.rs`. Everything else there (sequencer, `Player`)
   must stay testable without a sound card.
-- The UI never touches audio. It sends commands to the engine through Tauri.
+- The UI never touches audio. It sends commands to the engine through Tauri and receives the
+  position as `playback-position` events. In a browser a simulated transport stands in for them
+  (`ui/src/lib/transport.ts`), so every UI feature must work against both.
 - Layout lives in pure TypeScript functions (`ui/src/lib/tab-layout.ts`) that return plain geometry;
   Svelte components only draw it. Test layout with vitest, not through the DOM.
 - `ui/src/lib/score-types.ts` mirrors the serde JSON of `score-model` by hand. Change both together.
@@ -59,8 +62,10 @@ UPDATE_DEMO=1 cargo test -p score-model demo_json   # Regenerate ui/public/demo-
 Run from the repo root and target a crate with `-p <name>`, never `cd` into a crate. Target a UI
 script with `pnpm --filter ui <script>`.
 
-`src-tauri` embeds `ui/dist` at compile time, so run `pnpm --filter ui build` once before
-`cargo build`, `cargo clippy` or `cargo test --workspace` on a fresh checkout.
+`src-tauri` embeds `ui/dist` at compile time and the build checks that the bundled SoundFont exists,
+so on a fresh checkout run `pnpm --filter ui build` and `pnpm fetch:soundfont` once before
+`cargo build`, `cargo clippy` or `cargo test --workspace`. Set `MUSIC_PART_SOUNDFONT` to use
+another SoundFont file in the app.
 
 The dev server uses port 1420 (fixed, Tauri needs it). Port 5173 is often taken by other projects.
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
 import type { Beat, Measure, Score, Track } from './score-types'
-import { durationTicks, layoutTab, measureTicks, METRICS } from './tab-layout'
+import { durationTicks, layoutTab, locateTick, measureTicks, METRICS } from './tab-layout'
 
 const score = demo as Score
 const guitar = score.tracks[0] as Track
@@ -204,5 +204,62 @@ describe('metrics', () => {
   it('should reserve room for the clef before the first measure', () => {
     const system = layoutTab({ track: guitar, width: 900 }).systems[0]!
     expect(system.measures[0]!.x).toBe(system.left + METRICS.clefWidth)
+  })
+})
+
+describe('locateTick', () => {
+  const layout = layoutTab({ track: guitar, width: 900 })
+  const measures = layout.systems.flatMap((s) => s.measures)
+
+  it('should put the start of the piece on the first beat', () => {
+    const cursor = locateTick({ layout, tick: 0 })!
+    expect(cursor.systemIndex).toBe(0)
+    expect(cursor.measureIndex).toBe(0)
+    expect(cursor.x).toBe(measures[0]!.beats[0]!.x)
+  })
+
+  it('should glide between two beats', () => {
+    const [a, b] = measures[0]!.beats
+    const halfway = locateTick({ layout, tick: a!.startTick + a!.ticks / 2 })!
+    expect(halfway.x).toBeCloseTo((a!.x + b!.x) / 2, 5)
+  })
+
+  it('should move to the next measure on the barline', () => {
+    const cursor = locateTick({ layout, tick: 128 })!
+    expect(cursor.measureIndex).toBe(1)
+    expect(cursor.x).toBe(measures[1]!.beats[0]!.x)
+  })
+
+  it('should find a measure on another system', () => {
+    const narrow = layoutTab({ track: guitar, width: 500 })
+    const cursor = locateTick({ layout: narrow, tick: 5 * 128 + 10 })!
+    expect(cursor.measureIndex).toBe(5)
+    expect(cursor.systemIndex).toBeGreaterThan(0)
+  })
+
+  it('should never go backwards as time advances within a system', () => {
+    let previous = -Infinity
+    for (let tick = 0; tick < 2 * 128; tick += 3) {
+      const cursor = locateTick({ layout, tick })!
+      if (cursor.systemIndex === 0) {
+        expect(cursor.x).toBeGreaterThanOrEqual(previous)
+        previous = cursor.x
+      }
+    }
+  })
+
+  it('should stay on the first beat before the start', () => {
+    expect(locateTick({ layout, tick: -10 })!.x).toBe(measures[0]!.beats[0]!.x)
+  })
+
+  it('should stop at the end of the last measure past the end', () => {
+    const cursor = locateTick({ layout, tick: 1_000_000 })!
+    const lastMeasure = measures.at(-1)!
+    expect(cursor.measureIndex).toBe(lastMeasure.index)
+    expect(cursor.x).toBe(lastMeasure.x + lastMeasure.width - METRICS.measurePadRight)
+  })
+
+  it('should return null for an empty layout', () => {
+    expect(locateTick({ layout: layoutTab({ track: trackWith([]), width: 900 }), tick: 0 })).toBeNull()
   })
 })

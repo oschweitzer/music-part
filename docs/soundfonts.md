@@ -32,6 +32,9 @@ pnpm fetch:soundfont --force  # download again
 It lands in `assets/soundfonts/GeneralUser-GS.sf2` (git-ignored). The licence text is committed
 next to it, as the licence asks.
 
+The Tauri build bundles it (`bundle.resources` in `src-tauri/tauri.conf.json`) together with its
+licence text, so a release contains both. The build fails if the file is missing.
+
 Audible-path tests in `audio-engine` use `$SOUNDFONT` if set, otherwise that default path, and skip
 when neither exists. CI fetches the file so those tests run there.
 

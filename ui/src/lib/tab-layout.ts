@@ -69,6 +69,9 @@ export type BeatLayout = {
 
 export type MeasureLayout = {
   index: number
+  /** Absolute start position and length in 1/128 of a whole note. */
+  startTick: number
+  ticks: number
   x: number
   width: number
   beats: BeatLayout[]
@@ -271,6 +274,8 @@ function placeMeasure({
 
   return {
     index: draft.index,
+    startTick: draft.startTick,
+    ticks: measureTicks(draft.measure.time_signature),
     x,
     width,
     beats: placed,
@@ -353,4 +358,48 @@ function buildBeams({ beats, stemBottom }: { beats: BeatLayout[]; stemBottom: nu
   }
 
   return segments
+}
+
+export type CursorPosition = {
+  systemIndex: number
+  measureIndex: number
+  measureX: number
+  measureWidth: number
+  x: number
+}
+
+/**
+ * Finds where a playback position falls on the page. Between two beats the cursor glides, so it
+ * moves smoothly. A position before the start or past the end sticks to the nearest edge.
+ */
+export function locateTick({ layout, tick }: { layout: TabLayout; tick: number }): CursorPosition | null {
+  const entries = layout.systems.flatMap((system, systemIndex) =>
+    system.measures.map((measure) => ({ system, systemIndex, measure })),
+  )
+  const last = entries.at(-1)
+  if (!last) return null
+
+  const found =
+    entries.find(({ measure }) => tick >= measure.startTick && tick < measure.startTick + measure.ticks) ??
+    (tick < 0 ? entries[0] : last)
+  if (!found) return null
+
+  const { measure, systemIndex } = found
+  const measureEnd = measure.x + measure.width - METRICS.measurePadRight
+  const isPastEnd = tick >= measure.startTick + measure.ticks
+
+  let x = measure.x + METRICS.measurePadLeft
+  const beatIndex = measure.beats.findLastIndex((beat) => beat.startTick <= tick)
+  const beat = measure.beats[beatIndex]
+  if (isPastEnd) {
+    x = measureEnd
+  } else if (beat) {
+    const nextX = measure.beats[beatIndex + 1]?.x ?? measureEnd
+    const progress = Math.min(Math.max((tick - beat.startTick) / beat.ticks, 0), 1)
+    x = beat.x + progress * (nextX - beat.x)
+  } else if (measure.beats[0]) {
+    x = measure.beats[0].x
+  }
+
+  return { systemIndex, measureIndex: measure.index, measureX: measure.x, measureWidth: measure.width, x }
 }

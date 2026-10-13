@@ -1,11 +1,8 @@
 <script lang="ts">
-  import { layoutTab, METRICS } from '../lib/tab-layout'
-  import type { BeatLayout } from '../lib/tab-layout'
-  import type { Track } from '../lib/score-types'
+  import { METRICS } from '../lib/tab-layout'
+  import type { BeatLayout, CursorPosition, TabLayout } from '../lib/tab-layout'
 
-  let { track, width }: { track: Track; width: number } = $props()
-
-  const layout = $derived(layoutTab({ track, width }))
+  let { layout, label, cursor = null }: { layout: TabLayout; label: string; cursor?: CursorPosition | null } = $props()
 
   const tabLetters = ['T', 'A', 'B']
 
@@ -43,9 +40,9 @@
   height={layout.height}
   viewBox="0 0 {layout.width} {layout.height}"
   role="img"
-  aria-label="Tablature of {track.name}"
+  aria-label="Tablature of {label}"
 >
-  {#each layout.systems as system (system.y)}
+  {#each layout.systems as system, systemIndex (system.y)}
     {@const staffMid = (system.staffTop + system.staffBottom) / 2}
     {@const letterGap = Math.min(14, (system.staffBottom - system.staffTop) / 3)}
     <g class="system">
@@ -125,12 +122,28 @@
           {/if}
         {/each}
 
+        {#if cursor && cursor.systemIndex === systemIndex && cursor.measureIndex === measure.index}
+          <rect
+            class="measure-highlight"
+            x={measure.x}
+            y={system.staffTop - 6}
+            width={measure.width}
+            height={system.staffBottom - system.staffTop + METRICS.rhythmHeight + 6}
+          />
+        {/if}
+
         {#each measure.beams as beam, i (i)}
           <line class="beam" x1={beam.x1} x2={beam.x2} y1={beam.y} y2={beam.y} />
         {/each}
 
         <line class="bar" x1={measure.x + measure.width} x2={measure.x + measure.width} y1={system.staffTop} y2={system.staffBottom} />
       {/each}
+      {#if cursor && cursor.systemIndex === systemIndex}
+        <g class="cursor" aria-hidden="true">
+          <line x1={cursor.x} x2={cursor.x} y1={system.staffTop - 8} y2={system.staffBottom + METRICS.rhythmHeight - 6} />
+          <path d="M{cursor.x - 4} {system.staffTop - 12} h8 l-4 5 z" />
+        </g>
+      {/if}
     </g>
   {/each}
 </svg>
@@ -166,6 +179,21 @@
     fill: var(--ink);
     font-size: 15px;
     font-weight: 700;
+  }
+
+  .measure-highlight {
+    fill: var(--accent);
+    opacity: 0.07;
+  }
+
+  .cursor line {
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  .cursor path {
+    fill: var(--accent);
   }
 
   .fret-bg {

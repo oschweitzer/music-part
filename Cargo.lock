@@ -1974,7 +1974,9 @@ dependencies = [
 name = "music-part-app"
 version = "0.1.0"
 dependencies = [
+ "audio-engine",
  "score-model",
+ "serde",
  "tauri",
  "tauri-build",
 ]

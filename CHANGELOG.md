@@ -18,6 +18,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `audio-engine`: sequencer turning a score into timed note events, honouring ties.
 - `audio-engine`: SoundFont player (play, pause, stop) with one MIDI channel and instrument per
   track, and a `cpal` audio output.
+- Playback in the app: play, pause and stop buttons (Space toggles), a clock, a cursor and a
+  highlighted measure that follow the score, and automatic scrolling to the line being played.
+  Playback uses the bundled GeneralUser GS SoundFont. In a plain browser the cursor still moves,
+  silently, to develop the UI.
+- `audio-engine`: `Player::load` swaps a prebuilt `Program` without reloading the SoundFont, and
+  `Player::position_ticks` gives the position on the score. The player rewinds by itself at the end.
 - `pnpm fetch:soundfont`: downloads the GeneralUser GS SoundFont with a pinned checksum. See
   `docs/soundfonts.md` for its licence and the provenance caveat.
 - `audio-engine`: `play_midi` example to listen to a MIDI file with a SoundFont.
@@ -29,3 +35,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `score-model`: `demo_score()`, a small two-track score used until import and editing reach the UI.
 - CI on Linux, Windows and macOS: format, lint and tests for Rust, plus type check, tests and build
   for the UI.
+
+### Fixed
+
+- `audio-engine`: the audio output now opens at the sample rate of the synthesizer. It used to
+  open the device at its maximum rate, which would have played too fast and too high on a card
+  that goes beyond the default rate.
