@@ -168,8 +168,11 @@ format, with Semantic Versioning once releases start.
 
 - **Formats**: the native score format is JSON via `serde`. Adding a field must keep older files
   loadable (`#[serde(default)]`), and a change that cannot is a breaking change in the changelog.
-- **Licences**: code is MPL-2.0. A new dependency must be compatible with it. Audio assets need an
-  explicit open licence recorded next to them.
+- **Licences**: code is PolyForm Noncommercial 1.0.0 (source-available, commercial use needs the author's
+  permission; see `LICENSE`). A new dependency must allow being combined with it: permissive licences
+  (MIT, Apache-2.0, MPL-2.0) are fine, GPL and AGPL are not. `oxisynth` is LGPL-2.1: it stays under
+  its own licence and must remain a replaceable library, never copied into our code. Audio assets
+  need an explicit open licence recorded next to them.
 - **CI**: GitHub Actions runs fmt, clippy and tests on Linux, Windows and macOS. Keep all three green.
 - **Markdown tables**: keep columns aligned, padding each cell so the `|` separators line up in
   the raw source.

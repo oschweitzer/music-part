@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `LICENSE`: PolyForm Noncommercial 1.0.0, and a `README.md`.
 - `score-model`: score data model (score, track, measure, voice, beat, note), string/fret to MIDI
   pitch conversion, dotted durations and JSON serialization.
 - `score-model`: tied notes (`Note::tied`), across barlines included. Scores saved before this
