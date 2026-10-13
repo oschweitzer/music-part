@@ -28,7 +28,9 @@ samples, then Guitar Pro import and more instruments.
 ### Dependency rules
 
 - `score-model` depends on nothing but `serde`. Every other crate depends on it, never the reverse.
-- `io-*` crates only convert between a file format and `Score`. No audio, no UI.
+- `io-*` crates only convert between a file format and `Score`. No audio, no UI. They must never
+  panic or allocate without bound on a bad file: return an error or skip and count what was left
+  out. Keep the randomized test in `io-midi` passing when changing an importer.
 - Audio hardware stays in `audio-engine/src/output.rs`. Everything else there (sequencer, `Player`)
   must stay testable without a sound card.
 - The UI never touches audio. It sends commands to the engine through Tauri and receives the
@@ -56,6 +58,7 @@ pnpm dev                         # Run the desktop app (Tauri + Vite dev server 
 pnpm ui:dev                      # UI alone in a browser, loads ui/public/demo-score.json
 pnpm ui:check                    # svelte-check + tsc
 pnpm ui:test                     # vitest
+cargo run -p music-part-app -- song.mid   # Start the app on a file (needs `pnpm ui:dev` running)
 UPDATE_DEMO=1 cargo test -p score-model demo_json   # Regenerate ui/public/demo-score.json
 ```
 

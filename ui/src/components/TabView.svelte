@@ -89,7 +89,7 @@
             </g>
           {/if}
 
-          {#each beat.notes as note (note.string)}
+          {#each beat.notes as note, noteIndex (noteIndex)}
             {@const label = fretLabel(note.fret, note.isGhost)}
             {#if note.tie}
               <path class="tie" d={tiePath({ fromX: note.tie.fromX, toX: note.tie.toX, y: note.y })} />

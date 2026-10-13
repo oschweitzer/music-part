@@ -1,5 +1,13 @@
 <script lang="ts">
   import TabView from './components/TabView.svelte'
+  import {
+    canOpenFiles,
+    chooseMidiFile,
+    initialFile,
+    isMidiPath,
+    onFilesDropped,
+    openMidiFile,
+  } from './lib/files'
   import { Playback } from './lib/playback.svelte'
   import { loadDemoScore } from './lib/score-source'
   import { formatClock, ticksToSeconds, totalTicks } from './lib/score-time'
@@ -15,6 +23,9 @@
   let paperWidth = $state(0)
   let stage = $state<HTMLElement>()
   let paper = $state<HTMLElement>()
+  let isDragging = $state(false)
+  let isOpening = $state(false)
+  let banner = $state<{ tone: 'error' | 'info'; text: string } | null>(null)
 
   const track = $derived(score?.tracks[selectedTrack] ?? null)
   const layout = $derived(track && paperWidth > 0 ? layoutTab({ track, width: paperWidth }) : null)
@@ -22,18 +33,29 @@
   const hasStarted = $derived(playback.isPlaying || playback.tick > 0)
   const cursor = $derived(layout && hasStarted ? locateTick({ layout, tick: playback.tick }) : null)
 
+  const shownBanner = $derived(banner ?? (playback.error ? { tone: 'error' as const, text: playback.error } : null))
+
   const duration = $derived(score ? ticksToSeconds({ ticks: totalTicks(score), tempoBpm: score.tempo_bpm }) : 0)
   const elapsed = $derived(score ? ticksToSeconds({ ticks: playback.tick, tempoBpm: score.tempo_bpm }) : 0)
 
   $effect(() => {
     playback.start()
-    loadDemoScore()
-      .then(async (loaded) => {
-        score = loaded
-        await playback.setScore(loaded)
-      })
-      .catch((error: unknown) => (loadError = error instanceof Error ? error.message : String(error)))
+    startWithScore().catch(
+      (error: unknown) => (loadError = error instanceof Error ? error.message : String(error)),
+    )
     return () => playback.dispose()
+  })
+
+  $effect(() => {
+    const stopListening = onFilesDropped({
+      onHover: (isHovering) => (isDragging = isHovering),
+      onDrop: (paths) => {
+        const path = paths.find(isMidiPath)
+        if (path) void openPath(path)
+        else banner = { tone: 'error', text: 'Only MIDI files (.mid, .midi) can be opened for now.' }
+      },
+    })
+    return () => void stopListening.then((stop) => stop())
   })
 
   // Keep the line being played in view: scroll when the cursor moves to a system that is hidden.
@@ -48,7 +70,60 @@
     if (isHidden) stage.scrollTo({ top: Math.max(top - 32, 0), behavior: 'smooth' })
   })
 
+  /** Opens the file the app was started with, or the demo when there is none. */
+  async function startWithScore() {
+    const path = await initialFile()
+    if (path) {
+      await openPath(path)
+      if (score) return
+    }
+    const demo = await loadDemoScore()
+    score = demo
+    await playback.setScore(demo)
+  }
+
+  async function chooseFile() {
+    const path = await chooseMidiFile()
+    if (path) await openPath(path)
+  }
+
+  async function openPath(path: string) {
+    if (isOpening) return
+    isOpening = true
+    banner = null
+    playback.dismissError()
+    try {
+      const opened = await openMidiFile(path)
+      score = opened.score
+      selectedTrack = 0
+      loadError = null
+      stage?.scrollTo({ top: 0 })
+      await playback.setScore(opened.score)
+      if (opened.skippedNotes > 0) {
+        const count = opened.skippedNotes
+        banner = {
+          tone: 'info',
+          text: `${count} ${count === 1 ? 'note' : 'notes'} could not be placed on the strings and ${count === 1 ? 'was' : 'were'} left out.`,
+        }
+      }
+    } catch (error) {
+      banner = { tone: 'error', text: error instanceof Error ? error.message : String(error) }
+    } finally {
+      isOpening = false
+    }
+  }
+
+  function dismissBanner() {
+    banner = null
+    playback.dismissError()
+  }
+
   function handleKeydown(event: KeyboardEvent) {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') {
+      event.preventDefault()
+      if (canOpenFiles()) void chooseFile()
+      return
+    }
     const target = event.target as HTMLElement
     if (event.code !== 'Space' || target.closest('button, input, select, textarea')) return
     event.preventDefault()
@@ -63,6 +138,16 @@
     <div class="brand">
       <span class="logo" aria-hidden="true"></span>
       <h1>{score?.title ?? 'Music Part'}</h1>
+      <button
+        type="button"
+        class="open-button"
+        disabled={!canOpenFiles() || isOpening}
+        title={canOpenFiles() ? 'Open a MIDI file (Ctrl+O)' : 'Opening files needs the desktop app'}
+        onclick={chooseFile}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.38a1.5 1.5 0 0 1 1.06.44L11.5 7H19.5A1.5 1.5 0 0 1 21 8.5V17.5A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5Z" /></svg>
+        {isOpening ? 'Opening…' : 'Open'}
+      </button>
     </div>
 
     {#if score}
@@ -95,10 +180,10 @@
     {/if}
   </header>
 
-  {#if playback.error}
-    <div class="notice" role="alert">
-      <span>{playback.error}</span>
-      <button type="button" onclick={() => playback.dismissError()}>Dismiss</button>
+  {#if shownBanner}
+    <div class="notice {shownBanner.tone}" role={shownBanner.tone === 'error' ? 'alert' : 'status'}>
+      <span>{shownBanner.text}</span>
+      <button type="button" onclick={dismissBanner}>Dismiss</button>
     </div>
   {/if}
 
@@ -113,7 +198,10 @@
     </nav>
   {/if}
 
-  <main class="stage" bind:this={stage}>
+  <main class="stage" class:dragging={isDragging} bind:this={stage}>
+    {#if isDragging}
+      <div class="drop-hint" aria-hidden="true">Drop a MIDI file to open it</div>
+    {/if}
     {#if loadError}
       <p class="message error" role="alert">{loadError}</p>
     {:else if !track}
@@ -168,6 +256,38 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .open-button {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .open-button svg {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+    opacity: 0.75;
+  }
+
+  .open-button:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+
+  .open-button:disabled {
+    color: var(--ink-muted);
+    cursor: not-allowed;
   }
 
   .transport {
@@ -251,6 +371,11 @@
     font-size: 13px;
   }
 
+  .notice.info {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
   .notice button {
     border: 0;
     background: none;
@@ -303,6 +428,21 @@
     flex: 1;
     overflow: auto;
     padding: 24px;
+  }
+
+  .drop-hint {
+    position: absolute;
+    inset: 12px;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    border: 2px dashed var(--accent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    color: var(--accent);
+    font-size: 16px;
+    font-weight: 600;
+    pointer-events: none;
   }
 
   .paper {

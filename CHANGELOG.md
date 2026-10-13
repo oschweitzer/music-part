@@ -18,6 +18,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `audio-engine`: sequencer turning a score into timed note events, honouring ties.
 - `audio-engine`: SoundFont player (play, pause, stop) with one MIDI channel and instrument per
   track, and a `cpal` audio output.
+- Open MIDI files: an Open button (Ctrl+O), drag and drop onto the window, and a file given on the
+  command line or through "Open with". The score is named after the file when it has no title.
+- `io-midi`: each MIDI channel becomes its own track (so format 0 files are split), the instrument
+  is chosen from the General MIDI program (bass, violin, guitar) with its own tuning, and
+  chords are spread over distinct strings. Percussion is not imported. Notes no string can play
+  are left out and reported in the app.
+- `score-model`: standard tunings for bass and violin (`Instrument::standard_tuning`).
 - Playback in the app: play, pause and stop buttons (Space toggles), a clock, a cursor and a
   highlighted measure that follow the score, and automatic scrolling to the line being played.
   Playback uses the bundled GeneralUser GS SoundFont. In a plain browser the cursor still moves,
@@ -38,6 +45,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `io-midi`: the importer no longer panics or allocates without bound on unusual files: a zero
+  time division, a time signature the grid cannot hold (such as 3/64), an extreme tempo, a huge
+  gap between notes (refused as too long), and notes that are never released.
 - `audio-engine`: the audio output now opens at the sample rate of the synthesizer. It used to
   open the device at its maximum rate, which would have played too fast and too high on a card
   that goes beyond the default rate.

@@ -3,7 +3,7 @@ import type { Score } from './score-types'
 
 /** True when running inside the Tauri window rather than a plain browser. */
 export function isTauri(): boolean {
-  return '__TAURI_INTERNALS__' in window
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
 /** Loads the demo score from Rust in the app, or from the exported JSON in a browser. */
