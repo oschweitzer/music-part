@@ -247,7 +247,7 @@ mod tests {
         };
         let mut bytes = Vec::new();
         smf.write_std(&mut bytes).unwrap();
-        let score = io_midi::import_midi(&bytes).unwrap();
+        let score = io_midi::import_midi(&bytes).unwrap().score;
         let events = schedule(&score);
         assert_eq!(
             (events[0].tick, events[0].pitch, events[0].on),

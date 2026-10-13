@@ -4,10 +4,8 @@
 
 use crate::{
     Beat, Duration, Instrument, Measure, Note, NoteValue, Score, Technique, TimeSignature, Track,
-    Voice, GUITAR_STANDARD,
+    Voice, BASS_STANDARD, GUITAR_STANDARD,
 };
-
-const BASS_STANDARD: [u8; 4] = [43, 38, 33, 28];
 
 fn note(string: u8, fret: u8) -> Note {
     Note {

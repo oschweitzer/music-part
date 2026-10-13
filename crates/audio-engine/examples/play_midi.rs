@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err("usage: play_midi <file.mid> <file.sf2>".into()),
     };
 
-    let score = io_midi::import_midi(&std::fs::read(midi)?)?;
+    let score = io_midi::import_midi(&std::fs::read(midi)?)?.score;
     let sample_rate = AudioOutput::default_sample_rate()?;
     let mut player = Player::new(&mut File::open(sf2)?, sample_rate)?;
     player.load_score(&score);

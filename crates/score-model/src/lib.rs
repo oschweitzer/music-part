@@ -149,6 +149,23 @@ impl Measure {
 /// Standard tuning of a 6-string guitar (E4 B3 G3 D3 A2 E2).
 pub const GUITAR_STANDARD: [u8; 6] = [64, 59, 55, 50, 45, 40];
 
+/// Standard tuning of a 4-string bass (G2 D2 A1 E1).
+pub const BASS_STANDARD: [u8; 4] = [43, 38, 33, 28];
+
+/// Standard tuning of a violin (E5 A4 D4 G3).
+pub const VIOLIN_STANDARD: [u8; 4] = [76, 69, 62, 55];
+
+impl Instrument {
+    /// Open-string pitches, highest string first.
+    pub fn standard_tuning(self) -> &'static [u8] {
+        match self {
+            Instrument::Guitar => &GUITAR_STANDARD,
+            Instrument::Bass => &BASS_STANDARD,
+            Instrument::Violin => &VIOLIN_STANDARD,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +184,15 @@ mod tests {
             tuning: GUITAR_STANDARD.to_vec(),
             measures: vec![],
         }
+    }
+
+    #[test]
+    fn standard_tunings_are_listed_highest_string_first() {
+        for instrument in [Instrument::Guitar, Instrument::Bass, Instrument::Violin] {
+            let tuning = instrument.standard_tuning();
+            assert!(tuning.windows(2).all(|w| w[0] > w[1]), "{instrument:?}");
+        }
+        assert_eq!(Instrument::Bass.standard_tuning().len(), 4);
     }
 
     #[test]
