@@ -1,0 +1,416 @@
+// Each scenario starts from a fresh backend showing the demo score ("Demo in A minor":
+// 6 measures; guitar measure 1 is eight eighth notes starting on string 5, fret 0).
+
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { sleep } from './browser.mjs'
+
+// One quarter note (E4) at 480 ticks per quarter; the same bytes as the Rust tests use.
+const ONE_NOTE_MIDI = [
+  0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xe0, 0x4d, 0x54, 0x72, 0x6b, 0, 0, 0, 13,
+  0x00, 0x90, 0x40, 0x64, 0x83, 0x60, 0x80, 0x40, 0x00, 0x00, 0xff, 0x2f, 0x00,
+]
+
+const TICKS = { Whole: 128, Half: 64, Quarter: 32, Eighth: 16, Sixteenth: 8, ThirtySecond: 4 }
+const ticksOf = ({ value, dots }) => TICKS[value] * (2 - 0.5 ** dots)
+
+// ---- helpers -------------------------------------------------------------------------------
+
+const frets = (page) =>
+  page.eval(`[...document.querySelectorAll('svg.tab text.fret')].map(t => t.textContent)`)
+
+/** Clicks in the middle of the n-th fret number on the page. */
+async function clickFret(page, index) {
+  const point = await page.eval(`(() => {
+    const r = document.querySelectorAll('svg.tab text.fret')[${index}].getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`)
+  await page.mouseClick(point.x, point.y)
+}
+
+/** The selection square, in client coordinates, or null. */
+const selection = (page) =>
+  page.eval(`(() => {
+    const r = document.querySelector('svg.tab .selection')?.getBoundingClientRect()
+    return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null
+  })()`)
+
+const text = (page, selector) => page.eval(`document.querySelector(${JSON.stringify(selector)})?.textContent?.trim() ?? null`)
+const exists = (page, selector) => page.eval(`Boolean(document.querySelector(${JSON.stringify(selector)}))`)
+const isDirty = (page) => exists(page, '.brand .dirty')
+
+async function clickButton(page, label) {
+  const found = await page.eval(`(() => {
+    const b = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)} || b.getAttribute('aria-label') === ${JSON.stringify(label)})
+    b?.click()
+    return Boolean(b)
+  })()`)
+  assert.ok(found, `no button "${label}"`)
+  await sleep(120)
+}
+
+const document_ = async ({ backend }) => (await backend.request('startup')).document
+const beatsOf = (doc, measure) => doc.score.tracks[0].measures[measure].voices[0].beats
+
+const pressTimes = async (page, key, times) => {
+  for (let i = 0; i < times; i++) await page.press(key)
+}
+
+/** Waits for the UI to have caught up with what the backend holds. */
+const settle = () => sleep(150)
+
+// ---- scenarios -----------------------------------------------------------------------------
+
+export const scenarios = [
+  [
+    'shows the demo with its tracks and the file buttons enabled',
+    async ({ page }) => {
+      assert.match(await text(page, '.brand h1'), /Demo in A minor/)
+      assert.equal(await page.eval(`document.querySelectorAll('.tracks button').length`), 2)
+      assert.equal(await page.eval(`[...document.querySelectorAll('.file-button')].every(b => !b.disabled)`), true)
+      assert.equal(await isDirty(page), false)
+      assert.equal((await frets(page))[0], '0')
+    },
+  ],
+
+  [
+    'selects the note that is clicked, and the string that is clicked on an empty spot',
+    async ({ page }) => {
+      await clickFret(page, 0)
+      const first = await selection(page)
+      assert.ok(first, 'a selection appears')
+
+      // The fret number sits exactly in the middle of the selection square.
+      const fretCenter = await page.eval(`(() => { const r = document.querySelector('svg.tab text.fret').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
+      assert.ok(Math.abs(first.x - fretCenter.x) < 2 && Math.abs(first.y - fretCenter.y) < 3)
+
+      // Same beat, on the string 4 lines below: nothing is written there, but it can be selected.
+      const gap = await page.eval(`(() => { const ys = [...document.querySelectorAll('svg.tab line.string')].slice(0, 2).map(l => l.getBoundingClientRect().y); return ys[1] - ys[0] })()`)
+      await page.mouseClick(first.x, first.y - gap)
+      const above = await selection(page)
+      assert.ok(Math.abs(above.x - first.x) < 2)
+      assert.ok(Math.abs(above.y - (first.y - gap)) < 2)
+    },
+  ],
+
+  [
+    'typing a digit sets the fret and marks the score as unsaved',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 0)
+      await page.press('7')
+      await settle()
+
+      assert.equal((await frets(page))[0], '7')
+      assert.equal(await isDirty(page), true)
+      const note = beatsOf(await document_(context), 0)[0].notes[0]
+      assert.deepEqual([note.string, note.fret], [5, 7])
+      assert.equal(await page.eval(`!document.querySelector('[aria-label=Undo]').disabled`), true)
+    },
+  ],
+
+  [
+    'two digits typed quickly make one fret number',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 0)
+      await page.press('1')
+      await page.press('2')
+      await settle()
+
+      assert.equal((await frets(page))[0], '12')
+      assert.equal(beatsOf(await document_(context), 0)[0].notes[0].fret, 12)
+    },
+  ],
+
+  [
+    'a second digit typed too late starts a new number instead of joining the first',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 0)
+      await page.press('2')
+      await sleep(1000) // too late to join the next digit
+      await page.press('9')
+      await settle()
+
+      assert.equal((await frets(page))[0], '9')
+      assert.equal(await text(page, '.notice'), null)
+    },
+  ],
+
+  [
+    'undo and redo restore the note and the unsaved mark',
+    async ({ page }) => {
+      await clickFret(page, 0)
+      await page.press('7')
+      await settle()
+      assert.equal((await frets(page))[0], '7')
+
+      await page.press('z', ['ctrl'])
+      await settle()
+      assert.equal((await frets(page))[0], '0')
+      assert.equal(await isDirty(page), false, 'back to the opened state is clean')
+
+      await page.press('z', ['ctrl', 'shift'])
+      await settle()
+      assert.equal((await frets(page))[0], '7')
+      assert.equal(await isDirty(page), true)
+    },
+  ],
+
+  [
+    'the arrow keys move the selection along beats and strings',
+    async ({ page }) => {
+      await clickFret(page, 0)
+      const start = await selection(page)
+      const gap = await page.eval(`(() => { const ys = [...document.querySelectorAll('svg.tab line.string')].slice(0, 2).map(l => l.getBoundingClientRect().y); return ys[1] - ys[0] })()`)
+
+      await page.press('ArrowRight')
+      const right = await selection(page)
+      assert.ok(right.x > start.x && Math.abs(right.y - start.y) < 1)
+
+      await page.press('ArrowDown')
+      const down = await selection(page)
+      assert.ok(Math.abs(down.y - (start.y + gap)) < 1, `moved ${down.y - start.y}, expected ${gap}`)
+
+      await page.press('ArrowUp')
+      await page.press('ArrowLeft')
+      const back = await selection(page)
+      assert.ok(Math.abs(back.x - start.x) < 1 && Math.abs(back.y - start.y) < 1)
+    },
+  ],
+
+  [
+    'delete removes the note and leaves the beat as a rest',
+    async (context) => {
+      const { page } = context
+      const before = (await frets(page)).length
+      await clickFret(page, 0)
+      await page.press('Delete')
+      await settle()
+
+      assert.equal((await frets(page)).length, before - 1)
+      const beat = beatsOf(await document_(context), 0)[0]
+      assert.deepEqual(beat.notes, [])
+      assert.equal(ticksOf(beat.duration), 16, 'the beat keeps its length')
+    },
+  ],
+
+  [
+    'a duration key reshapes the measure and it stays full',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 0)
+      await page.press('q')
+      await settle()
+
+      const beats = beatsOf(await document_(context), 0)
+      assert.equal(beats[0].duration.value, 'Quarter')
+      assert.equal(beats.length, 7, 'the quarter swallowed the next eighth note')
+      assert.equal(beats.reduce((sum, b) => sum + ticksOf(b.duration), 0), 128)
+      assert.equal(await page.eval(`document.querySelector('[title^="Quarter note"]').getAttribute('aria-pressed')`), 'true')
+      await page.screenshot(join(context.out, 'duration-changed.png'))
+    },
+  ],
+
+  [
+    'lengthening a note past the end of its measure explains why it cannot',
+    async (context) => {
+      const { page } = context
+      // The last beat of measure 4 is a half note: a whole note cannot fit after it.
+      await pressTimes(page, 'ArrowRight', 22)
+      await page.press('w')
+      await settle()
+
+      assert.match(await text(page, '.notice span'), /not enough room/)
+      assert.equal(await isDirty(page), false)
+      await clickButton(page, 'Dismiss')
+      assert.equal(await exists(page, '.notice'), false)
+    },
+  ],
+
+  [
+    'the measure buttons insert and delete measures for every track',
+    async (context) => {
+      const { page } = context
+      const count = async () => (await document_(context)).score.tracks.map((t) => t.measures.length)
+      assert.deepEqual(await count(), [6, 6])
+
+      await clickFret(page, 0)
+      await clickButton(page, '+ Measure')
+      assert.deepEqual(await count(), [7, 7])
+      assert.equal(await isDirty(page), true)
+
+      await clickButton(page, '− Measure')
+      assert.deepEqual(await count(), [6, 6])
+    },
+  ],
+
+  [
+    'the tempo field changes the tempo and the length of the piece',
+    async (context) => {
+      const { page } = context
+      await page.eval(`(() => { const i = document.querySelector('.tempo input'); i.value = '75'; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+
+      assert.equal((await document_(context)).score.tempo_bpm, 75)
+      // 6 measures of 4 beats at 75 bpm last 19.2 seconds.
+      assert.match(await text(page, '.clock'), /0:19$/)
+    },
+  ],
+
+  [
+    'saving writes a score file, remembers it and clears the unsaved mark',
+    async (context) => {
+      const { page, out } = context
+      await clickFret(page, 0)
+      await page.press('7')
+      await settle()
+
+      const target = join(out, 'saved-song')
+      await page.eval(`window.__e2e.answers.save.push(${JSON.stringify(target)})`)
+      await page.press('s', ['ctrl'])
+      await settle()
+
+      const file = `${target}.mpart`
+      assert.ok(existsSync(file), 'the file exists, with the extension added')
+      const saved = JSON.parse(readFileSync(file, 'utf8'))
+      assert.deepEqual([saved.format, saved.version], ['music-part', 1])
+      assert.equal(saved.score.tracks[0].measures[0].voices[0].beats[0].notes[0].fret, 7)
+
+      assert.equal(await isDirty(page), false)
+      assert.equal((await document_(context)).path, file)
+
+      // Saving again goes to the same file without asking.
+      await page.press('8')
+      await settle()
+      await page.press('s', ['ctrl'])
+      await settle()
+      assert.equal(JSON.parse(readFileSync(file, 'utf8')).score.tracks[0].measures[0].voices[0].beats[0].notes[0].fret, 8)
+    },
+  ],
+
+  [
+    'the window title shows the score and whether it has unsaved changes',
+    async ({ page }) => {
+      await settle()
+      assert.equal(await page.eval(`window.__e2e.titles.at(-1)`), 'Demo in A minor — Music Part')
+      await clickFret(page, 0)
+      await page.press('3')
+      await settle()
+      assert.equal(await page.eval(`window.__e2e.titles.at(-1)`), '• Demo in A minor — Music Part')
+    },
+  ],
+
+  [
+    'opening a saved score brings back its edits',
+    async (context) => {
+      const { page, backend, out } = context
+      await backend.request('edit_score', { edit: { type: 'setFret', track: 0, measure: 0, beat: 0, string: 5, fret: 9 } })
+      const file = join(out, 'reopen.mpart')
+      await backend.request('save_file', { path: file })
+
+      await context.fresh()
+      assert.equal((await frets(page))[0], '0', 'a new backend shows the demo again')
+
+      await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(file)})`)
+      await clickButton(page, 'Open')
+      await settle()
+      assert.equal((await frets(page))[0], '9')
+      assert.equal(await isDirty(page), false)
+    },
+  ],
+
+  [
+    'unsaved changes are not lost without asking',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 0)
+      await page.press('7')
+      await settle()
+
+      await page.eval(`window.__e2e.answers.ask.push(false)`)
+      await clickButton(page, 'New')
+      await settle()
+      assert.equal(await page.eval(`window.__e2e.asked.length`), 1)
+      assert.match(await page.eval(`window.__e2e.asked[0]`), /unsaved/i)
+      assert.match(await text(page, '.brand h1'), /Demo in A minor/, 'declining keeps the score')
+      assert.equal(await isDirty(page), true)
+
+      await page.eval(`window.__e2e.answers.ask.push(true)`)
+      await clickButton(page, 'New')
+      await settle()
+      assert.match(await text(page, '.brand h1'), /Untitled/)
+      assert.equal(await isDirty(page), false)
+    },
+  ],
+
+  [
+    'a new score is blank and can be written in right away',
+    async (context) => {
+      const { page } = context
+      await clickButton(page, 'New')
+      await settle()
+      assert.deepEqual(await frets(page), [])
+
+      await page.press('5')
+      await page.press('ArrowRight')
+      await settle()
+      assert.deepEqual(await frets(page), ['5'])
+      assert.equal(beatsOf(await document_(context), 0)[0].notes[0].string, 1)
+    },
+  ],
+
+  [
+    'a file that cannot be opened is explained and the score stays',
+    async ({ page }) => {
+      await page.eval(`window.__e2e.answers.open.push('/nonexistent/lost.mpart')`)
+      await clickButton(page, 'Open')
+      await settle()
+
+      assert.match(await text(page, '.notice span'), /lost\.mpart/)
+      assert.match(await text(page, '.brand h1'), /Demo in A minor/)
+    },
+  ],
+
+  [
+    'a MIDI file opens under the name of the file, and one without playable notes is refused',
+    async (context) => {
+      const { page, out } = context
+      const good = join(out, 'one-note.mid')
+      writeFileSync(good, Buffer.from(ONE_NOTE_MIDI))
+      await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(good)})`)
+      await clickButton(page, 'Open')
+      await settle()
+      assert.match(await text(page, '.brand h1'), /one-note/)
+      assert.deepEqual(await frets(page), ['0'])
+
+      const silent = Buffer.from(ONE_NOTE_MIDI)
+      silent[23] = 0x99 // percussion channel
+      silent[27] = 0x89
+      const bad = join(out, 'drums.mid')
+      writeFileSync(bad, silent)
+      await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(bad)})`)
+      await clickButton(page, 'Open')
+      await settle()
+      assert.match(await text(page, '.notice span'), /no notes/)
+    },
+  ],
+
+  [
+    'the app started on a file opens that file',
+    async (context) => {
+      const { page, backend, out } = context
+      const file = join(out, 'startup.mpart')
+      await backend.request('save_file', { path: file })
+      await context.fresh(file)
+
+      assert.match(await text(page, '.brand h1'), /Demo in A minor/)
+      assert.equal(await isDirty(page), false)
+      await context.fresh(join(out, 'missing.mpart')) // not a file that exists: ignored
+      assert.match(await text(page, '.brand h1'), /Demo in A minor/)
+    },
+  ],
+]
