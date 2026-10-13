@@ -71,6 +71,10 @@ pub struct Note {
     pub string: u8,
     pub fret: u8,
     pub technique: Option<Technique>,
+    /// Liaison : cette note prolonge la même hauteur du temps précédent de la
+    /// voix (y compris à travers une barre de mesure) sans être rejouée.
+    #[serde(default)]
+    pub tied: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,11 +181,13 @@ mod tests {
             string: 6,
             fret: 0,
             technique: None,
+            tied: false,
         };
         let a_string_5th = Note {
             string: 5,
             fret: 5,
             technique: None,
+            tied: false,
         };
         assert_eq!(t.pitch(&open_e), Some(40));
         assert_eq!(t.pitch(&a_string_5th), Some(50));
@@ -189,7 +195,8 @@ mod tests {
             t.pitch(&Note {
                 string: 7,
                 fret: 0,
-                technique: None
+                technique: None,
+                tied: false,
             }),
             None
         );
@@ -197,7 +204,8 @@ mod tests {
             t.pitch(&Note {
                 string: 0,
                 fret: 0,
-                technique: None
+                technique: None,
+                tied: false,
             }),
             None
         );
@@ -221,6 +229,12 @@ mod tests {
         assert!(m.is_complete());
         m.voices[0].beats.pop();
         assert!(!m.is_complete());
+    }
+
+    #[test]
+    fn note_without_tied_field_still_deserializes() {
+        let note: Note = serde_json::from_str(r#"{"string":1,"fret":3,"technique":null}"#).unwrap();
+        assert!(!note.tied);
     }
 
     #[test]

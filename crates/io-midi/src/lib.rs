@@ -1,8 +1,7 @@
 //! Import MIDI -> `Score`.
 //!
-//! Limites actuelles : le modèle n'a pas de liaisons (ties), donc une note qui
-//! traverse une barre de mesure ou dont la durée n'est pas représentable est
-//! suivie de silences pour le reste de sa durée.
+//! Une note dont la durée n'est pas représentable en une seule valeur, ou qui
+//! traverse une barre de mesure, est découpée en notes liées (`Note::tied`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -197,6 +196,7 @@ fn build_track(name: String, notes: &[(u32, u32, u8)], ts: TimeSignature) -> Tra
                 string,
                 fret,
                 technique: None,
+                tied: false,
             })
             .collect();
         segments.push((start, end - start, chord));
@@ -218,17 +218,21 @@ fn build_track(name: String, notes: &[(u32, u32, u8)], ts: TimeSignature) -> Tra
     for (start, len, chord) in segments {
         let mut pos = start;
         let end = start + len;
-        let mut first = true;
+        let mut is_continuation = false;
         while pos < end {
             let m = (pos / measure_len) as usize;
             let piece_end = end.min((m as u32 + 1) * measure_len);
-            // Les morceaux après le premier sont des silences (pas de ties).
-            let notes = if first { chord.clone() } else { vec![] };
-            for (j, duration) in decompose(piece_end - pos).into_iter().enumerate() {
-                let notes = if j == 0 { notes.clone() } else { vec![] };
+            for duration in decompose(piece_end - pos) {
+                let notes = chord
+                    .iter()
+                    .map(|n| Note {
+                        tied: is_continuation,
+                        ..n.clone()
+                    })
+                    .collect();
                 measures[m].push(Beat { duration, notes });
+                is_continuation = true;
             }
-            first = false;
             pos = piece_end;
         }
     }
@@ -337,7 +341,8 @@ mod tests {
             vec![Note {
                 string: 1,
                 fret: 0,
-                technique: None
+                technique: None,
+                tied: false,
             }]
         );
         assert_eq!(
@@ -345,7 +350,8 @@ mod tests {
             vec![Note {
                 string: 6,
                 fret: 0,
-                technique: None
+                technique: None,
+                tied: false,
             }]
         );
     }
@@ -361,6 +367,23 @@ mod tests {
         assert!(measures.iter().all(Measure::is_complete));
         assert!(measures[1].voices[0].beats[0].notes.is_empty());
         assert_eq!(measures[1].voices[0].beats[1].notes.len(), 1);
+    }
+
+    #[test]
+    fn note_crossing_a_barline_is_split_into_tied_notes() {
+        // 3 noires de silence, puis une blanche (2 noires) à cheval sur 2 mesures.
+        let ev = vec![note(1440, 64, true), note(960, 64, false)];
+        let score = import_midi(&smf_bytes(ev)).unwrap();
+        let measures = &score.tracks[0].measures;
+        assert_eq!(measures.len(), 2);
+        assert!(measures.iter().all(Measure::is_complete));
+
+        let last_of_first = measures[0].voices[0].beats.last().unwrap();
+        let first_of_second = &measures[1].voices[0].beats[0];
+        assert_eq!(last_of_first.notes.len(), 1);
+        assert!(!last_of_first.notes[0].tied);
+        assert_eq!(first_of_second.notes.len(), 1);
+        assert!(first_of_second.notes[0].tied);
     }
 
     #[test]

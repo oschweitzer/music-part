@@ -204,6 +204,7 @@ mod tests {
                                 string: 1,
                                 fret: 0,
                                 technique: None,
+                                tied: false,
                             }],
                         }],
                     }],
