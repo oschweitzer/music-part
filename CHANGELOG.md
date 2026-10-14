@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Editing: change the time signature of a measure (and the ones after it that share it), rename a
+  track and change its instrument.
 - Playback: click above a measure or double-click a beat to move playback there, `Home` to go back
   to the start, and mute and solo buttons on each track.
 - Playback: techniques now sound. Hammer-ons and pull-offs are soft, slides glide to the next note,

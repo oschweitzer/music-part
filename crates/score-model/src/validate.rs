@@ -58,9 +58,7 @@ impl Score {
                 let at = format!("track \"{name}\", measure {}", m + 1);
                 let signature = measure.time_signature;
                 let ticks = signature.ticks();
-                let is_power_of_two =
-                    signature.denominator.is_power_of_two() && signature.denominator <= 32;
-                if signature.numerator == 0 || !is_power_of_two || ticks < 4 || ticks % 4 != 0 {
+                if !signature.is_valid() {
                     return fail(format!(
                         "{at}: unsupported time signature {}/{}",
                         signature.numerator, signature.denominator

@@ -105,6 +105,16 @@
     void editor.addTrack(instrument)
   }
 
+  async function changeName(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    await editor.renameTrack(input.value)
+    input.value = track?.name ?? ''
+  }
+
+  function changeInstrument(event: Event) {
+    void editor.setInstrument((event.currentTarget as HTMLSelectElement).value as Instrument)
+  }
+
   async function changeTuning(event: Event) {
     const input = event.currentTarget as HTMLInputElement
     await editor.setTuning(input.value)
@@ -226,6 +236,25 @@
         </details>
 
         {#if track}
+          <label class="track-field" title="Name of this track">
+            Name
+            <input
+              type="text"
+              value={track.name}
+              maxlength="64"
+              spellcheck="false"
+              aria-label="Name of this track"
+              onchange={changeName}
+            />
+          </label>
+          <label class="track-field" title="The sound of this track. The strings stay as they are.">
+            Sound
+            <select value={track.instrument} aria-label="Instrument of this track" onchange={changeInstrument}>
+              {#each instruments as instrument (instrument)}
+                <option value={instrument}>{instrument}</option>
+              {/each}
+            </select>
+          </label>
           <label class="tuning" title="Open strings from the highest to the lowest, e.g. E4 B3 G3 D3 A2 D2">
             Tuning
             <input
@@ -530,17 +559,23 @@
     background: var(--surface-2);
   }
 
+  .track-field,
   .tuning {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
     color: var(--ink-muted);
     font-size: 12px;
   }
 
+  .track-field:first-of-type {
+    margin-left: auto;
+  }
+
+  .track-field input,
+  .track-field select,
   .tuning input {
-    width: 170px;
+    width: 130px;
     padding: 4px 8px;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -548,6 +583,10 @@
     color: var(--ink);
     font: inherit;
     font-size: 13px;
+  }
+
+  .tuning input {
+    width: 150px;
   }
 
   .remove-track {

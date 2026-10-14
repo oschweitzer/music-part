@@ -298,6 +298,33 @@ describe('Editor', () => {
     })
   })
 
+  describe('time signature, name and instrument', () => {
+    it('should change the time signature of the selected measure', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 2, beat: 0, string: 1 })
+      expect(editor.currentTimeSignature).toEqual({ numerator: 4, denominator: 4 })
+      await editor.setTimeSignature({ numerator: 3, denominator: 4 })
+
+      expect(edits).toEqual([{ type: 'setTimeSignature', measure: 2, numerator: 3, denominator: 4 }])
+    })
+
+    it('should rename the current track and change its instrument', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.selectTrack(1)
+      await editor.renameTrack('Walking bass')
+      await editor.setInstrument('Violin')
+
+      expect(edits).toEqual([
+        { type: 'renameTrack', track: 1, name: 'Walking bass' },
+        { type: 'setInstrument', track: 1, instrument: 'Violin' },
+      ])
+    })
+  })
+
   describe('sending edits', () => {
     it('should send edits one at a time, in the order they were made', async () => {
       const order: string[] = []

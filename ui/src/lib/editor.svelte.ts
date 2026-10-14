@@ -2,7 +2,7 @@ import type { DocumentApi, DocumentState, Edit, OpenedDocument } from './documen
 import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
-import type { Beat, Instrument, Note, NoteValue, Technique } from './score-types'
+import type { Beat, Instrument, Note, NoteValue, TimeSignature } from './score-types'
 import { clampSelection, FIRST_NOTE, moveSelection, nextFret, type Selection } from './selection'
 import { parseTuning } from './tuning'
 
@@ -144,6 +144,25 @@ export class Editor {
     const index = this.selection?.measure
     if (index === undefined) return Promise.resolve()
     return this.#send({ type: 'deleteMeasure', index })
+  }
+
+  /** The time signature of the selected measure (the first one when nothing is selected). */
+  get currentTimeSignature(): TimeSignature | null {
+    const measures = this.document?.score.tracks[this.track]?.measures
+    return measures?.[this.selection?.measure ?? 0]?.time_signature ?? null
+  }
+
+  /** Changes the selected measure and the ones after it that share its time signature. */
+  setTimeSignature({ numerator, denominator }: TimeSignature): Promise<void> {
+    return this.#send({ type: 'setTimeSignature', measure: this.selection?.measure ?? 0, numerator, denominator })
+  }
+
+  renameTrack(name: string): Promise<void> {
+    return this.#send({ type: 'renameTrack', track: this.track, name })
+  }
+
+  setInstrument(instrument: Instrument): Promise<void> {
+    return this.#send({ type: 'setInstrument', track: this.track, instrument })
   }
 
   /** Adds a track after the others and shows it. */

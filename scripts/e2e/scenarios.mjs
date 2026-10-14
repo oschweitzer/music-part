@@ -518,4 +518,44 @@ export const scenarios = [
       assert.deepEqual(await seeks(), [2 * 128, 0])
     },
   ],
+
+  [
+    'the time signature field reshapes the selected measure and the ones that share it',
+    async (context) => {
+      const { page } = context
+      await clickFret(page, 0)
+      await page.eval(`(() => { const i = document.querySelector('.time-signature input'); i.value = '3'; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+
+      const doc = await document_(context)
+      const signatures = doc.score.tracks[0].measures.map((m) => `${m.time_signature.numerator}/${m.time_signature.denominator}`)
+      assert.deepEqual(signatures, Array(6).fill('3/4'), 'all six 4/4 measures share it, so all change')
+      assert.deepEqual(doc.score.tracks[1].measures.map((m) => m.time_signature.numerator), Array(6).fill(3), 'the bass follows')
+      for (const m of doc.score.tracks[0].measures) {
+        assert.equal(m.voices[0].beats.reduce((sum, b) => sum + ticksOf(b.duration), 0), 96)
+      }
+      // 3/4 of 6 measures at 100 bpm: 18 beats, 10.8 s.
+      assert.match(await text(page, '.clock'), /0:10$/)
+    },
+  ],
+
+  [
+    'a track can be renamed and given another instrument',
+    async (context) => {
+      const { page } = context
+      await page.eval(`(() => { const i = document.querySelector('input[aria-label="Name of this track"]'); i.value = '  Lead  '; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      assert.equal((await document_(context)).score.tracks[0].name, 'Lead')
+      assert.match(await text(page, '.track-tab.active .name'), /^Lead/)
+
+      await page.eval(`(() => { const i = document.querySelector('input[aria-label="Name of this track"]'); i.value = '   '; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      assert.match(await text(page, '.notice span'), /name must be/)
+      assert.equal(await page.eval(`document.querySelector('input[aria-label="Name of this track"]').value`), 'Lead')
+
+      await page.eval(`(() => { const s = document.querySelector('select[aria-label="Instrument of this track"]'); s.value = 'Violin'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      assert.equal((await document_(context)).score.tracks[0].instrument, 'Violin')
+    },
+  ],
 ]

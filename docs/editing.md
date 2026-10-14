@@ -81,6 +81,18 @@ takes note names from the highest string to the lowest, for example `E4 B3 G3 D3
 are accepted, middle C is `C4`); the number of strings follows the number of names, up to 12. A
 tuning that would leave a note without a string, or above MIDI pitch 127, is refused.
 
+The track bar also has the track's name and its sound (guitar, bass or violin). Changing the sound
+keeps the strings: retune the track if they differ.
+
+## Time signature
+
+The two fields on the toolbar show the time signature of the selected measure. Changing one applies
+to that measure and to the measures after it that had the same signature, in every track. In a
+shorter measure the notes that no longer fit are cut: a note that crosses the new end is shortened,
+and when its new length needs two durations the second part is tied on. A longer measure is filled
+with rests. The denominator is 1, 2, 4, 8, 16 or 32, and a measure must be a whole number of 32nd
+notes.
+
 Edits are recorded one by one, up to 200 steps. An edit that changes nothing is not recorded. Undoing
 back to the state that was opened or saved clears the unsaved mark.
 
@@ -96,5 +108,4 @@ back to the state that was opened or saved clears the unsaved mark.
 
 ## Not there yet
 
-There is no way to change the time signature, rename a track or change its instrument, or select
-several notes and copy and paste.
+There is no way to select several notes and copy and paste.

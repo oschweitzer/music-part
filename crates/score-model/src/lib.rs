@@ -131,6 +131,16 @@ impl Duration {
 }
 
 impl TimeSignature {
+    /// A power-of-two denominator up to 32, and a measure that is a whole number of 32nd notes.
+    pub fn is_valid(self) -> bool {
+        let ticks = self.ticks();
+        self.numerator != 0
+            && self.denominator.is_power_of_two()
+            && self.denominator <= 32
+            && ticks >= 4
+            && ticks.is_multiple_of(4)
+    }
+
     /// Length of a measure in 128th notes. A denominator of 0 counts as an empty measure.
     pub fn ticks(self) -> u32 {
         (self.numerator as u32 * 128)

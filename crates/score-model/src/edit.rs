@@ -75,6 +75,23 @@ pub enum Edit {
     RemoveTrack {
         index: usize,
     },
+    /// Changes the time signature of a measure and of the measures after it that have the same
+    /// one. Notes that no longer fit are cut short (the cut part is tied on) or dropped at the end
+    /// of the measure; a longer measure is filled with rests.
+    SetTimeSignature {
+        measure: usize,
+        numerator: u8,
+        denominator: u8,
+    },
+    RenameTrack {
+        track: usize,
+        name: String,
+    },
+    /// Changes the sound of a track. The tuning is left alone: retune it if the strings differ.
+    SetInstrument {
+        track: usize,
+        instrument: Instrument,
+    },
     /// Retunes a track, highest string first. Refused if a note would no longer be playable.
     SetTuning {
         track: usize,
@@ -99,6 +116,9 @@ pub enum EditError {
     NothingToTie,
     InvalidTuning,
     TooManyTracks,
+    InvalidTimeSignature,
+    /// The name is empty or longer than `MAX_NAME_CHARS`.
+    InvalidName,
 }
 
 impl fmt::Display for EditError {
@@ -117,6 +137,11 @@ impl fmt::Display for EditError {
                 f,
                 "this tuning is not possible: it needs 1 to {MAX_STRINGS} strings, pitches up to 127, and every note must stay playable"
             ),
+            Self::InvalidTimeSignature => write!(
+                f,
+                "this time signature is not supported: the denominator must be 1, 2, 4, 8, 16 or 32 and a measure must be a whole number of 32nd notes"
+            ),
+            Self::InvalidName => write!(f, "the name must be 1 to {MAX_NAME_CHARS} characters"),
             Self::TooManyTracks => write!(f, "a score cannot have more than {MAX_TRACKS} tracks"),
         }
     }
@@ -126,6 +151,7 @@ impl std::error::Error for EditError {}
 
 const MAX_STRINGS: usize = 12;
 const MAX_TRACKS: usize = 64;
+const MAX_NAME_CHARS: usize = 64;
 
 /// Applies an edit. On error the score is left exactly as it was.
 pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
@@ -214,6 +240,38 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             note_mut(score, track, measure, beat, string)?.technique = technique;
             Ok(())
         }
+        Edit::SetTimeSignature {
+            measure,
+            numerator,
+            denominator,
+        } => set_time_signature(
+            score,
+            measure,
+            TimeSignature {
+                numerator,
+                denominator,
+            },
+        ),
+        Edit::RenameTrack { track, ref name } => {
+            let name = name.trim();
+            if name.is_empty() || name.chars().count() > MAX_NAME_CHARS {
+                return Err(EditError::InvalidName);
+            }
+            score
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::OutOfRange("track"))?
+                .name = name.to_string();
+            Ok(())
+        }
+        Edit::SetInstrument { track, instrument } => {
+            score
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::OutOfRange("track"))?
+                .instrument = instrument;
+            Ok(())
+        }
         Edit::AddTrack { instrument } => add_track(score, instrument),
         Edit::RemoveTrack { index } => {
             if index >= score.tracks.len() {
@@ -300,6 +358,93 @@ fn set_tied(
     note.fret = fret;
     note.tied = true;
     Ok(())
+}
+
+fn set_time_signature(
+    score: &mut Score,
+    measure: usize,
+    signature: TimeSignature,
+) -> Result<(), EditError> {
+    if !signature.is_valid() {
+        return Err(EditError::InvalidTimeSignature);
+    }
+    let longest = score
+        .tracks
+        .iter()
+        .map(|t| t.measures.len())
+        .max()
+        .unwrap_or(0);
+    if measure >= longest {
+        return Err(EditError::OutOfRange("measure"));
+    }
+
+    // Build everything first so that a failure changes nothing.
+    let mut rebuilt: Vec<(usize, usize, Measure)> = Vec::new();
+    for (t, track) in score.tracks.iter().enumerate() {
+        let Some(reference) = track.measures.get(measure) else {
+            continue;
+        };
+        let old = reference.time_signature;
+        for (m, existing) in track.measures.iter().enumerate().skip(measure) {
+            if existing.time_signature != old {
+                break;
+            }
+            let mut resized = existing.clone();
+            resized.time_signature = signature;
+            for voice in &mut resized.voices {
+                voice.beats = refit(&voice.beats, signature.ticks())?;
+            }
+            rebuilt.push((t, m, resized));
+        }
+    }
+    for (t, m, resized) in rebuilt {
+        score.tracks[t].measures[m] = resized;
+    }
+    Ok(())
+}
+
+/// The beats cut or padded with rests to last exactly `ticks`. A beat that crosses the end is
+/// shortened; what is cut off is dropped.
+fn refit(beats: &[Beat], ticks: u32) -> Result<Vec<Beat>, EditError> {
+    let mut out: Vec<Beat> = Vec::new();
+    let mut position = 0;
+    for beat in beats {
+        if position >= ticks {
+            break;
+        }
+        let end = position + beat.duration.ticks();
+        if end <= ticks {
+            out.push(beat.clone());
+        } else {
+            out.extend(split_beat(beat, ticks - position)?);
+        }
+        position = end.min(ticks);
+    }
+    if position < ticks {
+        out.extend(rests(ticks - position)?);
+    }
+    Ok(out)
+}
+
+/// A beat as several shorter beats adding up to `ticks`; the notes are repeated, tied, on the
+/// ones after the first so the whole still sounds for the same time.
+fn split_beat(beat: &Beat, ticks: u32) -> Result<Vec<Beat>, EditError> {
+    let durations = decompose_ticks(ticks).ok_or(EditError::InvalidDuration)?;
+    Ok(durations
+        .into_iter()
+        .enumerate()
+        .map(|(i, duration)| Beat {
+            duration,
+            notes: beat
+                .notes
+                .iter()
+                .map(|n| Note {
+                    tied: n.tied || i > 0,
+                    ..n.clone()
+                })
+                .collect(),
+        })
+        .collect())
 }
 
 fn add_track(score: &mut Score, instrument: Instrument) -> Result<(), EditError> {
@@ -974,6 +1119,134 @@ mod tests {
         );
     }
 
+    fn signature_edit(measure: usize, numerator: u8, denominator: u8) -> Edit {
+        Edit::SetTimeSignature {
+            measure,
+            numerator,
+            denominator,
+        }
+    }
+
+    #[test]
+    fn a_shorter_measure_cuts_the_notes_that_no_longer_fit() {
+        let mut score = blank_score("t");
+        // One whole note on string 3, fret 5, in a 4/4 measure; make it 3/4: a dotted half.
+        apply_edit(&mut score, &set_fret(0, 0, 3, 5)).unwrap();
+        apply_edit(&mut score, &signature_edit(0, 3, 4)).unwrap();
+        assert_eq!(score.tracks[0].measures[0].time_signature.numerator, 3);
+        assert_eq!(lengths(&score, 0), vec![96]);
+        assert_eq!(beats(&score, 0)[0].notes[0].fret, 5);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_cut_that_needs_two_durations_ties_the_second_part() {
+        let mut score = blank_score("t");
+        apply_edit(&mut score, &set_fret(0, 0, 3, 5)).unwrap();
+        // 5/8 is 80 ticks: a half note and a sixteenth.
+        apply_edit(&mut score, &signature_edit(0, 5, 8)).unwrap();
+
+        assert_eq!(lengths(&score, 0), vec![64, 16]);
+        let notes: Vec<(u8, bool)> = beats(&score, 0)
+            .iter()
+            .map(|b| (b.notes[0].fret, b.notes[0].tied))
+            .collect();
+        assert_eq!(notes, vec![(5, false), (5, true)]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_longer_measure_is_filled_with_rests() {
+        let mut score = blank_score("t");
+        apply_edit(&mut score, &set_fret(0, 0, 1, 0)).unwrap();
+        apply_edit(&mut score, &signature_edit(0, 6, 4)).unwrap();
+
+        assert_eq!(lengths(&score, 0), vec![128, 64]);
+        assert!(beats(&score, 0)[1].notes.is_empty());
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_new_signature_carries_on_until_a_measure_that_already_differed() {
+        let mut score = blank_score("t"); // four 4/4 measures
+        apply_edit(&mut score, &signature_edit(2, 3, 4)).unwrap();
+        // Measures 2 and 3 are 3/4 now. Changing measure 0 stops at the 3/4 ones.
+        apply_edit(&mut score, &signature_edit(0, 2, 4)).unwrap();
+
+        let numerators: Vec<u8> = score.tracks[0]
+            .measures
+            .iter()
+            .map(|m| m.time_signature.numerator)
+            .collect();
+        assert_eq!(numerators, vec![2, 2, 3, 3]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_time_signature_applies_to_every_track() {
+        let mut score = demo_score();
+        apply_edit(&mut score, &signature_edit(0, 3, 4)).unwrap();
+        assert!(score
+            .tracks
+            .iter()
+            .all(|t| t.measures[0].time_signature.numerator == 3));
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn unsupported_signatures_are_refused_and_change_nothing() {
+        let mut score = demo_score();
+        let before = score.clone();
+        for (numerator, denominator) in [(0, 4), (4, 0), (4, 3), (4, 64), (1, 32 + 1)] {
+            assert_eq!(
+                apply_edit(&mut score, &signature_edit(0, numerator, denominator)),
+                Err(EditError::InvalidTimeSignature),
+                "{numerator}/{denominator}"
+            );
+        }
+        assert_eq!(
+            apply_edit(&mut score, &signature_edit(99, 4, 4)),
+            Err(EditError::OutOfRange("measure"))
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_track_is_renamed_with_a_trimmed_non_empty_name() {
+        let mut score = demo_score();
+        let rename = |name: &str| Edit::RenameTrack {
+            track: 0,
+            name: name.to_string(),
+        };
+        apply_edit(&mut score, &rename("  Lead  ")).unwrap();
+        assert_eq!(score.tracks[0].name, "Lead");
+        assert_eq!(
+            apply_edit(&mut score, &rename("   ")),
+            Err(EditError::InvalidName)
+        );
+        assert_eq!(
+            apply_edit(&mut score, &rename(&"x".repeat(65))),
+            Err(EditError::InvalidName)
+        );
+        assert_eq!(score.tracks[0].name, "Lead");
+    }
+
+    #[test]
+    fn the_instrument_of_a_track_can_change_without_touching_its_strings() {
+        let mut score = demo_score();
+        let tuning = score.tracks[0].tuning.clone();
+        apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Violin,
+            },
+        )
+        .unwrap();
+        assert_eq!(score.tracks[0].instrument, Instrument::Violin);
+        assert_eq!(score.tracks[0].tuning, tuning);
+    }
+
     /// Whatever sequence of edits is thrown at a score, it stays valid, and a refused edit
     /// leaves it untouched.
     #[test]
@@ -1010,7 +1283,7 @@ mod tests {
                     (measure, beat)
                 };
 
-                let edit = match next(12) {
+                let edit = match next(15) {
                     0 | 1 => Edit::SetFret {
                         track,
                         measure,
@@ -1056,6 +1329,20 @@ mod tests {
                     },
                     10 => Edit::RemoveTrack {
                         index: next(score.tracks.len() + 1),
+                    },
+                    11 => Edit::SetTimeSignature {
+                        measure,
+                        numerator: next(8) as u8,
+                        denominator: [1, 2, 4, 8, 16, 32, 3][next(7)],
+                    },
+                    12 => Edit::RenameTrack {
+                        track,
+                        name: ["Lead", "", "  Bass  "][next(3)].to_string(),
+                    },
+                    13 => Edit::SetInstrument {
+                        track,
+                        instrument: [Instrument::Guitar, Instrument::Bass, Instrument::Violin]
+                            [next(3)],
                     },
                     _ => Edit::SetTuning {
                         track,

@@ -26,6 +26,24 @@
   const note = $derived(editor.currentNote)
   const canEdit = $derived(editor.canEdit)
 
+  const denominators = [1, 2, 4, 8, 16, 32]
+  const signature = $derived(editor.currentTimeSignature)
+
+  function changeNumerator(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const numerator = Math.round(Number(input.value))
+    if (signature && Number.isFinite(numerator) && numerator >= 1 && numerator <= 255) {
+      void editor.setTimeSignature({ numerator, denominator: signature.denominator })
+    } else {
+      input.value = String(signature?.numerator ?? 4)
+    }
+  }
+
+  function changeDenominator(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement
+    if (signature) void editor.setTimeSignature({ numerator: signature.numerator, denominator: Number(select.value) })
+  }
+
   // Keep keyboard focus where it was, so that typing a fret still works after a click here.
   function keepFocus(event: MouseEvent) {
     event.preventDefault()
@@ -138,6 +156,30 @@
       − Measure
     </button>
   </div>
+
+  <div class="group time-signature" role="group" aria-label="Time signature of the selected measure">
+    <input
+      type="number"
+      min="1"
+      max="255"
+      value={signature?.numerator ?? 4}
+      disabled={!canEdit}
+      aria-label="Beats per measure"
+      title="Time signature: applies to this measure and the next ones that share it"
+      onchange={changeNumerator}
+    />
+    <span aria-hidden="true">/</span>
+    <select
+      value={signature?.denominator ?? 4}
+      disabled={!canEdit}
+      aria-label="Beat unit"
+      onchange={changeDenominator}
+    >
+      {#each denominators as d (d)}
+        <option value={d}>{d}</option>
+      {/each}
+    </select>
+  </div>
 </div>
 
 <style>
@@ -174,6 +216,26 @@
 
   .tool.text {
     font-variant-numeric: tabular-nums;
+  }
+
+  .time-signature {
+    color: var(--ink-muted);
+  }
+
+  .time-signature input,
+  .time-signature select {
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .time-signature input {
+    width: 52px;
+    padding: 0 6px;
   }
 
   .tool svg {

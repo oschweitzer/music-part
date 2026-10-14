@@ -15,6 +15,9 @@ export type Edit =
   | { type: 'addTrack'; instrument: Instrument }
   | { type: 'removeTrack'; index: number }
   | { type: 'setTuning'; track: number; tuning: number[] }
+  | { type: 'setTimeSignature'; measure: number; numerator: number; denominator: number }
+  | { type: 'renameTrack'; track: number; name: string }
+  | { type: 'setInstrument'; track: number; instrument: Instrument }
 
 export type DocumentState = {
   score: Score
