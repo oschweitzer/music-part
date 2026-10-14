@@ -11,7 +11,7 @@ Status: early development. Not released yet.
 - Tablature display with a playback cursor, and playback through a SoundFont.
 - Writing: select a note, type frets, durations, dots, ties and techniques, measures, tempo, tracks
   and tuning. Undo and redo.
-- Files: the native `.mpart` format (save and open), and MIDI import.
+- Files: the native `.mpart` format (save and open), MIDI import and MusicXML import.
 
 See [`docs/editing.md`](docs/editing.md) for the keyboard shortcuts and the editing rules.
 

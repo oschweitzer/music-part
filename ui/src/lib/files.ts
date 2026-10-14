@@ -12,10 +12,12 @@ export type FilePrompts = {
   confirmDiscard(): Promise<boolean>
 }
 
-const SCORE_EXTENSIONS = ['mpart', 'mid', 'midi']
+const MIDI_EXTENSIONS = ['mid', 'midi']
+const MUSICXML_EXTENSIONS = ['musicxml', 'xml', 'mxl']
+const SCORE_EXTENSIONS = ['mpart', ...MIDI_EXTENSIONS, ...MUSICXML_EXTENSIONS]
 
 export function isScoreFile(path: string): boolean {
-  return /\.(mpart|midi?)$/i.test(path)
+  return /\.(mpart|midi?|musicxml|xml|mxl)$/i.test(path)
 }
 
 export function createFilePrompts(): FilePrompts {
@@ -35,7 +37,8 @@ export function createFilePrompts(): FilePrompts {
         filters: [
           { name: 'Scores', extensions: SCORE_EXTENSIONS },
           { name: 'Music Part scores', extensions: ['mpart'] },
-          { name: 'MIDI files', extensions: ['mid', 'midi'] },
+          { name: 'MIDI files', extensions: MIDI_EXTENSIONS },
+          { name: 'MusicXML files', extensions: MUSICXML_EXTENSIONS },
         ],
       })
       return typeof chosen === 'string' ? chosen : null

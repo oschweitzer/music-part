@@ -607,4 +607,35 @@ export const scenarios = [
       assert.ok(beatsOf(await document_(context), 0).slice(0, 2).every((b) => b.notes.length === 0))
     },
   ],
+
+  [
+    'a MusicXML file opens with its title, tempo, tuning and tied notes',
+    async (context) => {
+      const { page, out } = context
+      const xml = `<?xml version="1.0"?>
+<score-partwise><work><work-title>XML tune</work-title></work>
+<part-list><score-part id="P1"><part-name>Lead</part-name></score-part></part-list>
+<part id="P1">
+<measure number="1"><attributes><divisions>2</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+<direction><sound tempo="88"/></direction>
+<note><pitch><step>E</step><octave>4</octave></pitch><duration>4</duration><tie type="start"/></note>
+<note><pitch><step>E</step><octave>4</octave></pitch><duration>4</duration><tie type="stop"/></note></measure>
+<measure number="2"><note><pitch><step>G</step><octave>3</octave></pitch><duration>8</duration></note></measure>
+</part></score-partwise>`
+      const file = join(out, 'tune.musicxml')
+      writeFileSync(file, xml)
+      await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(file)})`)
+      await clickButton(page, 'Open')
+      await settle()
+
+      assert.match(await text(page, '.brand h1'), /XML tune/)
+      assert.match(await text(page, '.track-tab.active .name'), /^Lead/)
+      const doc = await document_(context)
+      assert.equal(doc.score.tempo_bpm, 88)
+      assert.equal(doc.path, null, 'an import is a new unsaved score')
+      const beats = beatsOf(doc, 0)
+      assert.deepEqual(beats.map((b) => b.notes[0]?.tied), [false, true])
+      assert.equal((await frets(page)).length, 3, 'three notes are drawn')
+    },
+  ],
 ]

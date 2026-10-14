@@ -15,8 +15,8 @@ use std::fmt;
 
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use score_model::{
-    decompose_ticks, Beat, Duration, Instrument, Measure, Note, Score, TimeSignature, Track, Voice,
-    MAX_FRET,
+    decompose_ticks, place_chord, Beat, Duration, Instrument, Measure, Note, Score, TimeSignature,
+    Track, Voice,
 };
 
 /// Smallest unit: 1/128 of a whole note. Notes are quantized to a 32nd note (4).
@@ -256,54 +256,6 @@ fn instrument_for(program: Option<u8>) -> Instrument {
     }
 }
 
-/// Places the pitches of a chord on distinct strings, preferring low frets. Notes that no free
-/// string can play are returned as skipped.
-fn place_chord(tuning: &[u8], pitches: &[u8]) -> (Vec<Note>, usize) {
-    let mut pitches = pitches.to_vec();
-    pitches.sort_unstable();
-    pitches.dedup();
-
-    let candidates = |pitch: u8| -> Vec<(u8, u8)> {
-        tuning
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &open)| {
-                let fret = pitch.checked_sub(open)?;
-                (fret <= MAX_FRET).then_some((i as u8 + 1, fret))
-            })
-            .collect()
-    };
-
-    // Notes with the fewest options first, so they are not starved by easier ones.
-    let mut options: Vec<(u8, Vec<(u8, u8)>)> =
-        pitches.iter().map(|&p| (p, candidates(p))).collect();
-    options.sort_by_key(|(pitch, c)| (c.len(), *pitch));
-
-    let mut used = Vec::new();
-    let mut notes = Vec::new();
-    let mut skipped = 0;
-    for (_, choices) in options {
-        let best = choices
-            .into_iter()
-            .filter(|(string, _)| !used.contains(string))
-            .min_by_key(|&(_, fret)| fret);
-        match best {
-            Some((string, fret)) => {
-                used.push(string);
-                notes.push(Note {
-                    string,
-                    fret,
-                    technique: None,
-                    tied: false,
-                });
-            }
-            None => skipped += 1,
-        }
-    }
-    notes.sort_by_key(|n| n.string);
-    (notes, skipped)
-}
-
 /// Splits a length into durations. `len` is a multiple of `GRID`, so this always succeeds.
 fn decompose(len: u32) -> Vec<Duration> {
     decompose_ticks(len).expect("len is a multiple of GRID")
@@ -336,7 +288,7 @@ fn build_track(
         let max_end = group.iter().map(|&(e, _)| e).max().unwrap_or(start + GRID);
         let end = starts.get(i + 1).map_or(max_end, |&next| max_end.min(next));
         let pitches: Vec<u8> = group.iter().map(|&(_, p)| p).collect();
-        let (chord, skipped) = place_chord(&tuning, &pitches);
+        let (chord, skipped) = place_chord(&tuning, &pitches, &[]);
         skipped_notes += skipped;
         segments.push((start, end - start, chord));
         cursor = end;

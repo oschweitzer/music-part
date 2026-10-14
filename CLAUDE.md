@@ -13,6 +13,7 @@ root/
 ├── crates/
 │   ├── score-model/   # Score > Track > Measure > Voice > Beat > Note, edit operations, validation
 │   ├── io-midi/       # MIDI import to Score
+│   ├── io-musicxml/   # MusicXML import (.musicxml, .xml, .mxl) to Score
 │   ├── io-native/     # The .mpart file: versioned JSON envelope, atomic write
 │   └── audio-engine/  # Sequencer (Score -> timed events), SoundFont Player, cpal output
 ├── src-tauri/         # Tauri shell: commands and events exposing the engines to the UI
@@ -25,7 +26,7 @@ root/
 ├── ui/                # Svelte + TypeScript front end
 │   ├── public/        # demo-score.json: export of the Rust demo score, checked by a Rust test
 │   └── src/lib/       # tab-layout.ts (pure layout), editor.svelte.ts (editing), keymap, selection, playback
-└── docs/              # Design notes: soundfonts.md, editing.md
+└── docs/              # Design notes: soundfonts.md, editing.md, musicxml.md
 ```
 
 The roadmap is in the approved plan: foundations, playback, tab rendering, editing, realistic

@@ -2,10 +2,12 @@
 
 mod demo;
 mod edit;
+mod fretting;
 mod validate;
 
 pub use demo::{blank_score, demo_score};
 pub use edit::{apply_edit, Edit, EditError};
+pub use fretting::place_chord;
 pub use validate::ScoreError;
 
 use serde::{Deserialize, Serialize};

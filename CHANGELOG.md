@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `io-musicxml`: open MusicXML scores (`.musicxml`, `.xml`, compressed `.mxl`): parts, time
+  signatures, tempo, tuning, tied notes, voices, and tablature strings and frets.
 - Editing: select several beats (Shift+arrows or Shift+click), copy, cut and paste them, and
   empty a range with Delete.
 - Editing: change the time signature of a measure (and the ones after it that share it), rename a

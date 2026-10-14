@@ -7,12 +7,15 @@ use score_model::Score;
 
 /// Largest MIDI file read. Real files are a few hundred kilobytes at most.
 const MAX_MIDI_BYTES: u64 = 32 * 1024 * 1024;
+/// Largest MusicXML file read, compressed or not.
+const MAX_MUSICXML_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest score file read. A long piece is a few megabytes of JSON.
 const MAX_SCORE_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileKind {
     Midi,
+    MusicXml,
     Native,
 }
 
@@ -26,6 +29,11 @@ fn kind_of(path: &Path) -> Option<FileKind> {
     let extension = path.extension()?.to_str()?;
     if extension.eq_ignore_ascii_case("mid") || extension.eq_ignore_ascii_case("midi") {
         Some(FileKind::Midi)
+    } else if ["musicxml", "xml", "mxl"]
+        .iter()
+        .any(|e| extension.eq_ignore_ascii_case(e))
+    {
+        Some(FileKind::MusicXml)
     } else if extension.eq_ignore_ascii_case(io_native::EXTENSION) {
         Some(FileKind::Native)
     } else {
@@ -52,6 +60,15 @@ pub fn open_path(path: &Path) -> Result<Opened, String> {
                 skipped_notes,
             })
         }
+        Some(FileKind::MusicXml) => {
+            let bytes = read_limited(path, MAX_MUSICXML_BYTES)?;
+            let stem = path.file_stem().and_then(|s| s.to_str());
+            let (score, skipped_notes) = import_musicxml_bytes(&bytes, stem)?;
+            Ok(Opened {
+                document: Document::new(score, None),
+                skipped_notes,
+            })
+        }
         Some(FileKind::Native) => {
             read_limited(path, MAX_SCORE_BYTES)?;
             let score = io_native::read_file(path).map_err(|e| e.to_string())?;
@@ -61,7 +78,7 @@ pub fn open_path(path: &Path) -> Result<Opened, String> {
             })
         }
         None => Err(format!(
-            "Cannot open {}: only .mpart and .mid files are supported.",
+            "Cannot open {}: only .mpart, MIDI (.mid) and MusicXML (.musicxml, .xml, .mxl) files are supported.",
             path.display()
         )),
     }
@@ -103,6 +120,15 @@ fn import_midi_bytes(bytes: &[u8], file_stem: Option<&str>) -> Result<(Score, us
     Ok((imported.score, imported.skipped_notes))
 }
 
+/// `file_stem` names the score when the file does not carry a title.
+fn import_musicxml_bytes(bytes: &[u8], file_stem: Option<&str>) -> Result<(Score, usize), String> {
+    let mut imported = io_musicxml::import_musicxml(bytes).map_err(|e| e.to_string())?;
+    if imported.score.title.trim().is_empty() {
+        imported.score.title = file_stem.unwrap_or("Untitled").to_string();
+    }
+    Ok((imported.score, imported.skipped_notes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +158,39 @@ mod tests {
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
             .into_iter()
+    }
+
+    const ONE_NOTE_MUSICXML: &str = r#"<?xml version="1.0"?>
+<score-partwise><part-list><score-part id="P1"><part-name>Guitar</part-name></score-part></part-list>
+<part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+<note><pitch><step>E</step><octave>4</octave></pitch><duration>4</duration></note></measure></part></score-partwise>"#;
+
+    #[test]
+    fn imports_a_musicxml_file_and_names_it_after_the_file_when_it_has_no_title() {
+        let (score, skipped) =
+            import_musicxml_bytes(ONE_NOTE_MUSICXML.as_bytes(), Some("my-tune")).unwrap();
+        assert_eq!(score.title, "my-tune");
+        assert_eq!(score.tracks.len(), 1);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn opens_musicxml_files_by_extension_and_explains_a_bad_one() {
+        let dir = scratch("musicxml");
+        for name in ["tune.musicxml", "tune.XML"] {
+            let path = dir.join(name);
+            std::fs::write(&path, ONE_NOTE_MUSICXML).unwrap();
+            let opened = open_path(&path).unwrap();
+            assert_eq!(opened.document.score().title, "tune");
+            assert!(opened.document.path().is_none());
+        }
+
+        let bad = dir.join("bad.mxl");
+        std::fs::write(&bad, b"PK not an archive").unwrap();
+        assert!(open_path(&bad).err().unwrap().contains("cannot read"));
+        let html = dir.join("page.xml");
+        std::fs::write(&html, "<html/>").unwrap();
+        assert!(open_path(&html).err().unwrap().contains("not a MusicXML"));
     }
 
     #[test]

@@ -47,7 +47,7 @@
       onDrop: (paths) => {
         const path = paths.find(isScoreFile)
         if (path) void editor.openPath(path)
-        else editor.message = { tone: 'error', text: 'Only .mpart and MIDI files (.mid, .midi) can be opened.' }
+        else editor.message = { tone: 'error', text: 'Only .mpart, MIDI (.mid) and MusicXML (.musicxml, .xml, .mxl) files can be opened.' }
       },
     })
     return () => void stopListening.then((stop) => stop())

@@ -119,7 +119,8 @@ back to the state that was opened or saved clears the unsaved mark.
 - **`.mpart`** is the native format: the score as JSON in an envelope that names the format and its
   version. Saving writes to a temporary file first and renames it, so a failed save never damages an
   existing file. A file saved by a newer version of the app is refused with a clear message.
-- **`.mid`** files can be opened, not saved. Opening one starts a new, unsaved score.
+- **`.mid`** and **MusicXML** (`.musicxml`, `.xml`, `.mxl`) files can be opened, not saved. Opening
+  one starts a new, unsaved score. See [`musicxml.md`](musicxml.md) for what is read.
 - The app asks before discarding unsaved changes: when opening a file, creating a score, or closing
   the window.
 - A file given on the command line, or dropped on the window, is opened.
