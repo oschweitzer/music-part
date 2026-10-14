@@ -22,7 +22,7 @@ export class Editor {
   message = $state<Message | null>(null)
 
   #api: DocumentApi
-  #playback: Pick<Playback, 'setScore'>
+  #playback: Pick<Playback, 'setScore' | 'dropTrackMix'>
   #prompts: FilePrompts
   #now: () => number
   /** Edits are sent one at a time, in the order they were made. */
@@ -36,7 +36,7 @@ export class Editor {
     now = () => performance.now(),
   }: {
     api: DocumentApi
-    playback: Pick<Playback, 'setScore'>
+    playback: Pick<Playback, 'setScore' | 'dropTrackMix'>
     prompts: FilePrompts
     now?: () => number
   }) {
@@ -127,6 +127,7 @@ export class Editor {
         this.selection = null
         return Promise.resolve()
       case 'togglePlayback':
+      case 'rewind':
         return Promise.resolve()
     }
   }
@@ -155,7 +156,8 @@ export class Editor {
   }
 
   removeTrack(): Promise<void> {
-    return this.#send({ type: 'removeTrack', index: this.track })
+    const index = this.track
+    return this.#send({ type: 'removeTrack', index }, () => this.#playback.dropTrackMix(index))
   }
 
   /** Retunes the current track from note names such as "E4 B3 G3 D3 A2 D2". */

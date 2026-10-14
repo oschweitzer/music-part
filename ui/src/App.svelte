@@ -87,6 +87,7 @@
 
     event.preventDefault()
     if (command.type === 'togglePlayback') void playback.toggle()
+    else if (command.type === 'rewind') void playback.seek(0)
     else void editor.run(command)
   }
 
@@ -188,10 +189,30 @@
   {#if score}
     <nav class="tracks" aria-label="Tracks">
       {#each score.tracks as t, i (i)}
-        <button type="button" class:active={i === editor.track} onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
-          {t.name}
-          <span class="strings">{t.tuning.length} strings</span>
-        </button>
+        <div class="track-tab" class:active={i === editor.track}>
+          <button type="button" class="name" onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
+            {t.name}
+            <span class="strings">{t.tuning.length} strings</span>
+          </button>
+          <button
+            type="button"
+            class="mix"
+            class:on={playback.muted[i]}
+            aria-pressed={playback.muted[i] === true}
+            aria-label="Mute {t.name}"
+            title="Mute"
+            onmousedown={keepFocus}
+            onclick={() => playback.toggleMute(i)}>M</button>
+          <button
+            type="button"
+            class="mix"
+            class:on={playback.solo[i]}
+            aria-pressed={playback.solo[i] === true}
+            aria-label="Solo {t.name}"
+            title="Solo: play only the soloed tracks"
+            onmousedown={keepFocus}
+            onclick={() => playback.toggleSolo(i)}>S</button>
+        </div>
       {/each}
 
       {#if editor.canEdit}
@@ -249,6 +270,7 @@
             {cursor}
             selection={editor.selection}
             onselect={editor.canEdit ? (target) => editor.select(target) : undefined}
+            onseek={(tick) => playback.seek(tick)}
           />
         {/if}
       </div>
@@ -404,13 +426,23 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .tracks > button {
+  .track-tab {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-bottom: 2px solid transparent;
+  }
+
+  .track-tab.active {
+    border-bottom-color: var(--accent);
+  }
+
+  .track-tab .name {
     display: flex;
     align-items: baseline;
     gap: 8px;
-    padding: 8px 14px;
+    padding: 8px 8px 8px 14px;
     border: 0;
-    border-bottom: 2px solid transparent;
     background: none;
     color: var(--ink-muted);
     font: inherit;
@@ -419,13 +451,33 @@
     cursor: pointer;
   }
 
-  .tracks > button:hover {
+  .track-tab .name:hover,
+  .track-tab.active .name {
     color: var(--ink);
   }
 
-  .tracks > button.active {
+  .mix {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: none;
+    color: var(--ink-muted);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mix:hover {
     color: var(--ink);
-    border-bottom-color: var(--accent);
+  }
+
+  .mix.on {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
   }
 
   .tracks {

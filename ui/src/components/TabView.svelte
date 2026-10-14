@@ -9,12 +9,15 @@
     cursor = null,
     selection = null,
     onselect,
+    onseek,
   }: {
     layout: TabLayout
     label: string
     cursor?: CursorPosition | null
     selection?: Selection | null
     onselect?: (target: Selection) => void
+    /** Asked to move playback to a position in 1/128 of a whole note. */
+    onseek?: (tick: number) => void
   } = $props()
 
   function handleClick(event: MouseEvent) {
@@ -25,6 +28,16 @@
     const scale = box.width > 0 ? layout.width / box.width : 1
     const target = hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
     if (target) onselect({ measure: target.measure, beat: target.beat, string: target.string })
+  }
+
+  /** Double-clicking a beat moves playback there. */
+  function handleDoubleClick(event: MouseEvent) {
+    if (!onseek) return
+    const svg = event.currentTarget as SVGSVGElement
+    const box = svg.getBoundingClientRect()
+    const scale = box.width > 0 ? layout.width / box.width : 1
+    const target = hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
+    if (target) onseek(target.tick)
   }
 
   const tabLetters = ['T', 'A', 'B']
@@ -63,6 +76,7 @@
   class="tab"
   class:editable={onselect !== undefined}
   onclick={handleClick}
+  ondblclick={handleDoubleClick}
   width={layout.width}
   height={layout.height}
   viewBox="0 0 {layout.width} {layout.height}"
@@ -88,6 +102,22 @@
       {#each system.measures as measure (measure.index)}
         {#if measure.index === system.measures[0]?.index || measure.index % 4 === 0}
           <text class="measure-number" x={measure.x + 4} y={system.staffTop - 20}>{measure.index + 1}</text>
+        {/if}
+
+        {#if onseek}
+          <!-- The strip above a measure moves playback to its start; the click must not select a note. -->
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <rect
+            class="seek-strip"
+            x={measure.x}
+            y={system.staffTop - 30}
+            width={measure.width}
+            height="22"
+            onclick={(event) => {
+              event.stopPropagation()
+              onseek(measure.startTick)
+            }}
+          />
         {/if}
 
         {#if measure.timeSignature}
@@ -260,6 +290,15 @@
     font-size: 12px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+  }
+
+  .seek-strip {
+    fill: transparent;
+    cursor: pointer;
+  }
+
+  .seek-strip:hover {
+    fill: color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
   .technique {

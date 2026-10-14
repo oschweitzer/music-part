@@ -14,6 +14,8 @@ function fakeTransport() {
     play: async () => void calls.push('play'),
     pause: async () => void calls.push('pause'),
     stop: async () => void calls.push('stop'),
+    seek: async (tick) => void calls.push(`seek ${tick}`),
+    setAudible: async (audible) => void calls.push(`audible ${audible.map(Number).join('')}`),
     onPosition: async (l) => {
       listener = l
       return () => void calls.push('unsubscribe')
@@ -114,5 +116,62 @@ describe('Playback', () => {
 
     expect(playback.tick).toBe(0)
     expect(calls).toContain('load')
+  })
+
+  describe('seeking and the mix', () => {
+    it('should move the cursor at once and tell the engine', async () => {
+      const { transport, calls } = fakeTransport()
+      const playback = new Playback(transport)
+      await playback.start()
+      await playback.setScore(score)
+      await playback.seek(96)
+
+      expect(playback.tick).toBe(96)
+      expect(calls).toContain('seek 96')
+    })
+
+    it('should keep a seek inside the piece', async () => {
+      const { transport, calls } = fakeTransport()
+      const playback = new Playback(transport)
+      await playback.start()
+      await playback.setScore(score)
+      await playback.seek(-10)
+      await playback.seek(1e9)
+
+      const targets = calls.filter((c) => c.startsWith('seek')).map((c) => Number(c.slice(5)))
+      expect(targets[0]).toBe(0)
+      expect(targets[1]).toBeGreaterThan(0)
+      expect(targets[1]).toBeLessThan(1e9)
+    })
+
+    it('should send which tracks sound when the score loads and when mute or solo change', async () => {
+      const { transport, calls } = fakeTransport()
+      const playback = new Playback(transport)
+      await playback.start()
+      await playback.setScore(score) // two tracks
+      await playback.toggleMute(0)
+      await playback.toggleSolo(0)
+      await playback.toggleSolo(0)
+      await playback.toggleMute(0)
+
+      expect(calls.filter((c) => c.startsWith('audible'))).toEqual([
+        'audible 11',
+        'audible 01',
+        'audible 10', // track 0 soloed: it plays alone, muted or not
+        'audible 01',
+        'audible 11',
+      ])
+    })
+
+    it('should forget the mix of a removed track', async () => {
+      const { transport } = fakeTransport()
+      const playback = new Playback(transport)
+      await playback.start()
+      await playback.setScore(score)
+      await playback.toggleMute(1)
+      playback.dropTrackMix(0)
+
+      expect(playback.muted).toEqual([true])
+    })
   })
 })

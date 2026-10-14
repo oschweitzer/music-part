@@ -11,6 +11,8 @@ enum Command {
     Pause,
     Stop,
     Load(Box<Program>),
+    Seek(f64),
+    SetAudible(Vec<bool>),
 }
 
 /// Playback state published by the audio callback for other threads to read, without locks.
@@ -87,6 +89,8 @@ impl AudioOutput {
                         Command::Pause => player.pause(),
                         Command::Stop => player.stop(),
                         Command::Load(program) => player.load(*program),
+                        Command::Seek(ticks) => player.seek(ticks),
+                        Command::SetAudible(audible) => player.set_audible(audible),
                     }
                 }
                 let frames = data.len() / channels;
@@ -131,5 +135,15 @@ impl AudioOutput {
 
     pub fn stop(&self) {
         let _ = self.commands.send(Command::Stop);
+    }
+
+    /// Moves to a position in 1/128 of a whole note.
+    pub fn seek(&self, ticks: f64) {
+        let _ = self.commands.send(Command::Seek(ticks));
+    }
+
+    /// Which tracks make sound, by track index. Kept when a new score is loaded.
+    pub fn set_audible(&self, audible: Vec<bool>) {
+        let _ = self.commands.send(Command::SetAudible(audible));
     }
 }

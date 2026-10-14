@@ -2,6 +2,7 @@
 // Commands go to the Rust document backend through `window.e2eInvoke`; dialogs are answered from
 // queues the tests fill in `window.__e2e.answers`.
 ;(() => {
+  const AUDIO_COMMANDS = ['play', 'pause', 'stop', 'seek', 'set_audible']
   const callbacks = new Map()
   const pending = new Map()
   let next = 1
@@ -10,6 +11,8 @@
     answers: { open: [], save: [], ask: [] },
     asked: [],
     titles: [],
+    // The audio commands the UI sent: there is no sound card here, the backend only holds the document.
+    audio: [],
   }
 
   // Called by the test runner with the backend's answer.
@@ -56,6 +59,10 @@
     convertFileSrc: (path) => path,
     invoke(command, args) {
       if (command.startsWith('plugin:')) return plugin(command, args)
+      if (AUDIO_COMMANDS.includes(command)) {
+        window.__e2e.audio.push({ command, args: args ?? {} })
+        return Promise.resolve(null)
+      }
       return new Promise((resolve, reject) => {
         const id = next++
         pending.set(id, { resolve, reject })

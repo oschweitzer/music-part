@@ -55,6 +55,7 @@ describe('interpretKey', () => {
   it('should read space as play and pause, and escape as clearing the selection', () => {
     expect(press(' ')).toEqual({ type: 'togglePlayback' })
     expect(press('Escape')).toEqual({ type: 'clearSelection' })
+    expect(press('Home')).toEqual({ type: 'rewind' })
   })
 
   it('should read L as a tie and a few letters as techniques', () => {

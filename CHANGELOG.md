@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Playback: click above a measure or double-click a beat to move playback there, `Home` to go back
+  to the start, and mute and solo buttons on each track.
 - Playback: techniques now sound. Hammer-ons and pull-offs are soft, slides glide to the next note,
   bends rise a whole tone, palm mutes are muted and short, harmonics ring at the harmonic pitch.
 - `LICENSE`: PolyForm Noncommercial 1.0.0, and a `README.md`.

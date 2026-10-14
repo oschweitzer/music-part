@@ -1,3 +1,4 @@
+import { audibleTracks, resized } from './mix'
 import { ticksPerSecond, totalTicks } from './score-time'
 import type { Score } from './score-types'
 import type { Transport } from './transport'
@@ -12,6 +13,9 @@ export class Playback {
   /** Estimated position in 1/128 of a whole note. */
   tick = $state(0)
   error = $state<string | null>(null)
+  /** Per track, by index. A soloed track plays alone with the other soloed ones. */
+  muted = $state<boolean[]>([])
+  solo = $state<boolean[]>([])
 
   #transport: Transport
   #ticksPerMs = 0
@@ -45,7 +49,36 @@ export class Playback {
     this.tick = 0
     this.isPlaying = false
     this.#stopFrames()
-    await this.#run(() => this.#transport.load(score))
+    this.muted = resized({ flags: this.muted, length: score.tracks.length })
+    this.solo = resized({ flags: this.solo, length: score.tracks.length })
+    await this.#run(async () => {
+      await this.#transport.load(score)
+      await this.#transport.setAudible(audibleTracks({ muted: this.muted, solo: this.solo }))
+    })
+  }
+
+  /** Moves the playback position, playing or not. */
+  seek(tick: number): Promise<void> {
+    const target = Math.min(Math.max(tick, 0), this.#totalTicks)
+    this.tick = target
+    this.#lastReport = { tick: target, at: performance.now() }
+    return this.#run(() => this.#transport.seek(target))
+  }
+
+  toggleMute(track: number): Promise<void> {
+    this.muted = this.muted.map((isMuted, i) => (i === track ? !isMuted : isMuted))
+    return this.#sendMix()
+  }
+
+  toggleSolo(track: number): Promise<void> {
+    this.solo = this.solo.map((isSolo, i) => (i === track ? !isSolo : isSolo))
+    return this.#sendMix()
+  }
+
+  /** A track was removed from the score: the ones after it move up, and so do their buttons. */
+  dropTrackMix(track: number): void {
+    this.muted = this.muted.filter((_, i) => i !== track)
+    this.solo = this.solo.filter((_, i) => i !== track)
   }
 
   toggle(): Promise<void> {
@@ -58,6 +91,10 @@ export class Playback {
 
   dismissError(): void {
     this.error = null
+  }
+
+  #sendMix(): Promise<void> {
+    return this.#run(() => this.#transport.setAudible(audibleTracks({ muted: this.muted, solo: this.solo })))
   }
 
   async #run(action: () => Promise<void>): Promise<void> {

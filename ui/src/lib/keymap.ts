@@ -18,6 +18,7 @@ export type Command =
   | { type: 'open' }
   | { type: 'clearSelection' }
   | { type: 'togglePlayback' }
+  | { type: 'rewind' }
 
 export type KeyInput = {
   key: string
@@ -68,6 +69,7 @@ export function interpretKey(input: KeyInput): Command | null {
   if (altKey) return null
 
   if (key === ' ') return { type: 'togglePlayback' }
+  if (key === 'Home') return { type: 'rewind' }
   if (/^[0-9]$/.test(key)) return { type: 'digit', digit: Number(key) }
   if (key in ARROWS) return { type: 'move', direction: ARROWS[key] as Direction }
   if (key === 'Delete' || key === 'Backspace') return { type: 'remove' }

@@ -96,6 +96,8 @@ pub struct Player {
     next: usize,
     position: u64,
     playing: bool,
+    /// Which tracks make sound, by track index; a track past the end of the list does.
+    audible: Vec<bool>,
 }
 
 impl Player {
@@ -118,6 +120,7 @@ impl Player {
             next: 0,
             position: 0,
             playing: false,
+            audible: Vec::new(),
         })
     }
 
@@ -164,6 +167,43 @@ impl Player {
         self.pause();
         self.next = 0;
         self.position = 0;
+    }
+
+    /// Moves to a position in 1/128 of a whole note, playing or not. Notes already sounding at
+    /// that point are not started: playback picks up with the next note.
+    pub fn seek(&mut self, ticks: f64) {
+        // Cut the sound, not just release it: the notes of the old position must not ring on.
+        for &(channel, _) in &self.program.voices {
+            let _ = self.synth.send_event(MidiEvent::AllSoundOff { channel });
+        }
+        self.silence();
+        let ticks = if ticks.is_finite() {
+            ticks.max(0.0)
+        } else {
+            0.0
+        };
+        let wanted = sequencer::tick_to_sample(
+            ticks.min(f64::from(u32::MAX)).round() as u32,
+            self.program.tempo_bpm,
+            self.program.sample_rate,
+        );
+        // Stay inside the score so the end-of-score logic still stops the player.
+        self.position = wanted.min(self.program.end_sample.saturating_sub(1));
+        self.next = self
+            .program
+            .event_samples
+            .partition_point(|&sample| sample < self.position);
+    }
+
+    /// Chooses the tracks that make sound (mute and solo are worked out by the caller). Silences
+    /// the ones that stop now; the others start with their next note.
+    pub fn set_audible(&mut self, audible: Vec<bool>) {
+        self.audible = audible;
+        for (track, &(channel, _)) in self.program.voices.iter().enumerate() {
+            if !self.is_audible(track) {
+                let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
+            }
+        }
     }
 
     pub fn is_playing(&self) -> bool {
@@ -219,7 +259,14 @@ impl Player {
         }
     }
 
+    fn is_audible(&self, track: usize) -> bool {
+        self.audible.get(track).copied().unwrap_or(true)
+    }
+
     fn dispatch(&mut self, e: Event) {
+        if matches!(e.action, Action::NoteOn { .. }) && !self.is_audible(e.track) {
+            return;
+        }
         let Some(&(channel, _)) = self.program.voices.get(e.track) else {
             return;
         };
@@ -445,5 +492,82 @@ mod tests {
             "the glide should be audible"
         );
         assert!(slid.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+    }
+
+    #[test]
+    fn seeking_past_a_note_leaves_only_what_comes_after() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = two_notes(None);
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&score);
+
+        // The second half note starts at tick 64 (1 s at 120 bpm).
+        player.seek(64.0);
+        assert!((player.position_ticks() - 64.0).abs() < 0.5);
+        assert!(!player.is_playing());
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100 / 2];
+        player.render(&mut buf);
+        assert!(buf.iter().any(|s| s.abs() > 0.01), "the second note plays");
+
+        // Seeking into the middle of the second note: its attack is behind, so only silence.
+        let mut other =
+            Player::new(&mut File::open(test_soundfont().unwrap()).unwrap(), 44_100).unwrap();
+        other.load_score(&score);
+        other.seek(96.0);
+        other.play();
+        other.render(&mut buf);
+        let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            peak < 1e-3,
+            "seeking should not restart the note (peak {peak})"
+        );
+    }
+
+    #[test]
+    fn seeking_is_kept_inside_the_score() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&two_notes(None));
+        for wild in [-5.0, f64::NAN, f64::INFINITY, 1e12] {
+            player.seek(wild);
+            assert!(player.position() < player.program.end_sample, "{wild}");
+        }
+        player.seek(1e12);
+        player.play();
+        player.render(&mut vec![0.0f32; 2 * 44_100]);
+        assert!(
+            !player.is_playing(),
+            "the end of the score stops the player"
+        );
+    }
+
+    #[test]
+    fn a_track_that_is_not_audible_stays_silent() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&one_note_score());
+        player.set_audible(vec![false]);
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100];
+        player.render(&mut buf);
+        let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak < 1e-3, "muted track is audible (peak {peak})");
+
+        // Audible again from the next note on; a reload keeps the choice.
+        player.set_audible(vec![true]);
+        player.load_score(&one_note_score());
+        player.play();
+        player.render(&mut buf);
+        assert!(buf.iter().any(|s| s.abs() > 0.01));
     }
 }

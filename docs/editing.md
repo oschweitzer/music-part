@@ -24,9 +24,21 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | `Ctrl+Shift+Z` / `Ctrl+Y`   | Redo                                                                          |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S`  | New, open, save. `Ctrl+Shift+S` saves under a new name                        |
 | `Space`                     | Play or pause                                                                 |
+| `Home`                      | Moves playback back to the beginning                                          |
 | `Esc`                       | Clears the selection                                                          |
 
 On macOS, `Cmd` replaces `Ctrl`. The same actions are in the toolbars.
+
+## Playing from somewhere else
+
+Click the strip just above a measure (where its number is) to move playback to the start of that
+measure, or double-click a beat to move it there. This works while playing or paused. A note that is
+already sounding at the new position is not started: playback picks up with the next one.
+
+Each track tab has `M` (mute) and `S` (solo) buttons. A track plays unless it is muted, but as soon
+as any track is soloed only the soloed ones play. Mute and solo only change what you hear; they are
+not saved in the score, and they are forgotten when the app closes. Editing the score stops
+playback but keeps them.
 
 ## Rules
 
@@ -84,5 +96,5 @@ back to the state that was opened or saved clears the unsaved mark.
 
 ## Not there yet
 
-There is no way to change the time signature, rename a track or change its instrument, select several
-notes, copy and paste, or click on the score to place the playback cursor.
+There is no way to change the time signature, rename a track or change its instrument, or select
+several notes and copy and paste.

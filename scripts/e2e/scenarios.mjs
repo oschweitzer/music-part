@@ -68,7 +68,7 @@ export const scenarios = [
     'shows the demo with its tracks and the file buttons enabled',
     async ({ page }) => {
       assert.match(await text(page, '.brand h1'), /Demo in A minor/)
-      assert.equal(await page.eval(`document.querySelectorAll('.tracks > button:not(.remove-track)').length`), 2)
+      assert.equal(await page.eval(`document.querySelectorAll('.track-tab').length`), 2)
       assert.equal(await page.eval(`[...document.querySelectorAll('.file-button')].every(b => !b.disabled)`), true)
       assert.equal(await isDirty(page), false)
       assert.equal((await frets(page))[0], '0')
@@ -459,7 +459,7 @@ export const scenarios = [
       await page.eval(`document.querySelector('.add-track summary').click()`)
       await clickButton(page, 'Bass')
       assert.equal((await document_(context)).score.tracks.length, 3)
-      assert.equal(await page.eval(`document.querySelector('.tracks > button.active').textContent.includes('Bass')`), true)
+      assert.equal(await page.eval(`document.querySelector('.track-tab.active').textContent.includes('Bass')`), true)
 
       await page.eval(`(() => { const i = document.querySelector('.tuning input'); i.value = 'G2 D2 A1 D1'; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
       await settle()
@@ -474,7 +474,48 @@ export const scenarios = [
 
       await clickButton(page, 'Remove track')
       assert.equal((await document_(context)).score.tracks.length, 2)
-      assert.equal(await page.eval(`document.querySelectorAll('.tracks > button:not(.remove-track)').length`), 2)
+      assert.equal(await page.eval(`document.querySelectorAll('.track-tab').length`), 2)
+    },
+  ],
+
+  [
+    'mute and solo buttons tell the engine which tracks sound',
+    async ({ page }) => {
+      const lastMix = () =>
+        page.eval(`window.__e2e.audio.filter(c => c.command === 'set_audible').at(-1)?.args.audible`)
+      assert.deepEqual(await lastMix(), [true, true], 'everything sounds when the score loads')
+
+      await clickButton(page, 'Mute Guitar')
+      assert.deepEqual(await lastMix(), [false, true])
+      assert.equal(await page.eval(`document.querySelector('[aria-label="Mute Guitar"]').getAttribute('aria-pressed')`), 'true')
+
+      await clickButton(page, 'Solo Guitar')
+      assert.deepEqual(await lastMix(), [true, false], 'a soloed track plays alone')
+      await clickButton(page, 'Solo Guitar')
+      await clickButton(page, 'Mute Guitar')
+      assert.deepEqual(await lastMix(), [true, true])
+    },
+  ],
+
+  [
+    'clicking above a measure moves playback to its start and Home goes back to the beginning',
+    async ({ page }) => {
+      const seeks = () => page.eval(`window.__e2e.audio.filter(c => c.command === 'seek').map(c => c.args.tick)`)
+      const selectedBefore = await selection(page)
+      const point = await page.eval(`(() => {
+        const r = document.querySelectorAll('svg.tab .seek-strip')[2].getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })()`)
+      await page.mouseClick(point.x, point.y)
+      await settle()
+
+      assert.deepEqual(await seeks(), [2 * 128], 'measure 3 starts after two whole-note measures')
+      assert.equal(await exists(page, '.notice'), false)
+      assert.deepEqual(await selection(page), selectedBefore, 'the click selected no note')
+
+      await page.press('Home')
+      await settle()
+      assert.deepEqual(await seeks(), [2 * 128, 0])
     },
   ],
 ]

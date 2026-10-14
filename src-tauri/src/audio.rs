@@ -15,6 +15,8 @@ enum Command {
     Play,
     Pause,
     Stop,
+    Seek(f64),
+    SetAudible(Vec<bool>),
 }
 
 pub struct AudioController {
@@ -50,6 +52,8 @@ impl AudioController {
                     Command::Play => output.play(),
                     Command::Pause => output.pause(),
                     Command::Stop => output.stop(),
+                    Command::Seek(ticks) => output.seek(ticks),
+                    Command::SetAudible(audible) => output.set_audible(audible),
                 }
             }
         });
@@ -88,6 +92,16 @@ impl AudioController {
 
     pub fn stop(&self) -> Result<(), String> {
         self.send(Command::Stop)
+    }
+
+    /// Moves to a position in 1/128 of a whole note.
+    pub fn seek(&self, ticks: f64) -> Result<(), String> {
+        self.send(Command::Seek(ticks))
+    }
+
+    /// Which tracks make sound, by track index.
+    pub fn set_audible(&self, audible: Vec<bool>) -> Result<(), String> {
+        self.send(Command::SetAudible(audible))
     }
 
     /// Playback state published by the audio callback, once the output is open.

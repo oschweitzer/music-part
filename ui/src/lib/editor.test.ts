@@ -48,7 +48,7 @@ function setup({
   prompts = {},
   now = () => 0,
 }: { api?: DocumentApi; prompts?: Partial<FilePrompts>; now?: () => number } = {}) {
-  const playback = { setScore: vi.fn(async (_score: Score) => {}) }
+  const playback = { setScore: vi.fn(async (_score: Score) => {}), dropTrackMix: vi.fn((_track: number) => {}) }
   const filePrompts: FilePrompts = {
     chooseFileToOpen: async () => '/music/chosen.mpart',
     chooseFileToSave: async () => '/music/saved.mpart',
@@ -269,12 +269,13 @@ describe('Editor', () => {
 
     it('should remove the current track', async () => {
       const { api, edits } = fakeApi()
-      const { editor } = setup({ api })
+      const { editor, playback } = setup({ api })
       await editor.start()
       editor.selectTrack(1)
       await editor.removeTrack()
 
       expect(edits).toEqual([{ type: 'removeTrack', index: 1 }])
+      expect(playback.dropTrackMix).toHaveBeenCalledWith(1)
     })
 
     it('should retune the current track from note names', async () => {

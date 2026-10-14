@@ -272,7 +272,7 @@ describe('hitTest', () => {
 
   it('should find the beat and string under the point', () => {
     const hit = hitTest({ layout, x: beat.x, y: system.stringYs[3]! })
-    expect(hit).toEqual({ measure: 0, beat: 2, string: 4 })
+    expect(hit).toEqual({ measure: 0, beat: 2, string: 4, tick: beat.startTick })
   })
 
   it('should pick the nearest beat when the click falls between two', () => {

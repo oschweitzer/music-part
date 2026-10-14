@@ -404,7 +404,13 @@ export function locateTick({ layout, tick }: { layout: TabLayout; tick: number }
   return { systemIndex, measureIndex: measure.index, measureX: measure.x, measureWidth: measure.width, x }
 }
 
-export type HitTarget = { measure: number; beat: number; string: number }
+export type HitTarget = {
+  measure: number
+  beat: number
+  string: number
+  /** Where the beat starts, in 1/128 of a whole note: the position to seek to. */
+  tick: number
+}
 
 /**
  * Finds the beat and string under a point of the page, or null if the point is not on a staff.
@@ -429,7 +435,7 @@ export function hitTest({ layout, x, y }: { layout: TabLayout; x: number; y: num
 
     const lines = system.stringYs.length
     const string = Math.min(Math.max(Math.round((y - system.staffTop) / METRICS.stringGap), 0), lines - 1) + 1
-    return { measure: measure.index, beat, string }
+    return { measure: measure.index, beat, string, tick: measure.beats[beat]?.startTick ?? measure.startTick }
   }
   return null
 }

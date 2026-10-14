@@ -16,6 +16,10 @@ export type Transport = {
   play(): Promise<void>
   pause(): Promise<void>
   stop(): Promise<void>
+  /** Moves to a position in 1/128 of a whole note, playing or not. */
+  seek(tick: number): Promise<void>
+  /** `audible[i]` says whether track `i` makes sound. The engine keeps it across score changes. */
+  setAudible(audible: boolean[]): Promise<void>
   /** Subscribes to position updates. Resolves with the function that unsubscribes. */
   onPosition(listener: (update: PositionUpdate) => void): Promise<() => void>
 }
@@ -39,6 +43,8 @@ function createTauriTransport(): Transport {
     play: () => call('play'),
     pause: () => call('pause'),
     stop: () => call('stop'),
+    seek: (tick) => call('seek', { tick }),
+    setAudible: (audible) => call('set_audible', { audible }),
     onPosition: (listener) => listen<PositionUpdate>('playback-position', (event) => listener(event.payload)),
   }
 }
@@ -95,6 +101,12 @@ export function createSimulatedTransport(): Transport {
       tick = 0
       emit()
     },
+    async seek(next) {
+      tick = Math.max(0, next)
+      if (startedAt) startedAt = { at: performance.now(), tick }
+      emit()
+    },
+    async setAudible() {},
     async onPosition(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)

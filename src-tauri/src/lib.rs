@@ -124,6 +124,17 @@ fn stop(audio: State<AudioController>) -> Result<(), String> {
     audio.stop()
 }
 
+#[tauri::command]
+fn seek(tick: f64, audio: State<AudioController>) -> Result<(), String> {
+    audio.seek(tick)
+}
+
+/// `audible[i]` says whether track `i` makes sound; the UI works out mute and solo.
+#[tauri::command]
+fn set_audible(audible: Vec<bool>, audio: State<AudioController>) -> Result<(), String> {
+    audio.set_audible(audible)
+}
+
 /// Tells the UI where playback is, about 30 times a second while it moves, and once more when it
 /// stops so the UI never misses the final state.
 fn spawn_position_emitter(app: AppHandle) {
@@ -169,7 +180,9 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
         redo,
         play,
         pause,
-        stop
+        stop,
+        seek,
+        set_audible
     ])
 }
 
@@ -349,6 +362,16 @@ mod tests {
     fn playing_without_audio_reports_why_instead_of_failing_silently() {
         let (_app, window) = app();
         let error = invoke(&window, "play", json!({})).unwrap_err();
+        assert_eq!(error, json!("no audio in tests"));
+    }
+
+    #[test]
+    fn seeking_and_mixing_without_audio_report_why() {
+        let (_app, window) = app();
+        let error = invoke(&window, "seek", json!({ "tick": 64.0 })).unwrap_err();
+        assert_eq!(error, json!("no audio in tests"));
+        let error =
+            invoke(&window, "set_audible", json!({ "audible": [true, false] })).unwrap_err();
         assert_eq!(error, json!("no audio in tests"));
     }
 }
