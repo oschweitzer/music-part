@@ -558,4 +558,53 @@ export const scenarios = [
       assert.equal((await document_(context)).score.tracks[0].instrument, 'Violin')
     },
   ],
+
+  [
+    'shift and the arrows select several beats, then copy and paste write them elsewhere',
+    async (context) => {
+      const { page } = context
+      const before = beatsOf(await document_(context), 0)
+      await clickFret(page, 0)
+      await page.press('ArrowRight', ['shift'])
+      await page.press('c', ['ctrl'])
+      assert.equal(await page.eval(`document.querySelectorAll('svg.tab .beat-highlight').length`), 2, 'two beats are highlighted')
+
+      await page.press('ArrowRight') // leaves the range: the selection is on beat 2
+      await page.press('v', ['ctrl'])
+      await settle()
+
+      const after = beatsOf(await document_(context), 0)
+      const frets = (beats) => beats.map((b) => b.notes.map((n) => [n.string, n.fret]))
+      assert.deepEqual(frets(after.slice(2, 4)), frets(before.slice(0, 2)), 'beats 0-1 were pasted on 2-3')
+      assert.deepEqual(frets(after.slice(0, 2)), frets(before.slice(0, 2)), 'the source is untouched')
+      assert.equal(await isDirty(page), true)
+    },
+  ],
+
+  [
+    'cut and Delete clear a range of beats, and the range can be pasted back',
+    async (context) => {
+      const { page } = context
+      const before = beatsOf(await document_(context), 0)
+      await clickFret(page, 0)
+      await page.press('ArrowRight', ['shift'])
+      await page.press('ArrowRight', ['shift'])
+      await page.press('x', ['ctrl'])
+      await settle()
+
+      let now = beatsOf(await document_(context), 0)
+      assert.ok(now.slice(0, 3).every((b) => b.notes.length === 0), 'three beats were emptied')
+      assert.equal(now.length, before.length, 'the rhythm is kept')
+
+      await page.press('v', ['ctrl'])
+      await settle()
+      now = beatsOf(await document_(context), 0)
+      assert.deepEqual(now.slice(0, 3).map((b) => b.notes), before.slice(0, 3).map((b) => b.notes), 'pasting restores them')
+
+      await page.press('ArrowRight', ['shift'])
+      await page.press('Delete')
+      await settle()
+      assert.ok(beatsOf(await document_(context), 0).slice(0, 2).every((b) => b.notes.length === 0))
+    },
+  ],
 ]

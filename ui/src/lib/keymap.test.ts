@@ -66,6 +66,16 @@ describe('interpretKey', () => {
     expect(press('l', { ctrlKey: true })).toBeNull()
   })
 
+  it('should read shift with left or right as extending the selection, and copy, cut, paste', () => {
+    expect(press('ArrowRight', { shiftKey: true })).toEqual({ type: 'extend', direction: 'right' })
+    expect(press('ArrowLeft', { shiftKey: true })).toEqual({ type: 'extend', direction: 'left' })
+    expect(press('ArrowDown', { shiftKey: true })).toEqual({ type: 'move', direction: 'down' })
+    expect(press('c', { ctrlKey: true })).toEqual({ type: 'copy' })
+    expect(press('x', { metaKey: true })).toEqual({ type: 'cut' })
+    expect(press('v', { ctrlKey: true })).toEqual({ type: 'paste' })
+    expect(press('c')).toBeNull()
+  })
+
   it('should ignore every other key', () => {
     expect(press('a')).toBeNull()
     expect(press('F5')).toBeNull()

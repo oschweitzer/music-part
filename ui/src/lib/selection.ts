@@ -1,7 +1,13 @@
 import type { Score } from './score-types'
 
-/** The beat and string being edited, in the track shown on screen. */
-export type Selection = { measure: number; beat: number; string: number }
+export type BeatPosition = { measure: number; beat: number }
+
+/**
+ * The beat and string being edited, in the track shown on screen. With an `anchor`, the beats
+ * from the anchor to this one are selected together (for copying or clearing); the string only
+ * says where typing goes.
+ */
+export type Selection = { measure: number; beat: number; string: number; anchor?: BeatPosition }
 
 export type Direction = 'left' | 'right' | 'up' | 'down'
 
@@ -28,7 +34,7 @@ export function moveSelection({
   selection: Selection
   direction: Direction
 }): Selection {
-  const current = clampSelection({ score, track, selection })
+  const { anchor: _dropped, ...current } = clampSelection({ score, track, selection })
   const { measure, beat, string } = current
   const measures = score.tracks[track]?.measures.length ?? 0
   const strings = score.tracks[track]?.tuning.length ?? 1
@@ -66,7 +72,50 @@ export function clampSelection({
   const measure = Math.min(Math.max(wanted.measure, 0), Math.max(measures - 1, 0))
   const beat = Math.min(Math.max(wanted.beat, 0), Math.max(beatCount(score, track, measure) - 1, 0))
   const string = Math.min(Math.max(wanted.string, 1), strings)
-  return { measure, beat, string }
+  const result: Selection = { measure, beat, string }
+  if (wanted.anchor) {
+    const anchorMeasure = Math.min(Math.max(wanted.anchor.measure, 0), Math.max(measures - 1, 0))
+    const anchorBeat = Math.min(Math.max(wanted.anchor.beat, 0), Math.max(beatCount(score, track, anchorMeasure) - 1, 0))
+    result.anchor = { measure: anchorMeasure, beat: anchorBeat }
+  }
+  return result
+}
+
+/** Selects more beats to the left or right of the anchor, which stays where the selection began. */
+export function extendSelection({
+  score,
+  track,
+  selection,
+  direction,
+}: {
+  score: Score
+  track: number
+  selection: Selection
+  direction: 'left' | 'right'
+}): Selection {
+  const current = clampSelection({ score, track, selection })
+  const anchor = current.anchor ?? { measure: current.measure, beat: current.beat }
+  const moved = moveSelection({ score, track, selection: current, direction })
+  return { ...moved, anchor }
+}
+
+const compare = (a: BeatPosition, b: BeatPosition) => a.measure - b.measure || a.beat - b.beat
+
+/** The first and last selected beat, or null if only one beat is selected. */
+export function selectedRange(selection: Selection | null): { from: BeatPosition; to: BeatPosition } | null {
+  if (!selection?.anchor) return null
+  const head = { measure: selection.measure, beat: selection.beat }
+  if (compare(head, selection.anchor) === 0) return null
+  return compare(selection.anchor, head) < 0 ? { from: selection.anchor, to: head } : { from: head, to: selection.anchor }
+}
+
+/** True for the beat of a lone selection, or any beat inside a selected range. */
+export function isBeatSelected({ selection, measure, beat }: { selection: Selection | null; measure: number; beat: number }): boolean {
+  if (!selection) return false
+  const range = selectedRange(selection)
+  if (!range) return selection.measure === measure && selection.beat === beat
+  const at = { measure, beat }
+  return compare(range.from, at) <= 0 && compare(at, range.to) <= 0
 }
 
 /**

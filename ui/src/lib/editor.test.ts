@@ -298,6 +298,98 @@ describe('Editor', () => {
     })
   })
 
+  describe('selecting several beats, copying and pasting', () => {
+    it('should copy the selected range, all strings, with its first tie cleared', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 1, string: 2 })
+      await editor.run({ type: 'extend', direction: 'right' })
+      await editor.run({ type: 'extend', direction: 'right' })
+      await editor.run({ type: 'copy' })
+
+      const first = score.tracks[0]!.measures[0]!.voices[0]!.beats
+      expect(editor.clipboard).toEqual(first.slice(1, 4).map((b, i) => ({ ...b, notes: b.notes.map((n) => ({ ...n, tied: i === 0 ? false : n.tied })) })))
+      expect(editor.message?.text).toBe('Copied 3 beats.')
+      expect(edits).toEqual([])
+    })
+
+    it('should paste at the start of the selection, over what is there', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      await editor.run({ type: 'copy' })
+      editor.select({ measure: 2, beat: 1, string: 3 })
+      await editor.run({ type: 'paste' })
+
+      expect(edits).toHaveLength(1)
+      expect(edits[0]).toMatchObject({ type: 'paste', track: 0, measure: 2, beat: 1 })
+      expect(editor.selection).toEqual({ measure: 2, beat: 1, string: 3 })
+    })
+
+    it('should paste a range starting from its first beat, whichever end was clicked last', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      await editor.run({ type: 'copy' })
+      editor.select({ measure: 1, beat: 3, string: 1 })
+      editor.select({ measure: 1, beat: 1, string: 1 }, { extend: true })
+      await editor.run({ type: 'paste' })
+
+      expect(edits[0]).toMatchObject({ type: 'paste', measure: 1, beat: 1 })
+    })
+
+    it('should say there is nothing to paste before anything is copied', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      await editor.run({ type: 'paste' })
+
+      expect(edits).toEqual([])
+      expect(editor.message?.text).toMatch(/copy some beats/i)
+    })
+
+    it('should cut by copying and replacing the range with rests of the same lengths', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      await editor.run({ type: 'extend', direction: 'right' })
+      await editor.run({ type: 'cut' })
+
+      const edit = edits[0]
+      expect(edit).toMatchObject({ type: 'paste', measure: 0, beat: 0 })
+      const beats = edit?.type === 'paste' ? edit.beats : []
+      expect(beats).toHaveLength(2)
+      expect(beats.every((b) => b.notes.length === 0)).toBe(true)
+      expect(editor.clipboard).toHaveLength(2)
+      expect(editor.clipboard?.[0]?.notes.length).toBeGreaterThan(0)
+    })
+
+    it('should clear the whole range with Delete when several beats are selected', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      await editor.run({ type: 'extend', direction: 'right' })
+      await editor.run({ type: 'remove' })
+
+      expect(edits.map((e) => e.type)).toEqual(['paste'])
+    })
+
+    it('should still remove one note with Delete when a single beat is selected', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 5 })
+      await editor.run({ type: 'remove' })
+
+      expect(edits.map((e) => e.type)).toEqual(['removeNote'])
+    })
+  })
+
   describe('time signature, name and instrument', () => {
     it('should change the time signature of the selected measure', async () => {
       const { api, edits } = fakeApi()

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Selection } from '../lib/selection'
+  import { isBeatSelected, type Selection } from '../lib/selection'
   import { hitTest, METRICS } from '../lib/tab-layout'
   import type { BeatLayout, CursorPosition, TabLayout } from '../lib/tab-layout'
 
@@ -15,7 +15,7 @@
     label: string
     cursor?: CursorPosition | null
     selection?: Selection | null
-    onselect?: (target: Selection) => void
+    onselect?: (target: Selection, options: { extend: boolean }) => void
     /** Asked to move playback to a position in 1/128 of a whole note. */
     onseek?: (tick: number) => void
   } = $props()
@@ -27,7 +27,7 @@
     // The drawing is scaled if the page squeezes it; map the click back to drawing units.
     const scale = box.width > 0 ? layout.width / box.width : 1
     const target = hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
-    if (target) onselect({ measure: target.measure, beat: target.beat, string: target.string })
+    if (target) onselect({ measure: target.measure, beat: target.beat, string: target.string }, { extend: event.shiftKey })
   }
 
   /** Double-clicking a beat moves playback there. */
@@ -146,8 +146,7 @@
             </g>
           {/if}
 
-          {#if selection && selection.measure === measure.index && selection.beat === beatIndex}
-            {@const selectedY = system.stringYs[selection.string - 1] ?? system.stringYs[0] ?? 0}
+          {#if isBeatSelected({ selection, measure: measure.index, beat: beatIndex })}
             <rect
               class="beat-highlight"
               x={beat.x - 13}
@@ -156,6 +155,9 @@
               height={system.staffBottom - system.staffTop + 8}
               rx="6"
             />
+          {/if}
+          {#if selection && selection.measure === measure.index && selection.beat === beatIndex}
+            {@const selectedY = system.stringYs[selection.string - 1] ?? system.stringYs[0] ?? 0}
             <rect class="selection" x={beat.x - 12} y={selectedY - 9} width="24" height="18" rx="5" />
           {/if}
 

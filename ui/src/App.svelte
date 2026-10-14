@@ -298,7 +298,7 @@
             label={track.name}
             {cursor}
             selection={editor.selection}
-            onselect={editor.canEdit ? (target) => editor.select(target) : undefined}
+            onselect={editor.canEdit ? (target, options) => editor.select(target, options) : undefined}
             onseek={(tick) => playback.seek(tick)}
           />
         {/if}

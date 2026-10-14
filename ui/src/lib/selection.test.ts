@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
 import type { Score } from './score-types'
-import { clampSelection, FIRST_NOTE, moveSelection, nextFret } from './selection'
+import { clampSelection, extendSelection, FIRST_NOTE, isBeatSelected, moveSelection, nextFret, selectedRange } from './selection'
 
 const score = demo as Score
 const beatsIn = (measure: number) => score.tracks[0]!.measures[measure]!.voices[0]!.beats.length
@@ -53,6 +53,56 @@ describe('clampSelection', () => {
   it('should keep a valid selection as it is', () => {
     const selection = { measure: 2, beat: 3, string: 4 }
     expect(clampSelection({ score, track: 0, selection })).toEqual(selection)
+  })
+})
+
+describe('extending a selection', () => {
+  const extend = (selection: Parameters<typeof extendSelection>[0]['selection'], direction: 'left' | 'right') =>
+    extendSelection({ score, track: 0, selection, direction })
+
+  it('should keep the anchor where the selection began while the other end moves', () => {
+    const once = extend({ measure: 0, beat: 2, string: 3 }, 'right')
+    expect(once).toEqual({ measure: 0, beat: 3, string: 3, anchor: { measure: 0, beat: 2 } })
+    const twice = extend(once, 'right')
+    expect(twice).toEqual({ measure: 0, beat: 4, string: 3, anchor: { measure: 0, beat: 2 } })
+  })
+
+  it('should cross barlines and shrink back toward the anchor', () => {
+    const last = beatsIn(0) - 1
+    const across = extend({ measure: 0, beat: last, string: 1 }, 'right')
+    expect(across).toMatchObject({ measure: 1, beat: 0, anchor: { measure: 0, beat: last } })
+    expect(extend(across, 'left')).toMatchObject({ measure: 0, beat: last })
+  })
+
+  it('should drop the anchor when the selection moves normally', () => {
+    const range = extend({ measure: 0, beat: 1, string: 1 }, 'right')
+    expect(moveSelection({ score, track: 0, selection: range, direction: 'right' }).anchor).toBeUndefined()
+  })
+
+  it('should give the selected range in order whichever end is the anchor', () => {
+    const forward = { measure: 0, beat: 4, string: 1, anchor: { measure: 0, beat: 2 } }
+    const backward = { measure: 0, beat: 2, string: 1, anchor: { measure: 0, beat: 4 } }
+    expect(selectedRange(forward)).toEqual({ from: { measure: 0, beat: 2 }, to: { measure: 0, beat: 4 } })
+    expect(selectedRange(backward)).toEqual(selectedRange(forward))
+    expect(selectedRange({ measure: 0, beat: 2, string: 1 })).toBeNull()
+    expect(selectedRange({ measure: 0, beat: 2, string: 1, anchor: { measure: 0, beat: 2 } })).toBeNull()
+  })
+
+  it('should tell which beats are selected', () => {
+    const selection = { measure: 1, beat: 1, string: 1, anchor: { measure: 0, beat: 6 } }
+    const selected = (measure: number, beat: number) => isBeatSelected({ selection, measure, beat })
+    expect(selected(0, 5)).toBe(false)
+    expect(selected(0, 6)).toBe(true)
+    expect(selected(1, 0)).toBe(true)
+    expect(selected(1, 1)).toBe(true)
+    expect(selected(1, 2)).toBe(false)
+    expect(isBeatSelected({ selection: { measure: 0, beat: 0, string: 1 }, measure: 0, beat: 0 })).toBe(true)
+    expect(isBeatSelected({ selection: null, measure: 0, beat: 0 })).toBe(false)
+  })
+
+  it('should keep a valid anchor and pull a stale one back', () => {
+    const stale = { measure: 0, beat: 0, string: 1, anchor: { measure: 99, beat: 99 } }
+    expect(clampSelection({ score, track: 0, selection: stale }).anchor).toEqual({ measure: 5, beat: 0 })
   })
 })
 

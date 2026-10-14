@@ -75,6 +75,16 @@ pub enum Edit {
     RemoveTrack {
         index: usize,
     },
+    /// Writes `beats` one after the other starting at a beat, over what is there: the paste of the
+    /// copy-and-paste, and with rests the clearing of a range. Pasted beats are cut at barlines
+    /// (the cut part is tied on) and fitted into the measures they land on. Notes on strings the
+    /// track does not have are left out. Refused if the score ends before the paste does.
+    Paste {
+        track: usize,
+        measure: usize,
+        beat: usize,
+        beats: Vec<Beat>,
+    },
     /// Changes the time signature of a measure and of the measures after it that have the same
     /// one. Notes that no longer fit are cut short (the cut part is tied on) or dropped at the end
     /// of the measure; a longer measure is filled with rests.
@@ -175,13 +185,17 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             if string == 0 || usize::from(string) > strings {
                 return Err(EditError::OutOfRange("string"));
             }
-            let beat = beat_mut(score, track, measure, beat)?;
             let note = Note {
                 string,
                 fret,
                 technique: None,
                 tied: false,
             };
+            // A very high tuning can leave no MIDI pitch for a fret that is otherwise allowed.
+            if score.tracks[track].pitch(&note).is_none() {
+                return Err(EditError::InvalidFret);
+            }
+            let beat = beat_mut(score, track, measure, beat)?;
             match beat.notes.iter_mut().find(|n| n.string == string) {
                 Some(existing) => *existing = note,
                 None => {
@@ -240,6 +254,12 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             note_mut(score, track, measure, beat, string)?.technique = technique;
             Ok(())
         }
+        Edit::Paste {
+            track,
+            measure,
+            beat,
+            ref beats,
+        } => paste(score, (track, measure, beat), beats),
         Edit::SetTimeSignature {
             measure,
             numerator,
@@ -357,6 +377,147 @@ fn set_tied(
     let note = note_mut(score, track, measure, beat, string)?;
     note.fret = fret;
     note.tied = true;
+    Ok(())
+}
+
+fn paste(
+    score: &mut Score,
+    (track, measure, beat): (usize, usize, usize),
+    pasted: &[Beat],
+) -> Result<(), EditError> {
+    let target = score
+        .tracks
+        .get(track)
+        .ok_or(EditError::OutOfRange("track"))?;
+    if pasted.iter().any(|b| !b.duration.is_valid()) {
+        return Err(EditError::InvalidDuration);
+    }
+    if pasted
+        .iter()
+        .flat_map(|b| &b.notes)
+        .any(|n| n.fret > MAX_FRET)
+    {
+        return Err(EditError::InvalidFret);
+    }
+
+    // Where the paste starts, from the start of the piece.
+    let first = target
+        .measures
+        .get(measure)
+        .and_then(|m| m.voices.first())
+        .ok_or(EditError::OutOfRange("measure"))?;
+    if beat >= first.beats.len() {
+        return Err(EditError::OutOfRange("beat"));
+    }
+    let measure_starts: Vec<u32> = target
+        .measures
+        .iter()
+        .scan(0, |at, m| {
+            let start = *at;
+            *at += m.time_signature.ticks();
+            Some(start)
+        })
+        .collect();
+    let start = measure_starts[measure]
+        + first.beats[..beat]
+            .iter()
+            .map(|b| b.duration.ticks())
+            .sum::<u32>();
+    let length: u32 = pasted.iter().map(|b| b.duration.ticks()).sum();
+    let end = start + length;
+    let score_end = measure_starts.last().copied().unwrap_or(0)
+        + target
+            .measures
+            .last()
+            .map_or(0, |m| m.time_signature.ticks());
+    if end > score_end {
+        return Err(EditError::NotEnoughRoom);
+    }
+    if length == 0 {
+        return Ok(());
+    }
+
+    // The pasted beats on the timeline of the piece, without the notes the track cannot play.
+    let strings = target.tuning.len();
+    let mut at = start;
+    let placed: Vec<(u32, u32, Beat)> = pasted
+        .iter()
+        .map(|b| {
+            let mut beat = b.clone();
+            beat.notes
+                .retain(|n| n.string >= 1 && usize::from(n.string) <= strings);
+            beat.notes.sort_by_key(|n| n.string);
+            beat.notes.dedup_by_key(|n| n.string);
+            let from = at;
+            at += b.duration.ticks();
+            (from, at, beat)
+        })
+        .collect();
+
+    if placed
+        .iter()
+        .flat_map(|(_, _, b)| &b.notes)
+        .any(|n| target.pitch(n).is_none())
+    {
+        return Err(EditError::InvalidFret);
+    }
+
+    let mut rebuilt: Vec<(usize, Vec<Beat>)> = Vec::new();
+    for (m, existing) in target.measures.iter().enumerate() {
+        let m_start = measure_starts[m];
+        let m_end = m_start + existing.time_signature.ticks();
+        if m_end <= start || m_start >= end {
+            continue;
+        }
+        let Some(voice) = existing.voices.first() else {
+            continue;
+        };
+        let (lo, hi) = (start.max(m_start) - m_start, end.min(m_end) - m_start);
+
+        let mut out: Vec<Beat> = Vec::new();
+        let mut position = 0;
+        let mut after: Vec<Beat> = Vec::new();
+        for old in &voice.beats {
+            let old_end = position + old.duration.ticks();
+            if position < lo {
+                if old_end <= lo {
+                    out.push(old.clone());
+                } else {
+                    out.extend(split_beat(old, lo - position)?);
+                }
+            }
+            if old_end > hi {
+                if position >= hi {
+                    after.push(old.clone());
+                } else {
+                    after.extend(rests(old_end - hi)?);
+                }
+            }
+            position = old_end;
+        }
+
+        for (from, to, piece) in &placed {
+            let (a, b) = ((*from).max(m_start + lo), (*to).min(m_start + hi));
+            if a >= b {
+                continue;
+            }
+            let mut piece = piece.clone();
+            if a > *from {
+                // This is the continuation of a beat that began in the previous measure.
+                for note in &mut piece.notes {
+                    note.tied = true;
+                }
+            }
+            out.extend(split_beat(&piece, b - a)?);
+        }
+        out.extend(after);
+        rebuilt.push((m, out));
+    }
+
+    let target = &mut score.tracks[track];
+    for (m, beats) in rebuilt {
+        target.measures[m].voices[0].beats = beats;
+    }
     Ok(())
 }
 
@@ -1043,6 +1204,27 @@ mod tests {
     }
 
     #[test]
+    fn a_fret_above_the_midi_range_on_a_very_high_string_is_refused() {
+        let mut score = blank_score("t");
+        apply_edit(
+            &mut score,
+            &Edit::SetTuning {
+                track: 0,
+                tuning: vec![120, 59, 55, 50, 45, 40],
+            },
+        )
+        .unwrap();
+        let before = score.clone();
+        // 120 + 10 is above MIDI pitch 127.
+        assert_eq!(
+            apply_edit(&mut score, &set_fret(0, 0, 1, 10)),
+            Err(EditError::InvalidFret)
+        );
+        assert_eq!(score, before);
+        apply_edit(&mut score, &set_fret(0, 0, 1, 7)).unwrap();
+    }
+
+    #[test]
     fn a_track_can_be_retuned_unless_a_note_would_be_lost() {
         let mut score = blank_score("t");
         apply_edit(&mut score, &set_fret(0, 0, 6, 3)).unwrap();
@@ -1247,6 +1429,183 @@ mod tests {
         assert_eq!(score.tracks[0].tuning, tuning);
     }
 
+    fn note_beat(value: NoteValue, notes: &[(u8, u8)]) -> Beat {
+        Beat {
+            duration: dur(value, 0),
+            notes: notes
+                .iter()
+                .map(|&(string, fret)| Note {
+                    string,
+                    fret,
+                    technique: None,
+                    tied: false,
+                })
+                .collect(),
+        }
+    }
+
+    fn paste_edit(track: usize, measure: usize, beat: usize, beats: Vec<Beat>) -> Edit {
+        Edit::Paste {
+            track,
+            measure,
+            beat,
+            beats,
+        }
+    }
+
+    fn frets_of(score: &Score, measure: usize) -> Vec<Vec<(u8, u8)>> {
+        beats(score, measure)
+            .iter()
+            .map(|b| b.notes.iter().map(|n| (n.string, n.fret)).collect())
+            .collect()
+    }
+
+    #[test]
+    fn pasted_beats_are_written_over_the_start_of_a_measure() {
+        let mut score = blank_score("t");
+        let clip = vec![
+            note_beat(NoteValue::Eighth, &[(2, 3)]),
+            note_beat(NoteValue::Eighth, &[(2, 5), (4, 0)]),
+        ];
+        apply_edit(&mut score, &paste_edit(0, 0, 0, clip)).unwrap();
+
+        assert_eq!(lengths(&score, 0), vec![16, 16, 96]);
+        assert_eq!(
+            frets_of(&score, 0),
+            vec![vec![(2, 3)], vec![(2, 5), (4, 0)], vec![]]
+        );
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_paste_replaces_the_notes_it_lands_on_and_rests_for_what_it_shortens() {
+        let mut score = blank_score("t");
+        apply_edit(&mut score, &set_fret(0, 0, 1, 7)).unwrap(); // a whole note
+        apply_edit(
+            &mut score,
+            &paste_edit(0, 0, 0, vec![note_beat(NoteValue::Quarter, &[(2, 1)])]),
+        )
+        .unwrap();
+
+        // The quarter replaced the start of the whole note; the other three quarters are rests.
+        assert_eq!(lengths(&score, 0), vec![32, 96]);
+        assert_eq!(frets_of(&score, 0), vec![vec![(2, 1)], vec![]]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_paste_that_crosses_a_barline_is_cut_and_tied_on() {
+        let mut score = blank_score("t");
+        apply_edit(
+            &mut score,
+            &set_duration_edit(0, 0, dur(NoteValue::Half, 0)),
+        )
+        .unwrap();
+        // Measure 0 is now two half-note rests: paste a whole note on the second one.
+        apply_edit(
+            &mut score,
+            &paste_edit(0, 0, 1, vec![note_beat(NoteValue::Whole, &[(3, 5)])]),
+        )
+        .unwrap();
+
+        assert_eq!(lengths(&score, 0), vec![64, 64]);
+        assert_eq!(frets_of(&score, 0), vec![vec![], vec![(3, 5)]]);
+        assert_eq!(lengths(&score, 1), vec![64, 64]);
+        assert_eq!(frets_of(&score, 1), vec![vec![(3, 5)], vec![]]);
+        assert!(beats(&score, 1)[0].notes[0].tied);
+        assert!(!beats(&score, 0)[1].notes[0].tied);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn notes_on_strings_the_track_does_not_have_are_left_out() {
+        let mut score = demo_score(); // track 1 is a 4-string bass
+        apply_edit(
+            &mut score,
+            &paste_edit(
+                1,
+                0,
+                0,
+                vec![note_beat(NoteValue::Quarter, &[(2, 3), (6, 0)])],
+            ),
+        )
+        .unwrap();
+
+        let first = &score.tracks[1].measures[0].voices[0].beats[0];
+        assert_eq!(
+            first.notes.iter().map(|n| n.string).collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn rests_clear_a_range() {
+        let mut score = demo_score();
+        let clear: Vec<Beat> = beats(&score, 0)
+            .iter()
+            .map(|b| Beat {
+                duration: b.duration,
+                notes: vec![],
+            })
+            .collect();
+        apply_edit(&mut score, &paste_edit(0, 0, 0, clear)).unwrap();
+
+        assert!(beats(&score, 0).iter().all(|b| b.notes.is_empty()));
+        assert!(!beats(&score, 1).iter().all(|b| b.notes.is_empty()));
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_paste_that_runs_past_the_end_of_the_score_is_refused_whole() {
+        let mut score = blank_score("t"); // four whole-note measures
+        let before = score.clone();
+        let clip = vec![note_beat(NoteValue::Whole, &[(1, 1)]); 3];
+        assert_eq!(
+            apply_edit(&mut score, &paste_edit(0, 2, 0, clip)),
+            Err(EditError::NotEnoughRoom)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_paste_with_a_bad_fret_duration_or_address_is_refused() {
+        let mut score = blank_score("t");
+        let before = score.clone();
+        let bad_duration = Beat {
+            duration: dur(NoteValue::ThirtySecond, 1),
+            notes: vec![],
+        };
+        for (edit, expected) in [
+            (
+                paste_edit(0, 0, 0, vec![note_beat(NoteValue::Quarter, &[(1, 30)])]),
+                EditError::InvalidFret,
+            ),
+            (
+                paste_edit(0, 0, 0, vec![bad_duration]),
+                EditError::InvalidDuration,
+            ),
+            (
+                paste_edit(0, 9, 0, vec![note_beat(NoteValue::Quarter, &[])]),
+                EditError::OutOfRange("measure"),
+            ),
+            (
+                paste_edit(0, 0, 9, vec![note_beat(NoteValue::Quarter, &[])]),
+                EditError::OutOfRange("beat"),
+            ),
+            (
+                paste_edit(5, 0, 0, vec![note_beat(NoteValue::Quarter, &[])]),
+                EditError::OutOfRange("track"),
+            ),
+        ] {
+            assert_eq!(apply_edit(&mut score, &edit), Err(expected), "{edit:?}");
+        }
+        assert_eq!(score, before);
+        // Pasting nothing is allowed and changes nothing.
+        apply_edit(&mut score, &paste_edit(0, 0, 0, vec![])).unwrap();
+        assert_eq!(score, before);
+    }
+
     /// Whatever sequence of edits is thrown at a score, it stays valid, and a refused edit
     /// leaves it untouched.
     #[test]
@@ -1283,7 +1642,7 @@ mod tests {
                     (measure, beat)
                 };
 
-                let edit = match next(15) {
+                let edit = match next(16) {
                     0 | 1 => Edit::SetFret {
                         track,
                         measure,
@@ -1343,6 +1702,26 @@ mod tests {
                         track,
                         instrument: [Instrument::Guitar, Instrument::Bass, Instrument::Violin]
                             [next(3)],
+                    },
+                    14 => Edit::Paste {
+                        track,
+                        measure,
+                        beat,
+                        beats: (0..1 + next(4))
+                            .map(|_| Beat {
+                                duration: dur(values[next(6)], next(3) as u8),
+                                notes: if next(3) == 0 {
+                                    vec![]
+                                } else {
+                                    vec![Note {
+                                        string,
+                                        fret: next(25) as u8,
+                                        technique: None,
+                                        tied: next(4) == 0,
+                                    }]
+                                },
+                            })
+                            .collect(),
                     },
                     _ => Edit::SetTuning {
                         track,

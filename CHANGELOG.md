@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Editing: select several beats (Shift+arrows or Shift+click), copy, cut and paste them, and
+  empty a range with Delete.
 - Editing: change the time signature of a measure (and the ones after it that share it), rename a
   track and change its instrument.
 - Playback: click above a measure or double-click a beat to move playback there, `Home` to go back
@@ -64,6 +66,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Typing a fret on a very high string no longer builds a note above MIDI pitch 127.
 - `io-midi`: the importer no longer panics or allocates without bound on unusual files: a zero
   time division, a time signature the grid cannot hold (such as 3/64), an extreme tempo, a huge
   gap between notes (refused as too long), and notes that are never released.

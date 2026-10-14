@@ -14,7 +14,10 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | Key                         | Does                                                                          |
 | --------------------------- | ----------------------------------------------------------------------------- |
 | `0`-`9`                     | Sets the fret on the selected string. Two digits typed quickly make one fret  |
-| `Delete` / `Backspace`      | Removes the note on the selected string (a beat left empty becomes a rest)    |
+| `Delete` / `Backspace`      | Removes the note on the selected string (a beat left empty becomes a rest).   |
+|                             | With several beats selected, empties all of them                              |
+| `Shift+Left` / `Shift+Right`| Selects several beats                                                         |
+| `Ctrl+C` `Ctrl+X` `Ctrl+V`  | Copy, cut and paste the selected beats                                        |
 | `W` `H` `Q` `E` `S` `T`     | Whole, half, quarter, eighth, sixteenth and thirty-second note                |
 | `.`                         | Adds or removes a dot                                                         |
 | `L`                         | Ties the note to the one before it on the same string (again: unties)         |
@@ -28,6 +31,21 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | `Esc`                       | Clears the selection                                                          |
 
 On macOS, `Cmd` replaces `Ctrl`. The same actions are in the toolbars.
+
+## Copy and paste
+
+`Shift+Left` and `Shift+Right` (or Shift+click) select the beats from where you started to the beat
+you reach, across barlines. Copy keeps those beats of the current track, with all their strings,
+their durations and their techniques. Paste writes them one after the other from the selected beat
+(the first of the range, when several are selected), over what is there:
+
+- A pasted beat that crosses a barline is cut, and the part in the next measure is tied on.
+- The measures stay full: what the paste shortens becomes rests.
+- Notes on strings the track does not have (a guitar chord pasted on a bass) are left out.
+- A paste that would run past the end of the score is refused. Add measures first.
+- Cut is a copy followed by emptying the range: the rhythm stays, as rests.
+
+The copy lives in the app and is lost when it closes; it is not on the system clipboard.
 
 ## Playing from somewhere else
 
@@ -108,4 +126,5 @@ back to the state that was opened or saved clears the unsaved mark.
 
 ## Not there yet
 
-There is no way to select several notes and copy and paste.
+There is no system clipboard, no select-all, and no copy between tracks of different voices (only the
+first voice of a measure is edited).

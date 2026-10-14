@@ -3,7 +3,15 @@ import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
 import type { Beat, Instrument, Note, NoteValue, TimeSignature } from './score-types'
-import { clampSelection, FIRST_NOTE, moveSelection, nextFret, type Selection } from './selection'
+import {
+  clampSelection,
+  extendSelection,
+  FIRST_NOTE,
+  moveSelection,
+  nextFret,
+  selectedRange,
+  type Selection,
+} from './selection'
 import { parseTuning } from './tuning'
 
 export type Message = { tone: 'error' | 'info'; text: string }
@@ -20,6 +28,8 @@ export class Editor {
   track = $state(0)
   selection = $state<Selection | null>(null)
   message = $state<Message | null>(null)
+  /** Beats copied with Copy or Cut, ready to paste. Kept when another score is opened. */
+  clipboard = $state<Beat[] | null>(null)
 
   #api: DocumentApi
   #playback: Pick<Playback, 'setScore' | 'dropTrackMix'>
@@ -74,8 +84,13 @@ export class Editor {
     this.message = null
   }
 
-  select(selection: Selection): void {
-    this.selection = selection
+  /** Selects a spot; with `extend`, selects the beats from the current spot to it instead. */
+  select(selection: Selection, { extend = false }: { extend?: boolean } = {}): void {
+    const current = this.selection
+    this.selection =
+      extend && current
+        ? { ...selection, anchor: current.anchor ?? { measure: current.measure, beat: current.beat } }
+        : selection
     this.#typed = null
   }
 
@@ -95,8 +110,16 @@ export class Editor {
         return this.#typeFret(command.digit)
       case 'move':
         return this.#move(command.direction)
+      case 'extend':
+        return this.#extend(command.direction)
+      case 'copy':
+        return this.copy()
+      case 'cut':
+        return this.cut()
+      case 'paste':
+        return this.paste()
       case 'remove':
-        return this.#withTarget((at) => ({ type: 'removeNote', ...at }))
+        return selectedRange(this.selection) ? this.#clearRange() : this.#withTarget((at) => ({ type: 'removeNote', ...at }))
       case 'duration':
         return this.#setDuration(() => ({ value: command.value, dots: 0 }))
       case 'dot':
@@ -163,6 +186,35 @@ export class Editor {
 
   setInstrument(instrument: Instrument): Promise<void> {
     return this.#send({ type: 'setInstrument', track: this.track, instrument })
+  }
+
+  /** Copies the selected beats (or the selected beat) of this track, all strings. */
+  copy(): Promise<void> {
+    const beats = this.#selectedBeats()
+    if (beats === null) return Promise.resolve()
+    this.clipboard = beats
+    this.message = { tone: 'info', text: `Copied ${beats.length} ${beats.length === 1 ? 'beat' : 'beats'}.` }
+    return Promise.resolve()
+  }
+
+  /** Copies the selected beats, then clears them. */
+  cut(): Promise<void> {
+    return this.copy().then(() => this.#clearRange())
+  }
+
+  /** Writes the copied beats from the selected beat on, over what is there. */
+  paste(): Promise<void> {
+    const at = this.#where()
+    if (!at) return Promise.resolve()
+    if (!this.clipboard) {
+      this.message = { tone: 'info', text: 'Nothing to paste yet: copy some beats first.' }
+      return Promise.resolve()
+    }
+    const start = this.#rangeStart()
+    return this.#send(
+      { type: 'paste', track: at.track, measure: start.measure, beat: start.beat, beats: structuredClone($state.snapshot(this.clipboard)) },
+      () => (this.selection = { ...start, string: at.string }),
+    )
   }
 
   /** Adds a track after the others and shows it. */
@@ -235,6 +287,55 @@ export class Editor {
   /** True when there is nothing to lose, or the user agrees to lose it. */
   async canDiscard(): Promise<boolean> {
     return !this.isDirty || (await this.#prompts.confirmDiscard())
+  }
+
+  /** Where the selection starts: the first beat of a selected range, else the selected beat. */
+  #rangeStart(): { measure: number; beat: number } {
+    const range = selectedRange(this.selection)
+    return range ? range.from : { measure: this.selection?.measure ?? 0, beat: this.selection?.beat ?? 0 }
+  }
+
+  /** The beats of the selection, from the first voice of this track, with the first one untied. */
+  #selectedBeats(): Beat[] | null {
+    const measures = this.document?.score.tracks[this.track]?.measures
+    if (!measures || !this.selection) return null
+    const range = selectedRange(this.selection)
+    const from = range?.from ?? { measure: this.selection.measure, beat: this.selection.beat }
+    const to = range?.to ?? from
+
+    const beats: Beat[] = []
+    for (let m = from.measure; m <= to.measure; m++) {
+      const inMeasure = measures[m]?.voices[0]?.beats ?? []
+      const first = m === from.measure ? from.beat : 0
+      const last = m === to.measure ? to.beat : inMeasure.length - 1
+      beats.push(...structuredClone($state.snapshot(inMeasure.slice(first, last + 1))))
+    }
+    // A tie on the first beat points at a note that is not part of the copy.
+    beats[0]?.notes.forEach((note) => (note.tied = false))
+    return beats
+  }
+
+  /** Replaces the selected beats with rests of the same lengths. */
+  #clearRange(): Promise<void> {
+    const at = this.#where()
+    const beats = this.#selectedBeats()
+    if (!at || !beats) return Promise.resolve()
+    const start = this.#rangeStart()
+    const rests = beats.map((beat) => ({ duration: beat.duration, notes: [] }))
+    return this.#send({ type: 'paste', track: at.track, ...start, beats: rests }, () => (this.selection = { ...start, string: at.string }))
+  }
+
+  #extend(direction: 'left' | 'right'): Promise<void> {
+    if (this.document) {
+      this.selection = extendSelection({
+        score: this.document.score,
+        track: this.track,
+        selection: this.selection ?? FIRST_NOTE,
+        direction,
+      })
+    }
+    this.#typed = null
+    return Promise.resolve()
   }
 
   #measureCount(): number {

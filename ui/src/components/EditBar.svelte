@@ -157,6 +157,12 @@
     </button>
   </div>
 
+  <div class="group" role="group" aria-label="Clipboard">
+    <button type="button" class="tool text" title="Copy the selected beats (Ctrl+C). Shift+arrows select several" disabled={!canEdit || !editor.selection} onmousedown={keepFocus} onclick={() => editor.run({ type: 'copy' })}>Copy</button>
+    <button type="button" class="tool text" title="Cut the selected beats (Ctrl+X)" disabled={!canEdit || !editor.selection} onmousedown={keepFocus} onclick={() => editor.run({ type: 'cut' })}>Cut</button>
+    <button type="button" class="tool text" title="Paste at the selected beat (Ctrl+V)" disabled={!canEdit || !editor.selection || !editor.clipboard} onmousedown={keepFocus} onclick={() => editor.run({ type: 'paste' })}>Paste</button>
+  </div>
+
   <div class="group time-signature" role="group" aria-label="Time signature of the selected measure">
     <input
       type="number"

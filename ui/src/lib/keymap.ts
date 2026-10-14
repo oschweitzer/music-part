@@ -4,6 +4,10 @@ import type { Direction } from './selection'
 export type Command =
   | { type: 'digit'; digit: number }
   | { type: 'move'; direction: Direction }
+  | { type: 'extend'; direction: 'left' | 'right' }
+  | { type: 'copy' }
+  | { type: 'cut' }
+  | { type: 'paste' }
   | { type: 'remove' }
   | { type: 'duration'; value: NoteValue }
   | { type: 'dot' }
@@ -61,6 +65,9 @@ export function interpretKey(input: KeyInput): Command | null {
     if (lower === 'z') return shiftKey ? { type: 'redo' } : { type: 'undo' }
     if (lower === 'y') return { type: 'redo' }
     if (lower === 's') return shiftKey ? { type: 'saveAs' } : { type: 'save' }
+    if (lower === 'c' && !shiftKey) return { type: 'copy' }
+    if (lower === 'x' && !shiftKey) return { type: 'cut' }
+    if (lower === 'v' && !shiftKey) return { type: 'paste' }
     if (lower === 'o') return { type: 'open' }
     if (lower === 'n') return { type: 'new' }
     if (key === 'Enter') return { type: 'insertMeasure' }
@@ -71,6 +78,9 @@ export function interpretKey(input: KeyInput): Command | null {
   if (key === ' ') return { type: 'togglePlayback' }
   if (key === 'Home') return { type: 'rewind' }
   if (/^[0-9]$/.test(key)) return { type: 'digit', digit: Number(key) }
+  if (shiftKey && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+    return { type: 'extend', direction: key === 'ArrowLeft' ? 'left' : 'right' }
+  }
   if (key in ARROWS) return { type: 'move', direction: ARROWS[key] as Direction }
   if (key === 'Delete' || key === 'Backspace') return { type: 'remove' }
   if (key === 'Escape') return { type: 'clearSelection' }
