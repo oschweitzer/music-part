@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Playback: techniques now sound. Hammer-ons and pull-offs are soft, slides glide to the next note,
+  bends rise a whole tone, palm mutes are muted and short, harmonics ring at the harmonic pitch.
 - `LICENSE`: PolyForm Noncommercial 1.0.0, and a `README.md`.
 - `score-model`: score data model (score, track, measure, voice, beat, note), string/fret to MIDI
   pitch conversion, dotted durations and JSON serialization.

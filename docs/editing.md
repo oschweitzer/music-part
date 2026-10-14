@@ -42,6 +42,25 @@ A measure is always exactly full. Changing the length of a beat keeps it that wa
 - Inserting or deleting a measure applies to every track, so tracks always have the same length. The
   last measure cannot be deleted.
 
+## How techniques sound
+
+The player turns techniques into MIDI (`audio-engine/src/sequencer.rs`):
+
+| Technique           | Sound                                                                            |
+| ------------------- | -------------------------------------------------------------------------------- |
+| Hammer-on, pull-off | The note is played softly, without the attack of a pick                          |
+| Slide               | Glides, in the second half of the note, to the note on the same string that      |
+|                     | follows (up to an octave away), which is then played softly. Nothing to reach:   |
+|                     | a plain note                                                                     |
+| Bend                | Rises a whole tone over the start of the note and is held until it ends          |
+| Palm mute           | Quieter, and cut to half its length                                              |
+| Harmonic            | Natural harmonic: frets 12 and 24 an octave above the open string, 7 and 19 an   |
+|                     | octave and a fifth, 5 two octaves, 4 two octaves and a third, 9 an octave and a  |
+|                     | major third; any other fret an octave above the fretted note                     |
+
+Bends and slides move the pitch wheel of the track's MIDI channel, so they bend every note sounding
+on that track at the same time. A bend always rises a whole tone: the model has no bend amount yet.
+
 ## Tracks and tuning
 
 `+ Track` adds a guitar, bass or violin in standard tuning with empty measures matching the first
@@ -66,5 +85,4 @@ back to the state that was opened or saved clears the unsaved mark.
 ## Not there yet
 
 There is no way to change the time signature, rename a track or change its instrument, select several
-notes, copy and paste, or click on the score to place the playback cursor. Techniques are drawn and
-saved but do not change the sound yet (the SoundFont player only honours ties).
+notes, copy and paste, or click on the score to place the playback cursor.

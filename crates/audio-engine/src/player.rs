@@ -3,7 +3,7 @@ use std::io::{Read, Seek};
 use oxisynth::{MidiEvent, SoundFont, Synth, SynthDescriptor};
 use score_model::{Instrument, Score};
 
-use crate::sequencer::{self, Event};
+use crate::sequencer::{self, Action, Event, BEND_CENTER, BEND_RANGE_SEMITONES};
 
 /// Silence kept after the last event so the notes can ring out.
 const RELEASE_TAIL_SECS: u64 = 2;
@@ -133,6 +133,14 @@ impl Player {
                 channel,
                 program_id,
             });
+            // Registered parameter 0 is the pitch wheel range, in semitones.
+            for (ctrl, value) in [(101, 0), (100, 0), (6, BEND_RANGE_SEMITONES as u8)] {
+                let _ = self.synth.send_event(MidiEvent::ControlChange {
+                    channel,
+                    ctrl,
+                    value,
+                });
+            }
         }
         self.program = program;
     }
@@ -179,6 +187,10 @@ impl Player {
     fn silence(&mut self) {
         for &(channel, _) in &self.program.voices {
             let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
+            let _ = self.synth.send_event(MidiEvent::PitchBend {
+                channel,
+                value: BEND_CENTER,
+            });
         }
     }
 
@@ -211,17 +223,17 @@ impl Player {
         let Some(&(channel, _)) = self.program.voices.get(e.track) else {
             return;
         };
-        let event = if e.on {
-            MidiEvent::NoteOn {
+        let event = match e.action {
+            Action::NoteOn { pitch, velocity } => MidiEvent::NoteOn {
                 channel,
-                key: e.pitch,
-                vel: e.velocity,
-            }
-        } else {
-            MidiEvent::NoteOff {
+                key: pitch,
+                vel: velocity,
+            },
+            Action::NoteOff { pitch } => MidiEvent::NoteOff {
                 channel,
-                key: e.pitch,
-            }
+                key: pitch,
+            },
+            Action::PitchBend(value) => MidiEvent::PitchBend { channel, value },
         };
         // An out-of-range note must not interrupt playback.
         let _ = self.synth.send_event(event);
@@ -383,5 +395,55 @@ mod tests {
         player.load_score(&one_note_score());
         assert_eq!(player.position(), 0);
         assert!(!player.is_playing());
+    }
+
+    /// Two half notes, the first one optionally a slide up to the second.
+    fn two_notes(technique: Option<Technique>) -> Score {
+        let mut score = one_note_score();
+        let half = |fret, technique| Beat {
+            duration: Duration {
+                value: NoteValue::Half,
+                dots: 0,
+            },
+            notes: vec![Note {
+                string: 1,
+                fret,
+                technique,
+                tied: false,
+            }],
+        };
+        score.tracks[0].measures[0].voices[0].beats = vec![half(0, technique), half(5, None)];
+        score
+    }
+
+    fn render_seconds(path: &std::path::Path, score: &Score, seconds: usize) -> Vec<f32> {
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(score);
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100 * seconds];
+        player.render(&mut buf);
+        buf
+    }
+
+    #[test]
+    fn a_slide_changes_the_sound_only_once_the_glide_starts() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let plain = render_seconds(&path, &two_notes(None), 2);
+        let slid = render_seconds(&path, &two_notes(Some(Technique::Slide)), 2);
+
+        // At 120 bpm the first half note lasts 1 s and the glide covers its second half.
+        let before_glide = 2 * 22_050;
+        assert_eq!(plain[..before_glide], slid[..before_glide]);
+        assert!(
+            plain[before_glide..2 * 44_100]
+                .iter()
+                .zip(&slid[before_glide..2 * 44_100])
+                .any(|(a, b)| (a - b).abs() > 1e-3),
+            "the glide should be audible"
+        );
+        assert!(slid.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
     }
 }
