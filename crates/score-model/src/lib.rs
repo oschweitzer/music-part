@@ -30,7 +30,9 @@ pub struct Track {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instrument {
+    /// Nylon-string acoustic guitar.
     Guitar,
+    ElectricGuitar,
     Bass,
     Violin,
 }
@@ -210,12 +212,40 @@ pub const BASS_STANDARD: [u8; 4] = [43, 38, 33, 28];
 pub const VIOLIN_STANDARD: [u8; 4] = [76, 69, 62, 55];
 
 impl Instrument {
+    pub const ALL: [Instrument; 4] = [
+        Instrument::Guitar,
+        Instrument::ElectricGuitar,
+        Instrument::Bass,
+        Instrument::Violin,
+    ];
+
     /// Open-string pitches, highest string first.
     pub fn standard_tuning(self) -> &'static [u8] {
         match self {
-            Instrument::Guitar => &GUITAR_STANDARD,
+            Instrument::Guitar | Instrument::ElectricGuitar => &GUITAR_STANDARD,
             Instrument::Bass => &BASS_STANDARD,
             Instrument::Violin => &VIOLIN_STANDARD,
+        }
+    }
+
+    /// The General MIDI program (0 to 127) that sounds closest to the instrument.
+    pub fn midi_program(self) -> u8 {
+        match self {
+            Instrument::Guitar => 24,         // Acoustic Guitar (nylon)
+            Instrument::ElectricGuitar => 27, // Electric Guitar (clean)
+            Instrument::Bass => 33,           // Electric Bass (finger)
+            Instrument::Violin => 40,
+        }
+    }
+
+    /// The instrument for a General MIDI program, when a file names one: steel and electric
+    /// guitars, basses and violin are told apart, everything else is a guitar.
+    pub fn from_midi_program(program: Option<u8>) -> Instrument {
+        match program {
+            Some(26..=31) => Instrument::ElectricGuitar,
+            Some(32..=39) => Instrument::Bass,
+            Some(40) => Instrument::Violin,
+            _ => Instrument::Guitar,
         }
     }
 }
@@ -242,11 +272,27 @@ mod tests {
 
     #[test]
     fn standard_tunings_are_listed_highest_string_first() {
-        for instrument in [Instrument::Guitar, Instrument::Bass, Instrument::Violin] {
+        for instrument in Instrument::ALL {
             let tuning = instrument.standard_tuning();
             assert!(tuning.windows(2).all(|w| w[0] > w[1]), "{instrument:?}");
         }
         assert_eq!(Instrument::Bass.standard_tuning().len(), 4);
+    }
+
+    #[test]
+    fn midi_programs_round_trip_for_every_instrument() {
+        for instrument in Instrument::ALL {
+            assert_eq!(
+                Instrument::from_midi_program(Some(instrument.midi_program())),
+                instrument
+            );
+        }
+        assert_eq!(Instrument::from_midi_program(None), Instrument::Guitar);
+        assert_eq!(Instrument::from_midi_program(Some(0)), Instrument::Guitar);
+        assert_eq!(
+            Instrument::from_midi_program(Some(29)),
+            Instrument::ElectricGuitar
+        );
     }
 
     #[test]

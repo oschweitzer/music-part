@@ -35,7 +35,11 @@
     ],
     "resources": {
       "../assets/soundfonts/GeneralUser-GS.sf2": "soundfont/GeneralUser-GS.sf2",
-      "../assets/soundfonts/GeneralUser-GS-LICENSE.txt": "soundfont/GeneralUser-GS-LICENSE.txt"
+      "../assets/soundfonts/GeneralUser-GS-LICENSE.txt": "soundfont/GeneralUser-GS-LICENSE.txt",
+      "../assets/soundfonts/banks/nylon-guitar.sf2": "soundfont/banks/nylon-guitar.sf2",
+      "../assets/soundfonts/banks/electric-guitar.sf2": "soundfont/banks/electric-guitar.sf2",
+      "../assets/soundfonts/banks/electric-bass.sf2": "soundfont/banks/electric-bass.sf2",
+      "../assets/soundfonts/banks-LICENSE.txt": "soundfont/banks-LICENSE.txt"
     }
   }
 }

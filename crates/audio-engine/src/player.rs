@@ -1,4 +1,5 @@
 use std::io::{Read, Seek};
+use std::ops::RangeInclusive;
 
 use oxisynth::{MidiEvent, SoundFont, Synth, SynthDescriptor};
 use score_model::{Instrument, Score};
@@ -25,6 +26,39 @@ impl std::fmt::Display for PlayerError {
 
 impl std::error::Error for PlayerError {}
 
+/// The most tracks a score can have (see `Score::validate`); each gets its own channels.
+const MAX_TRACKS: usize = 64;
+/// Where the fallback channels start: after every track channel. Channel 9 (percussion) is skipped.
+const FALLBACK_BASE: usize = MAX_TRACKS + 6;
+const SYNTH_GAIN: f32 = 0.6;
+/// The synthesizer wants a multiple of 16.
+const SYNTH_CHANNELS: u8 = ((FALLBACK_BASE + MAX_TRACKS).div_ceil(16) * 16) as u8;
+
+/// The MIDI channels of a track, and what it plays.
+struct Channel {
+    channel: u8,
+    /// Plays the notes a sample bank has no recording for, with the General MIDI sound.
+    fallback: u8,
+    /// General MIDI program, used when no sample bank is set for the instrument.
+    program: u8,
+    instrument: Instrument,
+}
+
+impl Channel {
+    fn both(&self) -> [u8; 2] {
+        [self.channel, self.fallback]
+    }
+}
+
+/// A SoundFont that replaces the General MIDI sound of one instrument.
+struct Bank {
+    instrument: Instrument,
+    /// Bank number the SoundFont answers to.
+    number: u8,
+    /// Keys the recordings cover; notes outside are played with the General MIDI sound.
+    keys: RangeInclusive<u8>,
+}
+
 /// Everything the player needs to play one score, precomputed so that handing it to a running
 /// player is a cheap swap. Build it away from the real-time audio thread.
 pub struct Program {
@@ -35,7 +69,7 @@ pub struct Program {
     tempo_bpm: u16,
     sample_rate: u32,
     /// MIDI channel and General MIDI program of each track.
-    voices: Vec<(u8, u8)>,
+    voices: Vec<Channel>,
 }
 
 impl Program {
@@ -49,20 +83,21 @@ impl Program {
             .last()
             .map_or(0, |last| last + RELEASE_TAIL_SECS * u64::from(sample_rate));
 
-        // One MIDI channel per track, skipping channel 9 (percussion).
+        // Two MIDI channels per track (the synthesizer is given enough of them), skipping the
+        // percussion channel 9.
         let voices = score
             .tracks
             .iter()
+            .take(MAX_TRACKS)
             .enumerate()
             .map(|(i, track)| {
-                let channel = (i % 15) as u8;
-                let channel = if channel >= 9 { channel + 1 } else { channel };
-                let program = match track.instrument {
-                    Instrument::Guitar => 24, // Nylon Guitar
-                    Instrument::Bass => 33,   // Electric Bass (finger)
-                    Instrument::Violin => 40,
-                };
-                (channel, program)
+                let channel = (i + usize::from(i >= 9)) as u8;
+                Channel {
+                    channel,
+                    fallback: (FALLBACK_BASE + i) as u8,
+                    program: track.instrument.midi_program(),
+                    instrument: track.instrument,
+                }
             })
             .collect();
 
@@ -88,6 +123,18 @@ impl Program {
     }
 }
 
+/// Bank Select (most significant byte) controller.
+const BANK_SELECT_MSB: u8 = 0;
+/// Sample banks a player can hold. Bank numbers stay well under the 128 a controller can carry.
+const MAX_BANKS: u8 = 32;
+
+/// The SF2 parser panics on some corrupted files: turn that into an error.
+fn read_soundfont<R: Read + Seek>(soundfont: &mut R) -> Result<SoundFont, PlayerError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| SoundFont::load(soundfont)))
+        .map_err(|_| PlayerError::SoundFont("corrupted file or not an SF2".into()))?
+        .map_err(|e| PlayerError::SoundFont(format!("{e:?}")))
+}
+
 /// Plays a score through a SoundFont synth. Does not touch audio hardware:
 /// `render` fills an interleaved stereo buffer, so it works offline.
 pub struct Player {
@@ -98,21 +145,21 @@ pub struct Player {
     playing: bool,
     /// Which tracks make sound, by track index; a track past the end of the list does.
     audible: Vec<bool>,
+    /// Sample banks: the bank number each instrument's SoundFont answers to.
+    banks: Vec<Bank>,
 }
 
 impl Player {
     pub fn new<R: Read + Seek>(soundfont: &mut R, sample_rate: u32) -> Result<Self, PlayerError> {
         let mut synth = Synth::new(SynthDescriptor {
             sample_rate: sample_rate as f32,
+            midi_channels: SYNTH_CHANNELS,
+            // The default (0.2) leaves a piece quiet; this keeps a dense chord well under clipping.
+            gain: SYNTH_GAIN,
             ..Default::default()
         })
         .map_err(|e| PlayerError::Synth(format!("{e:?}")))?;
-        // The SF2 parser panics on some corrupted files: turn that into an error.
-        let font =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| SoundFont::load(soundfont)))
-                .map_err(|_| PlayerError::SoundFont("corrupted file or not an SF2".into()))?
-                .map_err(|e| PlayerError::SoundFont(format!("{e:?}")))?;
-        synth.add_font(font, true);
+        synth.add_font(read_soundfont(soundfont)?, true);
 
         Ok(Self {
             synth,
@@ -121,7 +168,39 @@ impl Player {
             position: 0,
             playing: false,
             audible: Vec::new(),
+            banks: Vec::new(),
         })
+    }
+
+    /// Plays the tracks of `instrument` with the sounds of another SoundFont (a sample bank made
+    /// of one instrument, as its first preset), instead of the General MIDI sound of the base
+    /// one. `keys` are the MIDI keys the recordings cover: a note outside them is played with the
+    /// General MIDI sound rather than left silent. Call before loading a score. A second bank for
+    /// the same instrument replaces the first.
+    pub fn add_bank<R: Read + Seek>(
+        &mut self,
+        instrument: Instrument,
+        soundfont: &mut R,
+        keys: RangeInclusive<u8>,
+    ) -> Result<(), PlayerError> {
+        let font = read_soundfont(soundfont)?;
+        // Bank 0 is the base SoundFont; each bank takes the next number, shifting its presets.
+        let number = u8::try_from(self.banks.len() + 1)
+            .ok()
+            .filter(|b| *b <= MAX_BANKS)
+            .ok_or_else(|| PlayerError::SoundFont("too many sample banks".into()))?;
+        let id = self.synth.add_font(font, false);
+        self.synth.set_bank_offset(id, u32::from(number));
+        self.banks.push(Bank {
+            instrument,
+            number,
+            keys,
+        });
+        Ok(())
+    }
+
+    fn bank_of(&self, instrument: Instrument) -> Option<&Bank> {
+        self.banks.iter().rev().find(|b| b.instrument == instrument)
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -131,21 +210,39 @@ impl Player {
     /// Replaces the score being played. Stops and rewinds.
     pub fn load(&mut self, program: Program) {
         self.stop();
-        for &(channel, program_id) in &program.voices {
-            let _ = self.synth.send_event(MidiEvent::ProgramChange {
-                channel,
-                program_id,
-            });
-            // Registered parameter 0 is the pitch wheel range, in semitones.
-            for (ctrl, value) in [(101, 0), (100, 0), (6, BEND_RANGE_SEMITONES as u8)] {
-                let _ = self.synth.send_event(MidiEvent::ControlChange {
-                    channel,
-                    ctrl,
-                    value,
-                });
-            }
+        for voice in &program.voices {
+            // A sample bank for the instrument sits at its own bank number, with the sound at
+            // program 0; the fallback channel and instruments without a bank use the General
+            // MIDI sound of the base SoundFont.
+            let bank = self.bank_of(voice.instrument).map(|b| b.number);
+            self.set_sound(
+                voice.channel,
+                bank.unwrap_or(0),
+                bank.map_or(voice.program, |_| 0),
+            );
+            self.set_sound(voice.fallback, 0, voice.program);
         }
         self.program = program;
+    }
+
+    fn set_sound(&mut self, channel: u8, bank: u8, program_id: u8) {
+        let _ = self.synth.send_event(MidiEvent::ControlChange {
+            channel,
+            ctrl: BANK_SELECT_MSB,
+            value: bank,
+        });
+        let _ = self.synth.send_event(MidiEvent::ProgramChange {
+            channel,
+            program_id,
+        });
+        // Registered parameter 0 is the pitch wheel range, in semitones.
+        for (ctrl, value) in [(101, 0), (100, 0), (6, BEND_RANGE_SEMITONES as u8)] {
+            let _ = self.synth.send_event(MidiEvent::ControlChange {
+                channel,
+                ctrl,
+                value,
+            });
+        }
     }
 
     /// Convenience for offline use: builds the `Program` for the player's sample rate.
@@ -173,8 +270,10 @@ impl Player {
     /// that point are not started: playback picks up with the next note.
     pub fn seek(&mut self, ticks: f64) {
         // Cut the sound, not just release it: the notes of the old position must not ring on.
-        for &(channel, _) in &self.program.voices {
-            let _ = self.synth.send_event(MidiEvent::AllSoundOff { channel });
+        for voice in &self.program.voices {
+            for channel in voice.both() {
+                let _ = self.synth.send_event(MidiEvent::AllSoundOff { channel });
+            }
         }
         self.silence();
         let ticks = if ticks.is_finite() {
@@ -199,9 +298,11 @@ impl Player {
     /// the ones that stop now; the others start with their next note.
     pub fn set_audible(&mut self, audible: Vec<bool>) {
         self.audible = audible;
-        for (track, &(channel, _)) in self.program.voices.iter().enumerate() {
+        for (track, voice) in self.program.voices.iter().enumerate() {
             if !self.is_audible(track) {
-                let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
+                for channel in voice.both() {
+                    let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
+                }
             }
         }
     }
@@ -225,12 +326,14 @@ impl Player {
     }
 
     fn silence(&mut self) {
-        for &(channel, _) in &self.program.voices {
-            let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
-            let _ = self.synth.send_event(MidiEvent::PitchBend {
-                channel,
-                value: BEND_CENTER,
-            });
+        for voice in &self.program.voices {
+            for channel in voice.both() {
+                let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
+                let _ = self.synth.send_event(MidiEvent::PitchBend {
+                    channel,
+                    value: BEND_CENTER,
+                });
+            }
         }
     }
 
@@ -267,23 +370,48 @@ impl Player {
         if matches!(e.action, Action::NoteOn { .. }) && !self.is_audible(e.track) {
             return;
         }
-        let Some(&(channel, _)) = self.program.voices.get(e.track) else {
+        let Some(voice) = self.program.voices.get(e.track) else {
             return;
         };
-        let event = match e.action {
-            Action::NoteOn { pitch, velocity } => MidiEvent::NoteOn {
-                channel,
-                key: pitch,
-                vel: velocity,
-            },
-            Action::NoteOff { pitch } => MidiEvent::NoteOff {
-                channel,
-                key: pitch,
-            },
-            Action::PitchBend(value) => MidiEvent::PitchBend { channel, value },
+        let (main, fallback) = (voice.channel, voice.fallback);
+        let keys = self.bank_of(voice.instrument).map(|b| b.keys.clone());
+        // A note the sample bank did not record goes to the General MIDI channel.
+        let channel_for = |pitch: u8| match &keys {
+            Some(keys) if !keys.contains(&pitch) => fallback,
+            _ => main,
+        };
+        let events = match e.action {
+            Action::NoteOn { pitch, velocity } => [
+                Some(MidiEvent::NoteOn {
+                    channel: channel_for(pitch),
+                    key: pitch,
+                    vel: velocity,
+                }),
+                None,
+            ],
+            Action::NoteOff { pitch } => [
+                Some(MidiEvent::NoteOff {
+                    channel: channel_for(pitch),
+                    key: pitch,
+                }),
+                None,
+            ],
+            // The wheel moves the notes of both channels together.
+            Action::PitchBend(value) => [
+                Some(MidiEvent::PitchBend {
+                    channel: main,
+                    value,
+                }),
+                keys.is_some().then_some(MidiEvent::PitchBend {
+                    channel: fallback,
+                    value,
+                }),
+            ],
         };
         // An out-of-range note must not interrupt playback.
-        let _ = self.synth.send_event(event);
+        for event in events.into_iter().flatten() {
+            let _ = self.synth.send_event(event);
+        }
     }
 }
 
@@ -569,5 +697,191 @@ mod tests {
         player.play();
         player.render(&mut buf);
         assert!(buf.iter().any(|s| s.abs() > 0.01));
+    }
+
+    /// A sample bank fetched by `pnpm fetch:soundfont`, or `None` to skip the test.
+    fn test_bank(file: &str) -> Option<std::path::PathBuf> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/soundfonts/banks")
+            .join(file);
+        path.exists().then_some(path)
+    }
+
+    fn render_with_bank(
+        base: &std::path::Path,
+        bank: Option<(Instrument, &std::path::Path, RangeInclusive<u8>)>,
+        score: &Score,
+    ) -> Vec<f32> {
+        let mut player = Player::new(&mut File::open(base).unwrap(), 44_100).unwrap();
+        if let Some((instrument, path, keys)) = bank {
+            player
+                .add_bank(instrument, &mut File::open(path).unwrap(), keys)
+                .unwrap();
+        }
+        player.load_score(score);
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100];
+        player.render(&mut buf);
+        buf
+    }
+
+    #[test]
+    fn a_sample_bank_changes_the_sound_of_its_instrument_and_nothing_else() {
+        let (Some(base), Some(nylon)) = (test_soundfont(), test_bank("nylon-guitar.sf2")) else {
+            eprintln!("no SoundFont or sample bank available, test skipped");
+            return;
+        };
+        let guitar = one_note_score();
+        let mut bass = one_note_score();
+        bass.tracks[0].instrument = Instrument::Bass;
+        bass.tracks[0].tuning = Instrument::Bass.standard_tuning().to_vec();
+
+        let plain = render_with_bank(&base, None, &guitar);
+        let sampled = render_with_bank(&base, Some((Instrument::Guitar, &nylon, 0..=127)), &guitar);
+        assert_ne!(plain, sampled, "the recorded guitar sounds different");
+        let peak = sampled.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01 && peak <= 1.0, "peak {peak}");
+
+        // A bank for the guitar leaves the bass on the base SoundFont.
+        let bass_plain = render_with_bank(&base, None, &bass);
+        let bass_with_guitar_bank =
+            render_with_bank(&base, Some((Instrument::Guitar, &nylon, 0..=127)), &bass);
+        assert_eq!(bass_plain, bass_with_guitar_bank);
+    }
+
+    #[test]
+    fn every_bank_plays_its_instrument_over_the_whole_neck() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        for bank in &crate::SAMPLE_BANKS {
+            let Some(path) = test_bank(bank.file) else {
+                eprintln!("{} not fetched, skipped", bank.file);
+                continue;
+            };
+            let mut score = one_note_score();
+            score.tracks[0].instrument = bank.instrument;
+            score.tracks[0].tuning = bank.instrument.standard_tuning().to_vec();
+            let strings = score.tracks[0].tuning.len() as u8;
+            // Every string open and at the twelfth fret: the recorded range and beyond it.
+            for string in 1..=strings {
+                for fret in [0, 12, 24] {
+                    let note = &mut score.tracks[0].measures[0].voices[0].beats[0].notes[0];
+                    (note.string, note.fret) = (string, fret);
+                    let buf = render_with_bank(
+                        &base,
+                        Some((bank.instrument, &path, bank.keys())),
+                        &score,
+                    );
+                    let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+                    assert!(
+                        peak > 0.005,
+                        "{} string {string} fret {fret} is silent",
+                        bank.file
+                    );
+                    assert!(peak <= 1.0, "{} clips", bank.file);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_note_the_bank_did_not_record_is_played_with_the_base_sound() {
+        let (Some(base), Some(bass_bank)) = (test_soundfont(), test_bank("electric-bass.sf2"))
+        else {
+            eprintln!("no SoundFont or sample bank available, test skipped");
+            return;
+        };
+        let bank = crate::SAMPLE_BANKS
+            .iter()
+            .find(|b| b.instrument == Instrument::Bass)
+            .unwrap();
+        let mut score = one_note_score();
+        score.tracks[0].instrument = Instrument::Bass;
+        score.tracks[0].tuning = Instrument::Bass.standard_tuning().to_vec();
+        let note = &mut score.tracks[0].measures[0].voices[0].beats[0].notes[0];
+        // G2 string at the 24th fret is G4 (67), above the recorded keys.
+        (note.string, note.fret) = (1, 24);
+        assert!(67 > bank.last_key);
+
+        let with_bank = render_with_bank(
+            &base,
+            Some((Instrument::Bass, &bass_bank, bank.keys())),
+            &score,
+        );
+        let without = render_with_bank(&base, None, &score);
+        let difference = with_bank
+            .iter()
+            .zip(&without)
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            difference < 1e-4,
+            "the fallback should sound like the base SoundFont ({difference})"
+        );
+    }
+
+    #[test]
+    fn the_declared_key_ranges_match_the_recordings() {
+        for bank in &crate::SAMPLE_BANKS {
+            let Some(path) = test_bank(bank.file) else {
+                eprintln!("{} not fetched, skipped", bank.file);
+                continue;
+            };
+            let font = SoundFont::load(&mut File::open(path).unwrap()).unwrap();
+            let mut synth = Synth::new(SynthDescriptor {
+                sample_rate: 44_100.0,
+                ..Default::default()
+            })
+            .unwrap();
+            synth.add_font(font, true);
+
+            let audible: Vec<u8> = (0..128u8)
+                .filter(|&key| {
+                    let _ = synth.send_event(MidiEvent::AllSoundOff { channel: 0 });
+                    // Let the reverb of the key before die out, or it is heard as this key.
+                    for _ in 0..44_100 {
+                        synth.read_next();
+                    }
+                    let _ = synth.send_event(MidiEvent::NoteOn {
+                        channel: 0,
+                        key,
+                        vel: 100,
+                    });
+                    let peak = (0..4410).fold(0.0f32, |m, _| {
+                        let (l, r) = synth.read_next();
+                        m.max(l.abs()).max(r.abs())
+                    });
+                    peak > 0.001
+                })
+                .collect();
+            assert_eq!(
+                (audible.first().copied(), audible.last().copied()),
+                (Some(bank.first_key), Some(bank.last_key)),
+                "{}",
+                bank.file
+            );
+            assert_eq!(
+                audible.len(),
+                usize::from(bank.last_key - bank.first_key) + 1,
+                "{} has gaps",
+                bank.file
+            );
+        }
+    }
+
+    #[test]
+    fn a_bank_that_is_not_a_soundfont_is_an_error_and_changes_nothing() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = Player::new(&mut File::open(base).unwrap(), 44_100).unwrap();
+        let mut junk = std::io::Cursor::new(vec![1u8; 100]);
+        assert!(matches!(
+            player.add_bank(Instrument::Bass, &mut junk, 0..=127),
+            Err(PlayerError::SoundFont(_))
+        ));
+        assert!(player.bank_of(Instrument::Bass).is_none());
     }
 }

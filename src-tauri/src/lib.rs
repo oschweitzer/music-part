@@ -22,6 +22,9 @@ use service::{OpenedDocument, Startup};
 /// Overrides the bundled SoundFont, for development.
 const SOUNDFONT_ENV: &str = "MUSIC_PART_SOUNDFONT";
 const SOUNDFONT_RESOURCE: &str = "soundfont/GeneralUser-GS.sf2";
+/// Overrides the folder of sample banks, for development.
+const BANKS_ENV: &str = "MUSIC_PART_BANKS";
+const BANKS_RESOURCE: &str = "soundfont/banks";
 const POSITION_EVENT: &str = "playback-position";
 const POSITION_INTERVAL: Duration = Duration::from_millis(33);
 
@@ -167,6 +170,16 @@ fn spawn_position_emitter(app: AppHandle) {
     });
 }
 
+/// The folder of sample banks. Banks missing from it are skipped one by one.
+fn banks_path(app: &tauri::App) -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os(BANKS_ENV) {
+        return Some(path.into());
+    }
+    app.path()
+        .resolve(BANKS_RESOURCE, BaseDirectory::Resource)
+        .ok()
+}
+
 fn soundfont_path(app: &tauri::App) -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os(SOUNDFONT_ENV) {
         return Ok(path.into());
@@ -203,7 +216,7 @@ pub fn run() {
             let audio = match soundfont_path(app) {
                 Ok(path) => {
                     eprintln!("SoundFont: {}", path.display());
-                    AudioController::start(path)
+                    AudioController::start(path, banks_path(app))
                 }
                 Err(reason) => {
                     eprintln!("Audio unavailable: {reason}");

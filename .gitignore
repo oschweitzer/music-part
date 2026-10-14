@@ -2,6 +2,6 @@ target/
 node_modules/
 dist/
 src-tauri/gen/
-assets/soundfonts/*.sf2
+assets/soundfonts/**/*.sf2
 assets/soundfonts/*.part
 src-tauri/tests-data/

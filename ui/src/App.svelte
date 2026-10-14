@@ -4,6 +4,7 @@
   import { createDocumentApi, type ExportFormat } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
+  import { INSTRUMENTS, instrumentLabel } from './lib/instruments'
   import { interpretKey } from './lib/keymap'
   import type { Instrument } from './lib/score-types'
   import { formatTuning } from './lib/tuning'
@@ -103,7 +104,6 @@
     void editor.exportAs(format)
   }
 
-  const instruments: Instrument[] = ['Guitar', 'Bass', 'Violin']
 
   function addTrack(event: MouseEvent, instrument: Instrument) {
     ;(event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
@@ -241,8 +241,8 @@
         <details class="add-track">
           <summary title="Add a track">+ Track</summary>
           <div class="menu">
-            {#each instruments as instrument (instrument)}
-              <button type="button" onmousedown={keepFocus} onclick={(event) => addTrack(event, instrument)}>{instrument}</button>
+            {#each INSTRUMENTS as instrument (instrument)}
+              <button type="button" onmousedown={keepFocus} onclick={(event) => addTrack(event, instrument)}>{instrumentLabel(instrument)}</button>
             {/each}
           </div>
         </details>
@@ -262,8 +262,8 @@
           <label class="track-field" title="The sound of this track. The strings stay as they are.">
             Sound
             <select value={track.instrument} aria-label="Instrument of this track" onchange={changeInstrument}>
-              {#each instruments as instrument (instrument)}
-                <option value={instrument}>{instrument}</option>
+              {#each INSTRUMENTS as instrument (instrument)}
+                <option value={instrument}>{instrumentLabel(instrument)}</option>
               {/each}
             </select>
           </label>

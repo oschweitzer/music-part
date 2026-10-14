@@ -8,7 +8,7 @@ use std::fmt;
 
 use midly::num::{u15, u24, u28, u4, u7};
 use midly::{Format, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
-use score_model::{Instrument, Score, Track};
+use score_model::{Score, Track};
 
 /// Pulses per quarter note. A tick of the score (1/128 of a whole note) is 15 of them.
 const PPQ: u16 = 480;
@@ -120,11 +120,7 @@ fn instrument_track<'a>(
     } else {
         channel
     });
-    let program = match track.instrument {
-        Instrument::Guitar => 24,
-        Instrument::Bass => 33,
-        Instrument::Violin => 40,
-    };
+    let program = track.instrument.midi_program();
 
     let mut events: Vec<(u32, TrackEventKind<'_>)> = vec![
         (
@@ -224,7 +220,7 @@ fn instrument_track<'a>(
 mod tests {
     use super::*;
     use crate::import_midi;
-    use score_model::{blank_score, demo_score, Edit};
+    use score_model::{blank_score, demo_score, Edit, Instrument};
 
     /// (start, end, pitch) of every sounding note of a track, ties merged, sorted.
     fn sounding(track: &Track) -> Vec<(u32, u32, u8)> {

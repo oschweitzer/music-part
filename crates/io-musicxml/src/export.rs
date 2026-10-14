@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use score_model::{Beat, Instrument, Note, Score, Technique, Track};
+use score_model::{Beat, Note, Score, Technique, Track};
 
 const DIVISIONS: u32 = 32;
 const PERCUSSION_CHANNEL: usize = 9;
@@ -60,11 +60,8 @@ fn write_score(out: &mut String, score: &Score) -> std::fmt::Result {
                 c
             }
         };
-        let program = match track.instrument {
-            Instrument::Guitar => 25,
-            Instrument::Bass => 34,
-            Instrument::Violin => 41,
-        };
+        // MusicXML counts programs from 1.
+        let program = track.instrument.midi_program() + 1;
         writeln!(
             out,
             r#"    <score-part id="P{n}"><part-name>{name}</part-name><score-instrument id="P{n}-I1"><instrument-name>{name}</instrument-name></score-instrument><midi-instrument id="P{n}-I1"><midi-channel>{channel}</midi-channel><midi-program>{program}</midi-program></midi-instrument></score-part>"#,
@@ -339,7 +336,7 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::import_musicxml;
-    use score_model::{apply_edit, blank_score, demo_score, Edit, Technique};
+    use score_model::{apply_edit, blank_score, demo_score, Edit, Instrument, Technique};
 
     /// What a round trip may change without changing the music: the order of the notes of a chord,
     /// and silent extra voices (the importer gives every measure of a part the same voices).

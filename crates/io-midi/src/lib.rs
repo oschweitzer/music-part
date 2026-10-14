@@ -252,14 +252,6 @@ fn quantize(tick: u64, ppq: u32) -> u32 {
     (units + GRID / 2) / GRID * GRID
 }
 
-fn instrument_for(program: Option<u8>) -> Instrument {
-    match program {
-        Some(32..=39) => Instrument::Bass,
-        Some(40) => Instrument::Violin,
-        _ => Instrument::Guitar,
-    }
-}
-
 /// Splits a length into durations. `len` is a multiple of `GRID`, so this always succeeds.
 fn decompose(len: u32) -> Vec<Duration> {
     decompose_ticks(len).expect("len is a multiple of GRID")
@@ -270,7 +262,7 @@ fn build_track(
     channel: &ChannelNotes,
     ts: TimeSignature,
 ) -> Result<(Track, usize), MidiImportError> {
-    let instrument = instrument_for(channel.program);
+    let instrument = Instrument::from_midi_program(channel.program);
     let tuning = instrument.standard_tuning().to_vec();
     let mut skipped_notes = 0;
 

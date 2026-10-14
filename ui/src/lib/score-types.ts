@@ -4,7 +4,7 @@ export type NoteValue = 'Whole' | 'Half' | 'Quarter' | 'Eighth' | 'Sixteenth' | 
 
 export type Technique = 'HammerOn' | 'PullOff' | 'Slide' | 'Bend' | 'PalmMute' | 'Harmonic'
 
-export type Instrument = 'Guitar' | 'Bass' | 'Violin'
+export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin'
 
 export type Note = {
   /** String number, 1 is the highest string. */

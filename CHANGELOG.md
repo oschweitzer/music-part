@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Playback with recordings: the nylon guitar, the electric guitar and the electric bass now play
+  sampled instruments (CC0 banks from FreePats, fetched by `pnpm fetch:soundfont`) instead of the
+  General MIDI sound. Notes a recording does not cover fall back to the General MIDI sound.
+- A new instrument, the electric guitar, and readable instrument names in the menus.
+- `render_wav` example: render a score or MIDI file to a WAV file to listen without the app.
 - Export the score as a MIDI file or as MusicXML (tablature staff with string and fret, ties,
   voices and techniques), from the new Export menu. `io-midi` and `io-musicxml` can now write.
 - `io-musicxml`: open MusicXML scores (`.musicxml`, `.xml`, compressed `.mxl`): parts, time
@@ -68,8 +73,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CI on Linux, Windows and macOS: format, lint and tests for Rust, plus type check, tests and build
   for the UI.
 
+### Changed
+
+- Playback is louder: the synthesizer gain went from 0.2 to 0.6.
+
 ### Fixed
 
+- A score with more than 15 tracks no longer makes tracks share a MIDI channel (and so an
+  instrument) during playback.
 - Typing a fret on a very high string no longer builds a note above MIDI pitch 127.
 - `io-midi`: the importer no longer panics or allocates without bound on unusual files: a zero
   time division, a time signature the grid cannot hold (such as 3/64), an extreme tempo, a huge

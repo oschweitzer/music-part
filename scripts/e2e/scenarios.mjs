@@ -457,7 +457,7 @@ export const scenarios = [
     async (context) => {
       const { page } = context
       await page.eval(`document.querySelector('.add-track summary').click()`)
-      await clickButton(page, 'Bass')
+      await clickButton(page, 'Electric bass')
       assert.equal((await document_(context)).score.tracks.length, 3)
       assert.equal(await page.eval(`document.querySelector('.track-tab.active').textContent.includes('Bass')`), true)
 

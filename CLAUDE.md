@@ -62,8 +62,9 @@ samples, then Guitar Pro import and more instruments.
 cargo test --workspace                          # Run all tests
 cargo fmt --all                                 # Format
 cargo clippy --workspace --all-targets -- -D warnings   # Lint, CI fails on any warning
-pnpm fetch:soundfont                            # Download the SoundFont (assets/soundfonts, not in git)
+pnpm fetch:soundfont                            # Download the SoundFont and the sample banks (assets/soundfonts, not in git)
 cargo run -p audio-engine --example play_midi -- song.mid assets/soundfonts/GeneralUser-GS.sf2
+cargo run -p audio-engine --release --example render_wav -- out.wav [song.mid] [--no-banks]   # Listen without the app
 ```
 
 ```bash
@@ -81,9 +82,10 @@ Run from the repo root and target a crate with `-p <name>`, never `cd` into a cr
 script with `pnpm --filter ui <script>`.
 
 `src-tauri` embeds `ui/dist` at compile time and the build checks that the bundled SoundFont exists,
-so on a fresh checkout run `pnpm --filter ui build` and `pnpm fetch:soundfont` once before
+so on a fresh checkout run `pnpm --filter ui build` and `pnpm fetch:soundfont` once (it also needs
+`pnpm install`: the `.7z` banks are unpacked by the `7z-wasm` dev dependency) before
 `cargo build`, `cargo clippy` or `cargo test --workspace`. Set `MUSIC_PART_SOUNDFONT` to use
-another SoundFont file in the app.
+another SoundFont file in the app, and `MUSIC_PART_BANKS` for another folder of sample banks.
 
 The dev server uses port 1420 (fixed, Tauri needs it). Port 5173 is often taken by other projects.
 
@@ -173,7 +175,8 @@ format, with Semantic Versioning once releases start.
   permission; see `LICENSE`). A new dependency must allow being combined with it: permissive licences
   (MIT, Apache-2.0, MPL-2.0) are fine, GPL and AGPL are not. `oxisynth` is LGPL-2.1: it stays under
   its own licence and must remain a replaceable library, never copied into our code. Audio assets
-  need an explicit open licence recorded next to them.
+  need an explicit open licence recorded next to them. `7z-wasm` (LGPL) is a build-time tool for
+  `pnpm fetch:soundfont` and is never shipped.
 - **CI**: GitHub Actions runs fmt, clippy and tests on Linux, Windows and macOS. Keep all three green.
 - **Markdown tables**: keep columns aligned, padding each cell so the `|` separators line up in
   the raw source.

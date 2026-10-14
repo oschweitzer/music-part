@@ -32,8 +32,9 @@ pnpm fetch:soundfont --force  # download again
 It lands in `assets/soundfonts/GeneralUser-GS.sf2` (git-ignored). The licence text is committed
 next to it, as the licence asks.
 
-The Tauri build bundles it (`bundle.resources` in `src-tauri/tauri.conf.json`) together with its
-licence text, so a release contains both. The build fails if the file is missing.
+The Tauri build bundles it and the sample banks (`bundle.resources` in
+`src-tauri/tauri.conf.json`) together with their licence texts, so a release contains them. The
+build fails if a file is missing.
 
 Audible-path tests in `audio-engine` use `$SOUNDFONT` if set, otherwise that default path, and skip
 when neither exists. CI fetches the file so those tests run there.
@@ -45,8 +46,51 @@ when neither exists. CI fetches the file so those tests run there.
 3. Run `cargo test -p audio-engine`: `every_demo_track_is_audible` checks that guitar and bass
    programs exist in the new bank and do not clip.
 
-## Realistic instrument samples
+## Sample banks: recordings of real instruments
 
-A General MIDI bank is the baseline. Realistic guitar, bass and violin recordings need a sampler
-with velocity layers and round-robin, planned in the roadmap. Every sample library added must have
-an explicit open licence (CC0 or CC-BY) recorded here.
+On top of the General MIDI bank, three instruments play recordings. Each bank is a small
+SoundFont of one instrument from the [FreePats](https://freepats.zenvoid.org/) project, published
+under **CC0 1.0** (public domain, no credit needed). They are fetched like the base bank, into
+`assets/soundfonts/banks/` (git-ignored), with a pinned checksum for the download and for the file
+inside it. Licence and sources are in [`banks-LICENSE.txt`](../assets/soundfonts/banks-LICENSE.txt).
+
+| Instrument      | File                  | Recording                                    | Keys covered | Size   |
+| --------------- | --------------------- | -------------------------------------------- | ------------ | ------ |
+| Nylon guitar    | `nylon-guitar.sf2`    | Spanish classical guitar                     | 29 to 88     | 19 MB  |
+| Electric guitar | `electric-guitar.sf2` | Fender, clean amp (small version, bridge)    | 35 to 86     | 10 MB  |
+| Electric bass   | `electric-bass.sf2`   | Yamaha RBX, played with the fingers          | 26 to 45     | 4 MB   |
+
+The violin has no free recording yet and keeps the General MIDI sound.
+
+How it works (`audio-engine::Player::add_bank`):
+
+- Each bank is loaded as another SoundFont, shifted to its own bank number; a track picks it with a
+  Bank Select message and program 0. Everything the base bank does (pitch wheel, mute, solo, seek)
+  works the same.
+- **Notes the recording does not cover** are played with the General MIDI sound. This matters for
+  the bass, whose recording stops at A2: higher notes go to a second channel of the same track that
+  uses the base bank, instead of staying silent. The covered keys are declared in
+  `SAMPLE_BANKS` (`audio-engine/src/lib.rs`) and a test checks them against the files.
+- A bank that is missing or broken is reported on the console and skipped: that instrument plays
+  with the General MIDI sound.
+- What is not there yet: round-robin, per-string recordings, and technique-specific samples
+  (hammer-on, palm mute...). Techniques are still the pitch wheel and velocity tricks of
+  [`editing.md`](editing.md).
+
+To listen without the app:
+
+```bash
+cargo run -p audio-engine --release --example render_wav -- target/demo.wav              # with banks
+cargo run -p audio-engine --release --example render_wav -- target/gm.wav --no-banks     # General MIDI only
+cargo run -p audio-engine --release --example render_wav -- out.wav song.mid             # a MIDI file
+```
+
+`MUSIC_PART_BANKS` points the app at another folder of banks, for development.
+
+### Adding or replacing a bank
+
+1. Find a sound with an explicit open licence (CC0 or CC-BY) and record it in `banks-LICENSE.txt`.
+2. Add it to `ASSETS` in `scripts/fetch-soundfont.mjs` (a `.7z` is unpacked by the `7z-wasm` dev
+   dependency, so no tool needs installing) and to `bundle.resources` in `tauri.conf.json`.
+3. Add it to `SAMPLE_BANKS`; `the_declared_key_ranges_match_the_recordings` gives the real range.
+4. Run `cargo test -p audio-engine`, then listen with `render_wav`.

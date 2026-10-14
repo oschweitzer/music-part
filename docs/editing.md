@@ -93,13 +93,13 @@ on that track at the same time. A bend always rises a whole tone: the model has 
 
 ## Tracks and tuning
 
-`+ Track` adds a guitar, bass or violin in standard tuning with empty measures matching the first
+`+ Track` adds a nylon guitar, electric guitar, electric bass or violin in standard tuning with empty measures matching the first
 track. `Remove track` deletes the current one (the last track cannot be removed). The tuning field
 takes note names from the highest string to the lowest, for example `E4 B3 G3 D3 A2 D2` (`#` and `b`
 are accepted, middle C is `C4`); the number of strings follows the number of names, up to 12. A
 tuning that would leave a note without a string, or above MIDI pitch 127, is refused.
 
-The track bar also has the track's name and its sound (guitar, bass or violin). Changing the sound
+The track bar also has the track's name and its sound (nylon guitar, electric guitar, electric bass or violin). Changing the sound
 keeps the strings: retune the track if they differ.
 
 ## Time signature

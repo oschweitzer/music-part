@@ -349,18 +349,20 @@ fn pitch_of(step: &str, alter: i32, octave: i32) -> Option<i32> {
 }
 
 fn instrument_for(info: Option<&PartInfo>) -> Instrument {
-    if let Some(program) = info.and_then(|i| i.midi_program) {
-        match program {
-            32..=39 => return Instrument::Bass,
-            40 => return Instrument::Violin,
-            _ => {}
-        }
+    // A program the file names wins when it is a guitar, bass or violin; a piano default is not.
+    if let Some(program) = info
+        .and_then(|i| i.midi_program)
+        .filter(|p| (24..=40).contains(p))
+    {
+        return Instrument::from_midi_program(Some(program));
     }
     let name = info
         .and_then(|i| i.name.as_deref())
         .unwrap_or_default()
         .to_lowercase();
-    if name.contains("bass") {
+    if name.contains("electric") && name.contains("guitar") {
+        Instrument::ElectricGuitar
+    } else if name.contains("bass") {
         Instrument::Bass
     } else if name.contains("violin") {
         Instrument::Violin

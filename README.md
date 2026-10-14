@@ -8,7 +8,8 @@ Status: early development. Not released yet.
 
 ## What works today
 
-- Tablature display with a playback cursor, and playback through a SoundFont.
+- Tablature display with a playback cursor, and playback through a SoundFont, with recorded
+  nylon guitar, electric guitar and bass (CC0 sample banks).
 - Writing: select a note, type frets, durations, dots, ties and techniques, measures, tempo, tracks
   and tuning. Undo and redo.
 - Files: the native `.mpart` format (save and open), MIDI import and MusicXML import.
