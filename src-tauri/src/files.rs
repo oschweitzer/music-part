@@ -94,6 +94,63 @@ pub fn save_score(path: &Path, score: &Score) -> Result<(), String> {
     io_native::write_file(path, score).map_err(|e| format!("Cannot save {}: {e}", path.display()))
 }
 
+/// A format a score can be exported to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportFormat {
+    Midi,
+    MusicXml,
+}
+
+impl ExportFormat {
+    fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Self::Midi => &["mid", "midi"],
+            Self::MusicXml => &["musicxml", "xml"],
+        }
+    }
+}
+
+/// The path with the extension of the format added when it has none that fits: the dialog may
+/// leave it off, and a MIDI file must not end up named like something else.
+pub fn export_target(path: &Path, format: ExportFormat) -> PathBuf {
+    let fits = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        format
+            .extensions()
+            .iter()
+            .any(|x| x.eq_ignore_ascii_case(e))
+    });
+    if fits {
+        path.to_path_buf()
+    } else {
+        path.with_extension(format.extensions()[0])
+    }
+}
+
+/// Writes the score in another format. Returns where it went. Nothing is left half written.
+pub fn export_score(path: &Path, format: ExportFormat, score: &Score) -> Result<PathBuf, String> {
+    let target = export_target(path, format);
+    let bytes = match format {
+        ExportFormat::Midi => io_midi::export_midi(score).map_err(|e| e.to_string())?,
+        ExportFormat::MusicXml => io_musicxml::export_musicxml(score).into_bytes(),
+    };
+    write_atomic(&target, &bytes)
+        .map_err(|e| format!("Cannot export to {}: {e}", target.display()))?;
+    Ok(target)
+}
+
+/// Writes next to the target and renames, so a failure never damages an existing file.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    let result = std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Size is checked before reading, so a wrong file cannot exhaust memory.
 fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     let size = std::fs::metadata(path)
@@ -191,6 +248,54 @@ mod tests {
         let html = dir.join("page.xml");
         std::fs::write(&html, "<html/>").unwrap();
         assert!(open_path(&html).err().unwrap().contains("not a MusicXML"));
+    }
+
+    #[test]
+    fn exports_add_the_extension_of_the_format_when_it_is_missing() {
+        let dir = scratch("export");
+        let score = demo_score();
+
+        let midi = export_score(&dir.join("song"), ExportFormat::Midi, &score).unwrap();
+        assert_eq!(midi, dir.join("song.mid"));
+        assert!(std::fs::read(&midi).unwrap().starts_with(b"MThd"));
+
+        let xml = export_score(&dir.join("song.XML"), ExportFormat::MusicXml, &score).unwrap();
+        assert_eq!(xml, dir.join("song.XML"), "an extension that fits is kept");
+        assert!(std::fs::read_to_string(&xml)
+            .unwrap()
+            .contains("<score-partwise"));
+
+        // A name that looks like another format is not used for this one.
+        let odd = export_score(&dir.join("notes.txt"), ExportFormat::Midi, &score).unwrap();
+        assert_eq!(odd, dir.join("notes.mid"));
+    }
+
+    #[test]
+    fn a_failed_export_leaves_no_file_behind() {
+        let dir = scratch("export-failure");
+        let missing = dir.join("no-such-folder").join("song.mid");
+        let error = export_score(&missing, ExportFormat::Midi, &demo_score()).unwrap_err();
+        assert!(error.contains("Cannot export"));
+        assert!(!missing.exists() && !dir.join("no-such-folder").exists());
+    }
+
+    #[test]
+    fn exported_files_can_be_opened_again() {
+        let dir = scratch("export-roundtrip");
+        let score = demo_score();
+        for (name, format) in [
+            ("a.mid", ExportFormat::Midi),
+            ("a.musicxml", ExportFormat::MusicXml),
+        ] {
+            let path = export_score(&dir.join(name), format, &score).unwrap();
+            let opened = open_path(&path).unwrap();
+            assert_eq!(
+                opened.document.score().tracks.len(),
+                score.tracks.len(),
+                "{name}"
+            );
+            assert_eq!(opened.skipped_notes, 0, "{name}");
+        }
     }
 
     #[test]

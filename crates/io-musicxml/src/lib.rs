@@ -9,6 +9,10 @@
 //! Like every importer, it never panics on a bad file: it returns an error, or leaves notes out
 //! and counts them in [`MusicXmlImport::skipped_notes`].
 
+mod export;
+
+pub use export::export_musicxml;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Cursor, Read};
@@ -599,6 +603,9 @@ fn technique_of(note: Node) -> Option<Technique> {
                 "pull-off" if ends => return Some(Technique::PullOff),
                 "harmonic" => return Some(Technique::Harmonic),
                 "bend" => return Some(Technique::Bend),
+                "other-technical" if element.text().map(str::trim) == Some("palm mute") => {
+                    return Some(Technique::PalmMute)
+                }
                 _ => {}
             }
         }

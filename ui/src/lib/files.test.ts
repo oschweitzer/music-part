@@ -17,6 +17,7 @@ describe('files', () => {
     expect(fileNameFor('My Song')).toBe('My Song.mpart')
     expect(fileNameFor('AC/DC: Back in Black?')).toBe('AC-DC- Back in Black-.mpart')
     expect(fileNameFor('   ')).toBe('Untitled.mpart')
+    expect(fileNameFor('My Song', 'mid')).toBe('My Song.mid')
     expect(fileNameFor('..hidden')).toBe('hidden.mpart')
     expect(fileNameFor('a\tb\nc')).toBe('a-b-c.mpart')
   })

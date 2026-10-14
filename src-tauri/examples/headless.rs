@@ -45,6 +45,15 @@ fn call(
             let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
             to_value(service::save_file(document, path)?)
         }
+        "export_file" => {
+            let format = serde_json::from_value(args.get("format").cloned().unwrap_or(Value::Null))
+                .map_err(|e| format!("invalid format: {e}"))?;
+            to_value(service::export_file(
+                document,
+                &string_arg(args, "path")?,
+                format,
+            )?)
+        }
         "edit_score" => {
             let edit = serde_json::from_value(args.get("edit").cloned().unwrap_or(Value::Null))
                 .map_err(|e| format!("invalid edit: {e}"))?;

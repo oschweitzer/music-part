@@ -82,6 +82,15 @@ fn save_file(
 }
 
 #[tauri::command]
+fn export_file(
+    path: String,
+    format: files::ExportFormat,
+    document: State<SharedDocument>,
+) -> Result<String, String> {
+    service::export_file(&locked(&document), &path, format)
+}
+
+#[tauri::command]
 fn edit_score(
     edit: Edit,
     document: State<SharedDocument>,
@@ -175,6 +184,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
         new_document,
         open_file,
         save_file,
+        export_file,
         edit_score,
         undo,
         redo,
@@ -373,5 +383,41 @@ mod tests {
         let error =
             invoke(&window, "set_audible", json!({ "audible": [true, false] })).unwrap_err();
         assert_eq!(error, json!("no audio in tests"));
+    }
+
+    #[test]
+    fn exporting_writes_the_file_and_leaves_the_document_alone() {
+        let (_app, window) = app();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/tauri-tests/ipc-export");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let written = invoke(
+            &window,
+            "export_file",
+            json!({ "path": dir.join("song").to_str().unwrap(), "format": "midi" }),
+        )
+        .unwrap();
+        assert!(written.as_str().unwrap().ends_with("song.mid"));
+        assert!(std::fs::read(dir.join("song.mid"))
+            .unwrap()
+            .starts_with(b"MThd"));
+
+        let error = invoke(
+            &window,
+            "export_file",
+            json!({ "path": "/x", "format": "pdf" }),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("pdf"), "{error}");
+
+        let state = invoke(&window, "undo", json!({})).unwrap();
+        assert_eq!(
+            state["path"],
+            Value::Null,
+            "exporting does not give the score a file"
+        );
+        assert_eq!(state["isDirty"], false);
     }
 }

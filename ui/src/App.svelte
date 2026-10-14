@@ -1,7 +1,7 @@
 <script lang="ts">
   import EditBar from './components/EditBar.svelte'
   import TabView from './components/TabView.svelte'
-  import { createDocumentApi } from './lib/document-api'
+  import { createDocumentApi, type ExportFormat } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
   import { interpretKey } from './lib/keymap'
@@ -98,6 +98,11 @@
     else input.value = String(score?.tempo_bpm ?? 120)
   }
 
+  function exportAs(event: MouseEvent, format: ExportFormat) {
+    ;(event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
+    void editor.exportAs(format)
+  }
+
   const instruments: Instrument[] = ['Guitar', 'Bass', 'Violin']
 
   function addTrack(event: MouseEvent, instrument: Instrument) {
@@ -146,6 +151,13 @@
         <button type="button" class="file-button" disabled={!editor.canEdit} title="New score (Ctrl+N)" onmousedown={keepFocus} onclick={() => editor.newDocument()}>New</button>
         <button type="button" class="file-button" disabled={!editor.canEdit} title="Open a score or MIDI file (Ctrl+O)" onmousedown={keepFocus} onclick={() => editor.openFile()}>Open</button>
         <button type="button" class="file-button" disabled={!editor.canEdit} title="Save (Ctrl+S)" onmousedown={keepFocus} onclick={() => editor.save()}>Save</button>
+        <details class="export-menu">
+          <summary class="file-button" title="Write the score as a MIDI or MusicXML file">Export</summary>
+          <div class="menu">
+            <button type="button" disabled={!editor.canEdit} onmousedown={keepFocus} onclick={(event) => exportAs(event, 'midi')}>MIDI file (.mid)</button>
+            <button type="button" disabled={!editor.canEdit} onmousedown={keepFocus} onclick={(event) => exportAs(event, 'musicXml')}>MusicXML (.musicxml)</button>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -672,6 +684,46 @@
     flex: none;
     gap: 4px;
     margin-left: 8px;
+  }
+
+  .export-menu {
+    position: relative;
+  }
+
+  .export-menu summary {
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .export-menu .menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    min-width: 190px;
+    margin-top: 4px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .export-menu .menu button {
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .export-menu .menu button:hover:not(:disabled) {
+    background: var(--surface-2);
   }
 
   .file-button {

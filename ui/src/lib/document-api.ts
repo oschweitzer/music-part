@@ -20,6 +20,9 @@ export type Edit =
   | { type: 'renameTrack'; track: number; name: string }
   | { type: 'setInstrument'; track: number; instrument: Instrument }
 
+/** A format a score can be exported to, besides the native one. */
+export type ExportFormat = 'midi' | 'musicXml'
+
 export type DocumentState = {
   score: Score
   /** Where the score is saved, or null if it has no file yet. */
@@ -46,6 +49,8 @@ export type DocumentApi = {
   open(path: string): Promise<OpenedDocument>
   /** Saves to `path`, or to the current file when null. */
   save(path: string | null): Promise<DocumentState>
+  /** Writes the score in another format and resolves with the path written. */
+  exportScore(args: { path: string; format: ExportFormat }): Promise<string>
   edit(edit: Edit): Promise<DocumentState>
   undo(): Promise<DocumentState>
   redo(): Promise<DocumentState>
@@ -70,6 +75,7 @@ function createTauriDocumentApi(): DocumentApi {
     newDocument: () => call('new_document'),
     open: (path) => call('open_file', { path }),
     save: (path) => call('save_file', { path }),
+    exportScore: ({ path, format }) => call('export_file', { path, format }),
     edit: (edit) => call('edit_score', { edit }),
     undo: () => call('undo'),
     redo: () => call('redo'),
@@ -92,6 +98,7 @@ function createBrowserDocumentApi(): DocumentApi {
     newDocument: needsDesktop,
     open: needsDesktop,
     save: needsDesktop,
+    exportScore: needsDesktop,
     edit: needsDesktop,
     undo: needsDesktop,
     redo: needsDesktop,

@@ -121,6 +121,14 @@ back to the state that was opened or saved clears the unsaved mark.
   existing file. A file saved by a newer version of the app is refused with a clear message.
 - **`.mid`** and **MusicXML** (`.musicxml`, `.xml`, `.mxl`) files can be opened, not saved. Opening
   one starts a new, unsaved score. See [`musicxml.md`](musicxml.md) for what is read.
+- **Export** (toolbar menu) writes the score as a MIDI file or as MusicXML. It does not save the
+  score or change its name, and the unsaved mark stays as it was. The extension is added when the
+  dialog leaves it off.
+  - MIDI: one track per instrument on its own channel, tempo and time signatures, ties merged
+    into long notes. Techniques are not written.
+  - MusicXML: one tablature staff per track with its tuning, string and fret on every note, ties,
+    voices, and the techniques (hammer-on, pull-off, slide, bend, harmonic, palm mute). Other
+    programs can show and play it, and Music Part reads it back to the same score.
 - The app asks before discarding unsaved changes: when opening a file, creating a score, or closing
   the window.
 - A file given on the command line, or dropped on the window, is opened.

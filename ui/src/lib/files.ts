@@ -1,6 +1,7 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ask, open, save } from '@tauri-apps/plugin-dialog'
+import type { ExportFormat } from './document-api'
 import { isTauri } from './score-source'
 
 /** The questions the editor asks the user about files. Injected so that tests can answer them. */
@@ -8,6 +9,8 @@ export type FilePrompts = {
   /** Resolves with a path, or null when the user cancels. */
   chooseFileToOpen(): Promise<string | null>
   chooseFileToSave(defaultName: string): Promise<string | null>
+  /** Where to write an export, or null if the user cancels. */
+  chooseFileToExport(args: { defaultName: string; format: ExportFormat }): Promise<string | null>
   /** True if the user accepts to lose their unsaved changes. */
   confirmDiscard(): Promise<boolean>
 }
@@ -25,6 +28,7 @@ export function createFilePrompts(): FilePrompts {
     return {
       chooseFileToOpen: async () => null,
       chooseFileToSave: async () => null,
+      chooseFileToExport: async () => null,
       confirmDiscard: async () => true,
     }
   }
@@ -46,6 +50,13 @@ export function createFilePrompts(): FilePrompts {
     async chooseFileToSave(defaultName) {
       return save({ defaultPath: defaultName, filters: [{ name: 'Music Part scores', extensions: ['mpart'] }] })
     },
+    async chooseFileToExport({ defaultName, format }) {
+      const filter =
+        format === 'midi'
+          ? { name: 'MIDI files', extensions: MIDI_EXTENSIONS }
+          : { name: 'MusicXML files', extensions: MUSICXML_EXTENSIONS }
+      return save({ defaultPath: defaultName, filters: [filter] })
+    },
     confirmDiscard() {
       return ask('You have unsaved changes. Discard them?', {
         title: 'Unsaved changes',
@@ -58,9 +69,9 @@ export function createFilePrompts(): FilePrompts {
 }
 
 /** A file name safe on every system, from a score title. */
-export function fileNameFor(title: string): string {
+export function fileNameFor(title: string, extension = 'mpart'): string {
   const cleaned = title.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
-  return `${cleaned || 'Untitled'}.mpart`
+  return `${cleaned || 'Untitled'}.${extension}`
 }
 
 /**

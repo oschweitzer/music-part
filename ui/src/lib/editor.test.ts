@@ -36,6 +36,7 @@ function fakeApi(overrides: Partial<DocumentApi> = {}) {
       edits.push(edit)
       return state({ isDirty: true, canUndo: true })
     },
+    exportScore: vi.fn(async ({ path }: { path: string }) => path),
     undo: vi.fn(async () => state()),
     redo: vi.fn(async () => state({ isDirty: true })),
     ...overrides,
@@ -52,6 +53,7 @@ function setup({
   const filePrompts: FilePrompts = {
     chooseFileToOpen: async () => '/music/chosen.mpart',
     chooseFileToSave: async () => '/music/saved.mpart',
+    chooseFileToExport: async () => '/music/exported.mid',
     confirmDiscard: async () => true,
     ...prompts,
   }
@@ -387,6 +389,40 @@ describe('Editor', () => {
       await editor.run({ type: 'remove' })
 
       expect(edits.map((e) => e.type)).toEqual(['removeNote'])
+    })
+  })
+
+  describe('exporting', () => {
+    it('should ask where to write, export, and say where the file went', async () => {
+      const chooseFileToExport = vi.fn(async (_args: { defaultName: string; format: string }) => '/music/song.mid')
+      const { api } = fakeApi()
+      const { editor } = setup({ api, prompts: { chooseFileToExport } })
+      await editor.start()
+      await editor.exportAs('midi')
+
+      expect(chooseFileToExport).toHaveBeenCalledWith({ defaultName: 'Demo in A minor.mid', format: 'midi' })
+      expect(api.exportScore).toHaveBeenCalledWith({ path: '/music/song.mid', format: 'midi' })
+      expect(editor.message?.text).toBe('Exported to /music/song.mid.')
+      expect(editor.isDirty).toBe(false)
+    })
+
+    it('should do nothing when the user cancels', async () => {
+      const { api } = fakeApi()
+      const { editor } = setup({ api, prompts: { chooseFileToExport: async () => null } })
+      await editor.start()
+      await editor.exportAs('musicXml')
+
+      expect(api.exportScore).not.toHaveBeenCalled()
+      expect(editor.message).toBeNull()
+    })
+
+    it('should show why an export failed', async () => {
+      const { api } = fakeApi({ exportScore: async () => Promise.reject(new Error('Cannot export to /x: no space')) })
+      const { editor } = setup({ api })
+      await editor.start()
+      await editor.exportAs('musicXml')
+
+      expect(editor.message).toEqual({ tone: 'error', text: 'Cannot export to /x: no space' })
     })
   })
 

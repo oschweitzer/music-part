@@ -1,4 +1,4 @@
-import type { DocumentApi, DocumentState, Edit, OpenedDocument } from './document-api'
+import type { DocumentApi, DocumentState, Edit, ExportFormat, OpenedDocument } from './document-api'
 import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
@@ -263,6 +263,21 @@ export class Editor {
     const path = await this.#prompts.chooseFileToSave(fileNameFor(this.document.score.title))
     if (path === null) return
     await this.#enqueue(async () => this.#apply(await this.#api.save(path)))
+  }
+
+  /** Asks where to write the score in another format, and writes it. The score stays as it is. */
+  async exportAs(format: ExportFormat): Promise<void> {
+    if (!this.document) return
+    const extension = format === 'midi' ? 'mid' : 'musicxml'
+    const path = await this.#prompts.chooseFileToExport({
+      defaultName: fileNameFor(this.document.score.title, extension),
+      format,
+    })
+    if (path === null) return
+    await this.#enqueue(async () => {
+      const written = await this.#api.exportScore({ path, format })
+      this.message = { tone: 'info', text: `Exported to ${written}.` }
+    })
   }
 
   async newDocument(): Promise<void> {

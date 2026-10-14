@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Export the score as a MIDI file or as MusicXML (tablature staff with string and fret, ties,
+  voices and techniques), from the new Export menu. `io-midi` and `io-musicxml` can now write.
 - `io-musicxml`: open MusicXML scores (`.musicxml`, `.xml`, compressed `.mxl`): parts, time
   signatures, tempo, tuning, tied notes, voices, and tablature strings and frets.
 - Editing: select several beats (Shift+arrows or Shift+click), copy, cut and paste them, and

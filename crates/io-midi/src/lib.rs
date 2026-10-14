@@ -10,6 +10,10 @@
 //!
 //! The importer never panics on odd input: it returns an error or leaves notes out and counts them.
 
+mod export;
+
+pub use export::{export_midi, MidiExportError};
+
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 

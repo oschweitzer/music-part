@@ -1,4 +1,4 @@
-# MusicXML import
+# MusicXML import and export
 
 `io-musicxml` reads `score-partwise` files, plain (`.musicxml`, `.xml`) or compressed (`.mxl`, found
 by its first bytes). `score-timewise` is refused. Reading is done with `roxmltree`, which bounds
@@ -38,3 +38,13 @@ the number of nodes and the expansion of entities; compressed files are read up 
   measures. At most 64 parts and 5000 measures are read.
 
 Techniques the model has but MusicXML has no standard way to say (palm mute) are not imported.
+
+## Export
+
+`export_musicxml` writes one part per track with a single `TAB` staff (`staff-details` with the
+tuning, `string` and `fret` on every note). Durations use 32 divisions per quarter note, the unit
+of the score, so nothing is rounded and importing the file gives the same music back. A test checks
+this on the demo score and on a score with ties, techniques, a second voice and a changing time
+signature. Hammer-ons and pull-offs are written as a start on the note before and a stop on the
+note, slides as a start and a stop; palm mute is written as `other-technical` text. The file is
+not compressed (no `.mxl`).

@@ -638,4 +638,30 @@ export const scenarios = [
       assert.equal((await frets(page)).length, 3, 'three notes are drawn')
     },
   ],
+
+  [
+    'the Export menu writes a MIDI and a MusicXML file and leaves the score as it was',
+    async (context) => {
+      const { page, out } = context
+      const exportAs = async (label, target) => {
+        await page.eval(`window.__e2e.answers.save.push(${JSON.stringify(target)})`)
+        await page.eval(`document.querySelector('.export-menu summary').click()`)
+        await clickButton(page, label)
+        await settle()
+      }
+
+      await exportAs('MIDI file (.mid)', join(out, 'exported-song'))
+      assert.ok(existsSync(join(out, 'exported-song.mid')), 'the extension was added')
+      assert.equal(readFileSync(join(out, 'exported-song.mid')).subarray(0, 4).toString(), 'MThd')
+      assert.match(await text(page, '.notice span'), /Exported to .*exported-song\.mid/)
+
+      await exportAs('MusicXML (.musicxml)', join(out, 'exported-song.musicxml'))
+      const xml = readFileSync(join(out, 'exported-song.musicxml'), 'utf8')
+      assert.match(xml, /<score-partwise/)
+      assert.match(xml, /Demo in A minor/)
+
+      assert.equal(await isDirty(page), false, 'exporting is not saving')
+      assert.equal((await document_(context)).path, null)
+    },
+  ],
 ]

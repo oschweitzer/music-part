@@ -92,6 +92,17 @@ pub fn save_file(document: &mut Document, path: Option<String>) -> Result<Docume
     Ok(document.state())
 }
 
+/// Writes the score in another format. The document is untouched: it is not renamed, nor saved.
+/// Returns the path written, which has the extension of the format.
+pub fn export_file(
+    document: &Document,
+    path: &str,
+    format: files::ExportFormat,
+) -> Result<String, String> {
+    let target = files::export_score(Path::new(path), format, document.score())?;
+    Ok(target.display().to_string())
+}
+
 pub fn edit_score(document: &mut Document, edit: &Edit) -> Result<DocumentState, String> {
     document.edit(edit).map_err(|e| e.to_string())?;
     Ok(document.state())
