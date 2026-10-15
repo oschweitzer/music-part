@@ -1,15 +1,18 @@
+import { isPitchedTrack } from './instruments'
 import type { Score } from './score-types'
+import { stepPitch } from './staff-layout'
 import { durationTicks } from './tab-layout'
 
 export type BeatPosition = { measure: number; beat: number }
 
 /**
- * The beat and string being edited, in the track shown on screen. With an `anchor`, the beats
- * from the anchor to this one are selected together (for copying or clearing), all their strings.
- * With an `anchorString` too, only the notes on the strings between it and this one are: a
- * rectangle over the tablature, as dragged with the mouse.
+ * The beat and row being edited, in the track of the editor. The row is a string (1 is the
+ * highest) on a fretted track, a MIDI pitch on a pitched track: what tells the notes of a beat
+ * apart (`noteRow`). With an `anchor`, the beats from the anchor to this one are selected together
+ * (for copying or clearing), all their notes. With an `anchorRow` too, only the notes on the
+ * strings, or at the pitches, between it and this one are: a rectangle as dragged with the mouse.
  */
-export type Selection = { measure: number; beat: number; string: number; anchor?: BeatPosition; anchorString?: number }
+export type Selection = { measure: number; beat: number; row: number; anchor?: BeatPosition; anchorRow?: number }
 
 export type Direction = 'left' | 'right' | 'up' | 'down'
 
@@ -18,13 +21,35 @@ export const FRET_TYPING_WINDOW_MS = 900
 
 const MAX_FRET = 24
 
-export const FIRST_NOTE: Selection = { measure: 0, beat: 0, string: 1 }
+export const FIRST_NOTE: Selection = { measure: 0, beat: 0, row: 1 }
+
+/** Where a pitched track is selected when nothing else says: middle C. */
+export const DEFAULT_PITCH = 60
+
+function isPitched(score: Score, track: number): boolean {
+  const target = score.tracks[track]
+  return target !== undefined && isPitchedTrack(target)
+}
+
+/** The first beat of a track, on its first string or at middle C. */
+export function firstSelection({ score, track }: { score: Score; track: number }): Selection {
+  return { measure: 0, beat: 0, row: isPitched(score, track) ? DEFAULT_PITCH : 1 }
+}
+
+/** The lowest and highest row of a track: its strings, or every MIDI pitch. */
+function rowRange(score: Score, track: number): { low: number; high: number } {
+  if (isPitched(score, track)) return { low: 0, high: 127 }
+  return { low: 1, high: Math.max(score.tracks[track]?.tuning.length ?? 1, 1) }
+}
 
 function beatCount(score: Score, track: number, measure: number): number {
   return score.tracks[track]?.measures[measure]?.voices[0]?.beats.length ?? 0
 }
 
-/** Moves along the beats (crossing barlines) or between strings. Stays put at the edges. */
+/**
+ * Moves along the beats (crossing barlines), or between strings, or on a pitched track one step of
+ * the staff (a line or a space) up or down. Stays put at the edges.
+ */
 export function moveSelection({
   score,
   track,
@@ -36,10 +61,11 @@ export function moveSelection({
   selection: Selection
   direction: Direction
 }): Selection {
-  const { anchor: _anchor, anchorString: _anchorString, ...current } = clampSelection({ score, track, selection })
-  const { measure, beat, string } = current
+  const { anchor: _anchor, anchorRow: _anchorRow, ...current } = clampSelection({ score, track, selection })
+  const { measure, beat, row } = current
   const measures = score.tracks[track]?.measures.length ?? 0
-  const strings = score.tracks[track]?.tuning.length ?? 1
+  const { low, high } = rowRange(score, track)
+  const pitched = isPitched(score, track)
 
   switch (direction) {
     case 'left':
@@ -51,16 +77,17 @@ export function moveSelection({
       if (measure < measures - 1) return { ...current, measure: measure + 1, beat: 0 }
       return current
     case 'up':
-      return { ...current, string: Math.max(1, string - 1) }
+      return { ...current, row: pitched ? stepPitch({ pitch: row, direction: 1 }) : Math.max(low, row - 1) }
     case 'down':
-      return { ...current, string: Math.min(strings, string + 1) }
+      return { ...current, row: pitched ? stepPitch({ pitch: row, direction: -1 }) : Math.min(high, row + 1) }
   }
 }
 
 /**
  * Moves the selection to the previous (`step` -1) or next (`step` 1) track, at the same moment: the
- * same measure, on the beat of that track that sounds when the selected beat starts. The string is
- * kept when the track has it. A range stays behind, since it belongs to its track. At the first or
+ * same measure, on the beat of that track that sounds when the selected beat starts. The row is
+ * kept when the track has it and its rows mean the same (strings, or pitches); else it is the
+ * first string, or middle C. A range stays behind, since it belongs to its track. At the first or
  * last track nothing moves.
  */
 export function moveToTrack({
@@ -77,7 +104,8 @@ export function moveToTrack({
   const target = track + step
   if (target < 0 || target >= score.tracks.length) return { track, selection }
 
-  const { measure, beat, string } = clampSelection({ score, track, selection })
+  const { measure, beat, row: current } = clampSelection({ score, track, selection })
+  const row = isPitched(score, track) === isPitched(score, target) ? current : firstSelection({ score, track: target }).row
   const startOf = (t: number, upTo: number) =>
     (score.tracks[t]?.measures[measure]?.voices[0]?.beats ?? [])
       .slice(0, upTo)
@@ -91,7 +119,7 @@ export function moveToTrack({
     if (start <= tick) found = i
     start += durationTicks(b.duration)
   })
-  return { track: target, selection: clampSelection({ score, track: target, selection: { measure, beat: found, string } }) }
+  return { track: target, selection: clampSelection({ score, track: target, selection: { measure, beat: found, row } }) }
 }
 
 /** Brings a selection back onto something that exists, after the score changed under it. */
@@ -105,15 +133,15 @@ export function clampSelection({
   selection: Selection | null
 }): Selection {
   const measures = score.tracks[track]?.measures.length ?? 0
-  const strings = score.tracks[track]?.tuning.length ?? 1
-  const wanted = selection ?? FIRST_NOTE
+  const { low, high } = rowRange(score, track)
+  const wanted = selection ?? firstSelection({ score, track })
 
   const measure = Math.min(Math.max(wanted.measure, 0), Math.max(measures - 1, 0))
   const beat = Math.min(Math.max(wanted.beat, 0), Math.max(beatCount(score, track, measure) - 1, 0))
-  const string = Math.min(Math.max(wanted.string, 1), strings)
-  const result: Selection = { measure, beat, string }
-  if (wanted.anchor && wanted.anchorString !== undefined) {
-    result.anchorString = Math.min(Math.max(wanted.anchorString, 1), strings)
+  const row = Math.min(Math.max(wanted.row, low), high)
+  const result: Selection = { measure, beat, row }
+  if (wanted.anchor && wanted.anchorRow !== undefined) {
+    result.anchorRow = Math.min(Math.max(wanted.anchorRow, low), high)
   }
   if (wanted.anchor) {
     const anchorMeasure = Math.min(Math.max(wanted.anchor.measure, 0), Math.max(measures - 1, 0))
@@ -138,27 +166,30 @@ export function extendSelection({
   const current = clampSelection({ score, track, selection })
   const anchor = current.anchor ?? { measure: current.measure, beat: current.beat }
   const moved = moveSelection({ score, track, selection: current, direction })
-  return { ...moved, anchor, ...(current.anchorString === undefined ? {} : { anchorString: current.anchorString }) }
+  return { ...moved, anchor, ...(current.anchorRow === undefined ? {} : { anchorRow: current.anchorRow }) }
 }
 
 const compare = (a: BeatPosition, b: BeatPosition) => a.measure - b.measure || a.beat - b.beat
 
 /**
  * The first and last selected beat, or null for a lone spot. One beat is a range when the selection
- * covers several of its strings.
+ * covers several of its rows.
  */
 export function selectedRange(selection: Selection | null): { from: BeatPosition; to: BeatPosition } | null {
   if (!selection?.anchor) return null
   const head = { measure: selection.measure, beat: selection.beat }
-  const coversStrings = selection.anchorString !== undefined && selection.anchorString !== selection.string
-  if (compare(head, selection.anchor) === 0 && !coversStrings) return null
+  const coversRows = selection.anchorRow !== undefined && selection.anchorRow !== selection.row
+  if (compare(head, selection.anchor) === 0 && !coversRows) return null
   return compare(selection.anchor, head) < 0 ? { from: selection.anchor, to: head } : { from: head, to: selection.anchor }
 }
 
-/** The strings a range is limited to, or null when it takes every string of its beats. */
-export function selectedStrings(selection: Selection | null): { first: number; last: number } | null {
-  if (!selection?.anchor || selection.anchorString === undefined) return null
-  return { first: Math.min(selection.anchorString, selection.string), last: Math.max(selection.anchorString, selection.string) }
+/**
+ * The rows a range is limited to (strings, or pitches), lowest number first, or null when it takes
+ * every note of its beats.
+ */
+export function selectedRows(selection: Selection | null): { first: number; last: number } | null {
+  if (!selection?.anchor || selection.anchorRow === undefined) return null
+  return { first: Math.min(selection.anchorRow, selection.row), last: Math.max(selection.anchorRow, selection.row) }
 }
 
 /** True for the beat of a lone selection, or any beat inside a selected range. */

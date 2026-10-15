@@ -16,8 +16,18 @@ export type TrackView = {
   collapsed: boolean[]
 }
 
+/**
+ * How the tracks of a fretted instrument are written: tablature, a standard staff, or both (the
+ * staff above the tablature). A pitched track (piano) is always written on its staff.
+ */
+export type FrettedView = 'tab' | 'staff' | 'both'
+
 const STORAGE_KEY = 'music-part-view'
+const FRETTED_KEY = 'music-part-fretted-view'
 const MODES: readonly ViewMode[] = ['tabs', 'rows']
+export const FRETTED_VIEWS: readonly FrettedView[] = ['tab', 'staff', 'both']
+
+export const frettedViewLabel: Record<FrettedView, string> = { tab: 'Tab', staff: 'Staff', both: 'Both' }
 
 export const viewModeLabel: Record<ViewMode, string> = { tabs: 'Tabs', rows: 'Rows' }
 
@@ -53,6 +63,24 @@ export function readViewMode(): ViewMode {
 export function saveViewMode(mode: ViewMode): void {
   try {
     globalThis.localStorage?.setItem(STORAGE_KEY, mode)
+  } catch {
+    // The choice just does not survive a restart.
+  }
+}
+
+/** The saved way of writing fretted tracks; anything odd, or no storage, means tablature only. */
+export function readFrettedView(): FrettedView {
+  try {
+    const saved = globalThis.localStorage?.getItem(FRETTED_KEY)
+    return FRETTED_VIEWS.find((view) => view === saved) ?? 'tab'
+  } catch {
+    return 'tab'
+  }
+}
+
+export function saveFrettedView(view: FrettedView): void {
+  try {
+    globalThis.localStorage?.setItem(FRETTED_KEY, view)
   } catch {
     // The choice just does not survive a restart.
   }

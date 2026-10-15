@@ -1,4 +1,23 @@
+import { isPitchedTrack } from './instruments'
+import { isFrettedNote, notePitch, noteRow } from './notes'
 import type { Beat, Duration, Measure, NoteValue, Technique, TimeSignature, Track } from './score-types'
+import {
+  C_MAJOR,
+  clefsFor,
+  engraveMeasure,
+  keySignatureWidth,
+  pitchAtPosition,
+  positionAt,
+  STAFF_METRICS,
+  staffBlock,
+  staffIndexFor,
+  type Clef,
+  type KeySignature,
+  type StaffBlock,
+  type StaffMeasure,
+  type StaffNoteInput,
+} from './staff-layout'
+import type { FrettedView } from './track-view'
 
 /** All distances are in SVG user units (1 unit = 1 CSS pixel at zoom 1). */
 export const METRICS = {
@@ -69,6 +88,8 @@ export type BeatLayout = {
 
 export type MeasureLayout = {
   index: number
+  /** The measure engraved on each staff of the system (`SystemLayout.staves`), in the same order. */
+  staves: StaffMeasure[]
   /** Absolute start position and length in 1/128 of a whole note. */
   startTick: number
   ticks: number
@@ -81,6 +102,12 @@ export type MeasureLayout = {
 
 export type SystemLayout = {
   y: number
+  /** Top and bottom of what the system draws (first staff line to the end of the tablature rhythm), for cursors and scrolling. */
+  top: number
+  bottom: number
+  /** Standard notation staves, above the tablature: none, one, or a grand staff of two. */
+  staves: StaffBlock[]
+  /** The tablature: its first and last string, and every string. No strings when the track shows no tablature. */
   staffTop: number
   staffBottom: number
   stringYs: number[]
@@ -89,7 +116,28 @@ export type SystemLayout = {
   measures: MeasureLayout[]
 }
 
-export type TabLayout = { width: number; height: number; systems: SystemLayout[] }
+/** What a selection row means in a layout: a string of the tablature, or a pitch of the staff. */
+export type RowKind = 'string' | 'pitch'
+
+export type TabLayout = {
+  width: number
+  height: number
+  systems: SystemLayout[]
+  rowKind: RowKind
+  key: KeySignature
+}
+
+/** How a track is written: its staves (clefs), and whether it has a tablature. */
+export type Notation = { clefs: Clef[]; hasTab: boolean }
+
+/**
+ * A pitched track is written on its staves only. A fretted track shows its tablature, its staff
+ * or both, as the view asks (`FrettedView`).
+ */
+export function notationOf({ track, fretted = 'tab' }: { track: Pick<Track, 'instrument'>; fretted?: FrettedView }): Notation {
+  if (isPitchedTrack(track)) return { clefs: clefsFor(track.instrument), hasTab: false }
+  return { clefs: fretted === 'tab' ? [] : clefsFor(track.instrument), hasTab: fretted !== 'staff' }
+}
 
 export function durationTicks({ value, dots }: Duration): number {
   let total = BASE_TICKS[value]
@@ -105,19 +153,34 @@ export function measureTicks({ numerator, denominator }: TimeSignature): number 
   return (numerator * TICKS_PER_WHOLE) / denominator
 }
 
-export function layoutTab({ track, width }: { track: Track; width: number }): TabLayout {
+/**
+ * Lays a track out on systems that wrap at `width`, like a printed page: its staves (when
+ * `fretted` asks for them, or always for a pitched track) above its tablature (unless `fretted`
+ * is 'staff', or the track has no strings).
+ */
+export function layoutTab({
+  track,
+  width,
+  fretted = 'tab',
+  key = C_MAJOR,
+}: {
+  track: Track
+  width: number
+  fretted?: FrettedView
+  key?: KeySignature
+}): TabLayout {
+  const notation = notationOf({ track, fretted })
   const stringCount = track.tuning.length
-  const staffHeight = (stringCount - 1) * METRICS.stringGap
-  const systemHeight = METRICS.topPad + staffHeight + METRICS.rhythmHeight
-  const innerWidth = Math.max(width - 2 * METRICS.marginX - METRICS.clefWidth, 160)
+  const head = headWidth({ notation, key })
+  const systemHeight = stackSystem({ notation, stringCount, y: 0 }).height
+  const innerWidth = Math.max(width - 2 * METRICS.marginX - head, 160)
 
   const draft = draftMeasures(track)
   const rows = breakIntoSystems({ draft, innerWidth })
 
   const systems = rows.map(({ measures, isLast }, rowIndex): SystemLayout => {
     const y = METRICS.marginX + rowIndex * (systemHeight + METRICS.systemGap)
-    const staffTop = y + METRICS.topPad
-    const stringYs = Array.from({ length: stringCount }, (_, i) => staffTop + i * METRICS.stringGap)
+    const stack = stackSystem({ notation, stringCount, y })
     const left = METRICS.marginX
 
     const fixed = measures.reduce((sum, m) => sum + m.fixedWidth, 0)
@@ -125,7 +188,7 @@ export function layoutTab({ track, width }: { track: Track; width: number }): Ta
     const shouldStretch = !isLast || natural / innerWidth >= METRICS.minLastLineFill
     const scale = shouldStretch ? (innerWidth - fixed) / measures.reduce((s, m) => s + m.slotsWidth, 0) : 1
 
-    let cursor = left + METRICS.clefWidth
+    let cursor = left + head
     const placed = measures.map((m) => {
       const firstBeatX = cursor + METRICS.measurePadLeft + (m.timeSignature ? METRICS.timeSignatureWidth : 0)
       const layout = placeMeasure({
@@ -133,21 +196,68 @@ export function layoutTab({ track, width }: { track: Track; width: number }): Ta
         x: cursor,
         width: m.fixedWidth + m.slotsWidth * scale,
         xs: beatXs(firstBeatX, m.slotWidths, scale),
-        stringYs,
-        staffBottom: staffTop + staffHeight,
+        stack,
+        key,
       })
       cursor += layout.width
       return layout
     })
 
     // A last line that is not stretched ends at its final barline.
-    const right = shouldStretch ? METRICS.marginX + METRICS.clefWidth + innerWidth : cursor
+    const right = shouldStretch ? METRICS.marginX + head + innerWidth : cursor
 
-    return { y, staffTop, staffBottom: staffTop + staffHeight, stringYs, left, right, measures: placed }
+    return { y, ...systemOf(stack), left, right, measures: placed }
   })
 
   const height = METRICS.marginX * 2 + systems.length * systemHeight + Math.max(systems.length - 1, 0) * METRICS.systemGap
-  return { width, height, systems }
+  return { width, height, systems, rowKind: rowKindOf(track), key }
+}
+
+function rowKindOf(track: Pick<Track, 'instrument'>): RowKind {
+  return isPitchedTrack(track) ? 'pitch' : 'string'
+}
+
+/** Room at the start of a system: the clef (or TAB) and the key signature of the staves. */
+function headWidth({ notation, key }: { notation: Notation; key: KeySignature }): number {
+  return METRICS.clefWidth + (notation.clefs.length > 0 ? keySignatureWidth(key) : 0)
+}
+
+/** Where the parts of a system go, from top to bottom: room for the measure numbers, the staves, the tablature and its rhythm. */
+type SystemStack = {
+  staves: StaffBlock[]
+  staffTop: number
+  staffBottom: number
+  stringYs: number[]
+  top: number
+  bottom: number
+  /** From the system's y to the end of what it draws. */
+  height: number
+}
+
+function stackSystem({ notation, stringCount, y }: { notation: Notation; stringCount: number; y: number }): SystemStack {
+  let cursor = y + METRICS.topPad
+  const staves = notation.clefs.map((clef, i) => {
+    cursor += i === 0 ? STAFF_METRICS.above : STAFF_METRICS.between
+    const block = staffBlock({ clef, top: cursor })
+    cursor = block.bottom
+    return block
+  })
+  const top = staves[0]?.top ?? cursor
+  if (!notation.hasTab) {
+    const bottom = cursor + STAFF_METRICS.below
+    return { staves, staffTop: cursor, staffBottom: cursor, stringYs: [], top, bottom, height: bottom - y }
+  }
+  if (staves.length > 0) cursor += STAFF_METRICS.below
+  const staffTop = cursor
+  const stringYs = Array.from({ length: stringCount }, (_, i) => staffTop + i * METRICS.stringGap)
+  const staffBottom = staffTop + Math.max(stringCount - 1, 0) * METRICS.stringGap
+  const bottom = staffBottom + METRICS.rhythmHeight
+  return { staves, staffTop, staffBottom, stringYs, top, bottom, height: bottom - y }
+}
+
+function systemOf(stack: SystemStack): Pick<SystemLayout, 'top' | 'bottom' | 'staves' | 'staffTop' | 'staffBottom' | 'stringYs'> {
+  const { staves, staffTop, staffBottom, stringYs, top, bottom } = stack
+  return { staves, staffTop, staffBottom, stringYs, top, bottom }
 }
 
 /** A track as the rows view shows it: its tablature in full, or folded down to its header. */
@@ -188,15 +298,32 @@ export type RowsLayout = {
  * the ones shown, so folding a row does not move the others. A piece shorter than `width` is
  * stretched to it.
  */
-export function layoutRows({ tracks, shown, width }: { tracks: Track[]; shown: ShownTrack[]; width: number }): RowsLayout {
+export function layoutRows({
+  tracks,
+  shown,
+  width,
+  fretted = 'tab',
+  key = C_MAJOR,
+}: {
+  tracks: Track[]
+  shown: ShownTrack[]
+  width: number
+  fretted?: FrettedView
+  key?: KeySignature
+}): RowsLayout {
   const drafts = tracks.map(draftMeasures)
-  const axis = layoutColumns({ drafts, width })
+  // Every row starts its measures at the same x, so the head is as wide as the widest one needs.
+  const head = Math.max(METRICS.clefWidth, ...tracks.map((track) => headWidth({ notation: notationOf({ track, fretted }), key })))
+  const axis = layoutColumns({ drafts, width, head })
 
   let top = 0
   const rows = shown.map(({ track, isCollapsed }): TrackRow => {
     const draft = drafts[track]
-    const stringCount = tracks[track]?.tuning.length ?? 0
-    const layout = isCollapsed || !draft ? null : placeRow({ draft, axis, stringCount })
+    const source = tracks[track]
+    const layout =
+      isCollapsed || !draft || !source
+        ? null
+        : placeRow({ draft, axis, notation: notationOf({ track: source, fretted }), stringCount: source.tuning.length, rowKind: rowKindOf(source), key })
     const row = { track, top, height: layout?.height ?? ROW_METRICS.collapsedHeight, layout }
     top += row.height
     return row
@@ -231,7 +358,7 @@ type Column = {
   onsets: { tick: number; ticks: number; x: number }[]
 }
 
-type Axis = { width: number; columns: Column[] }
+type Axis = { width: number; columns: Column[]; head: number }
 
 type DraftMeasure = {
   index: number
@@ -243,14 +370,25 @@ type DraftMeasure = {
   slotsWidth: number
   /** Width that does not stretch: padding and the time signature. */
   fixedWidth: number
+  /** The sounding pitches of each beat, for the staves. */
+  pitches: StaffNoteInput[][]
+  /** Pitches sounding at the end of the previous measure, which a tie can continue. */
+  carried: number[]
 }
 
 function draftMeasures(track: Track): DraftMeasure[] {
   let startTick = 0
   let previous: TimeSignature | null = null
+  let carried: number[] = []
 
   return track.measures.map((measure, index) => {
     const beats = measure.voices[0]?.beats ?? []
+    const pitches = beats.map((beat) =>
+      beat.notes.flatMap((note): StaffNoteInput[] => {
+        const pitch = notePitch({ track, note })
+        return pitch === null ? [] : [{ pitch, tied: note.tied === true, row: noteRow(note) }]
+      }),
+    )
     const signature = measure.time_signature
     const shouldShowSignature = previous === null || !sameSignature(previous, signature)
     previous = signature
@@ -266,7 +404,10 @@ function draftMeasures(track: Track): DraftMeasure[] {
       slotsWidth: slotWidths.reduce((sum, w) => sum + w, 0),
       fixedWidth:
         METRICS.measurePadLeft + METRICS.measurePadRight + (shouldShowSignature ? METRICS.timeSignatureWidth : 0),
+      pitches,
+      carried,
     }
+    carried = (pitches.at(-1) ?? []).map((p) => p.pitch)
     startTick += measureTicks(signature)
     return draft
   })
@@ -306,16 +447,17 @@ function placeMeasure({
   x,
   width,
   xs,
-  stringYs,
-  staffBottom,
+  stack,
+  key,
 }: {
   draft: DraftMeasure
   x: number
   width: number
   xs: number[]
-  stringYs: number[]
-  staffBottom: number
+  stack: Pick<SystemStack, 'staves' | 'stringYs' | 'staffBottom'>
+  key: KeySignature
 }): MeasureLayout {
+  const { stringYs, staffBottom } = stack
   const { beats, timeSignature } = draft
   const firstBeatX = x + METRICS.measurePadLeft + (timeSignature ? METRICS.timeSignatureWidth : 0)
 
@@ -329,9 +471,10 @@ function placeMeasure({
     const previousBeat = beats[i - 1]
     const ticks = durationTicks(beat.duration)
 
-    const notes = beat.notes.map((note) => {
+    // Only a fretted note has a place on the tablature.
+    const notes = beat.notes.filter(isFrettedNote).map((note) => {
       const isTied = note.tied === true
-      const hasLocalSource = previousBeat?.notes.some((n) => n.string === note.string) ?? false
+      const hasLocalSource = previousBeat?.notes.some((n) => isFrettedNote(n) && n.string === note.string) ?? false
       const tie = isTied
         ? { fromX: hasLocalSource && previousX !== undefined ? previousX + 6 : x + 2, toX: beatX - 7 }
         : null
@@ -363,14 +506,32 @@ function placeMeasure({
     return layout
   })
 
+  const staffCount = stack.staves.length
+  const staves = stack.staves.map((block, staff) =>
+    engraveMeasure({
+      beats: placed.map((beat, i) => ({
+        x: beat.x,
+        startTick: beat.startTick,
+        value: beat.value,
+        dots: beat.dots,
+        notes: (draft.pitches[i] ?? []).filter((n) => staffIndexFor({ pitch: n.pitch, staffCount }) === staff),
+      })),
+      block,
+      key,
+      measureX: x,
+      carried: draft.carried.filter((pitch) => staffIndexFor({ pitch, staffCount }) === staff),
+    }),
+  )
+
   return {
     index: draft.index,
+    staves,
     startTick: draft.startTick,
     ticks: measureTicks(draft.measure.time_signature),
     x,
     width,
     beats: placed,
-    beams: buildBeams({ beats: placed, stemBottom }),
+    beams: stringYs.length > 0 ? buildBeams({ beats: placed, stemBottom }) : [],
     timeSignature,
   }
 }
@@ -386,7 +547,7 @@ function beatXs(firstBeatX: number, slotWidths: number[], scale: number): number
 }
 
 /** Measure n of every track in one column, as wide as the track that needs most room. */
-function layoutColumns({ drafts, width }: { drafts: DraftMeasure[][]; width: number }): Axis {
+function layoutColumns({ drafts, width, head }: { drafts: DraftMeasure[][]; width: number; head: number }): Axis {
   const count = Math.max(0, ...drafts.map((d) => d.length))
   const raw = Array.from({ length: count }, (_, index) => {
     const inMeasure = drafts.flatMap((d) => d[index] ?? [])
@@ -417,13 +578,13 @@ function layoutColumns({ drafts, width }: { drafts: DraftMeasure[][]; width: num
     }
   })
 
-  const margins = 2 * METRICS.marginX + METRICS.clefWidth
+  const margins = 2 * METRICS.marginX + head
   const fixed = raw.reduce((sum, c) => sum + c.fixedWidth, 0)
   const slots = raw.reduce((sum, c) => sum + c.slotsWidth, 0)
   const natural = margins + fixed + slots
   const scale = natural < width && slots > 0 ? (width - margins - fixed) / slots : 1
 
-  let x = METRICS.marginX + METRICS.clefWidth
+  let x = METRICS.marginX + head
   const columns = raw.map((c): Column => {
     const xs = beatXs(x + METRICS.measurePadLeft + c.signatureWidth, c.slotWidths, scale)
     const column = {
@@ -437,14 +598,26 @@ function layoutColumns({ drafts, width }: { drafts: DraftMeasure[][]; width: num
     x += column.width
     return column
   })
-  return { width: Math.max(width, x + METRICS.marginX), columns }
+  return { width: Math.max(width, x + METRICS.marginX), columns, head }
 }
 
 /** One track on one line, its beats on the shared columns. */
-function placeRow({ draft, axis, stringCount }: { draft: DraftMeasure[]; axis: Axis; stringCount: number }): TabLayout {
-  const staffTop = METRICS.topPad
-  const staffBottom = staffTop + (stringCount - 1) * METRICS.stringGap
-  const stringYs = Array.from({ length: stringCount }, (_, i) => staffTop + i * METRICS.stringGap)
+function placeRow({
+  draft,
+  axis,
+  notation,
+  stringCount,
+  rowKind,
+  key,
+}: {
+  draft: DraftMeasure[]
+  axis: Axis
+  notation: Notation
+  stringCount: number
+  rowKind: RowKind
+  key: KeySignature
+}): TabLayout {
+  const stack = stackSystem({ notation, stringCount, y: 0 })
 
   const measures = draft.flatMap((m) => {
     const column = axis.columns[m.index]
@@ -456,20 +629,18 @@ function placeRow({ draft, axis, stringCount }: { draft: DraftMeasure[]; axis: A
       tick += durationTicks(beat.duration)
       return x
     })
-    return [placeMeasure({ draft: m, x: column.x, width: column.width, xs, stringYs, staffBottom })]
+    return [placeMeasure({ draft: m, x: column.x, width: column.width, xs, stack, key })]
   })
 
   const system: SystemLayout = {
     y: 0,
-    staffTop,
-    staffBottom,
-    stringYs,
+    ...systemOf(stack),
     left: METRICS.marginX,
     right: axis.width - METRICS.marginX,
     measures,
   }
-  const height = Math.max(staffBottom + METRICS.rhythmHeight + ROW_METRICS.bottomPad, ROW_METRICS.minHeight)
-  return { width: axis.width, height, systems: [system] }
+  const height = Math.max(stack.height + ROW_METRICS.bottomPad, ROW_METRICS.minHeight)
+  return { width: axis.width, height, systems: [system], rowKind, key }
 }
 
 /** The columns as a layout of empty beats, one per onset, for `locateTick`. */
@@ -481,6 +652,7 @@ function timelineOf(axis: Axis): TabLayout {
       ticks: column.ticks,
       x: column.x,
       width: column.width,
+      staves: [],
       beats: column.onsets.map((onset) => ({
         x: onset.x,
         startTick: column.startTick + onset.tick,
@@ -496,8 +668,19 @@ function timelineOf(axis: Axis): TabLayout {
       timeSignature: null,
     }),
   )
-  const system: SystemLayout = { y: 0, staffTop: 0, staffBottom: 0, stringYs: [], left: METRICS.marginX, right: axis.width - METRICS.marginX, measures }
-  return { width: axis.width, height: 0, systems: [system] }
+  const system: SystemLayout = {
+    y: 0,
+    top: 0,
+    bottom: 0,
+    staves: [],
+    staffTop: 0,
+    staffBottom: 0,
+    stringYs: [],
+    left: METRICS.marginX,
+    right: axis.width - METRICS.marginX,
+    measures,
+  }
+  return { width: axis.width, height: 0, systems: [system], rowKind: 'string', key: C_MAJOR }
 }
 
 /**
@@ -613,22 +796,44 @@ export function locateTick({ layout, tick }: { layout: TabLayout; tick: number }
 export type HitTarget = {
   measure: number
   beat: number
-  string: number
   /** Where the beat starts, in 1/128 of a whole note: the position to seek to. */
   tick: number
+  /** On the tablature or on a staff. */
+  area: 'tab' | 'staff'
+  /**
+   * What a selection points at there (see `RowKind`): the string under the point on the
+   * tablature; on a staff, the row of the note written at that line or space, else the pitch on
+   * a pitched track, else null (a fretted track has no string at an empty spot of its staff).
+   */
+  row: number | null
+  /** On a staff: the pitch of the note there, or the note of the key written at that line or space. */
+  pitch: number | null
 }
 
 /**
- * Finds the beat and string under a point of the page, or null if the point is not on a staff.
- * A click between two beats picks the nearest one, so no beat is hard to hit.
+ * Finds the beat and the string or pitch under a point of the page, or null if the point is not
+ * on a staff or a tablature. A click between two beats picks the nearest one, so no beat is hard
+ * to hit. The band of a staff reaches halfway to what is above and below it, for ledger lines.
  */
 export function hitTest({ layout, x, y }: { layout: TabLayout; x: number; y: number }): HitTarget | null {
   const half = METRICS.stringGap / 2
 
   for (const system of layout.systems) {
-    const top = system.staffTop - half
-    const bottom = system.staffBottom + half
-    if (y < top || y > bottom) continue
+    const hasTab = system.stringYs.length > 0
+    const tabTop = system.staffTop - half
+    const bands = system.staves.map((block, i) => {
+      const above = system.staves[i - 1]
+      const below = system.staves[i + 1]
+      return {
+        block,
+        index: i,
+        top: above ? (above.bottom + block.top) / 2 : block.top - STAFF_METRICS.above - METRICS.topPad / 2,
+        bottom: below ? (block.bottom + below.top) / 2 : hasTab ? (block.bottom + tabTop) / 2 : system.bottom,
+      }
+    })
+    const band = bands.find((b) => y >= b.top && y < b.bottom)
+    const isOnTab = hasTab && y >= tabTop && y <= system.staffBottom + half
+    if (!band && !isOnTab) continue
 
     const measure = system.measures.find((m) => x >= m.x && x < m.x + m.width) ?? nearestMeasure(system, x)
     if (!measure || measure.beats.length === 0) return null
@@ -638,10 +843,18 @@ export function hitTest({ layout, x, y }: { layout: TabLayout; x: number; y: num
       const best = measure.beats[beat]
       if (best && Math.abs(candidate.x - x) < Math.abs(best.x - x)) beat = index
     })
+    const tick = measure.beats[beat]?.startTick ?? measure.startTick
 
+    if (band) {
+      const position = positionAt({ y, bottom: band.block.bottom })
+      const head = measure.staves[band.index]?.beats[beat]?.heads.find((h) => h.position === position)
+      const pitch = head?.pitch ?? pitchAtPosition({ position, clef: band.block.clef, key: layout.key })
+      const row = head?.row ?? (layout.rowKind === 'pitch' ? pitch : null)
+      return { measure: measure.index, beat, tick, area: 'staff', row, pitch }
+    }
     const lines = system.stringYs.length
     const string = Math.min(Math.max(Math.round((y - system.staffTop) / METRICS.stringGap), 0), lines - 1) + 1
-    return { measure: measure.index, beat, string, tick: measure.beats[beat]?.startTick ?? measure.startTick }
+    return { measure: measure.index, beat, tick, area: 'tab', row: string, pitch: null }
   }
   return null
 }

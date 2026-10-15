@@ -89,7 +89,7 @@ async function main() {
     context.backend?.stop()
     context.backend = new Backend(file ? [file] : [])
     await page.goto(`http://127.0.0.1:${uiPort}/`)
-    await page.waitFor(`document.querySelector('svg.tab text.fret, svg.tab line.string')`, { what: 'the score to appear' })
+    await page.waitFor(`document.querySelector('svg.tab text.fret, svg.tab line.string, svg.tab line.staff-line')`, { what: 'the score to appear' })
   }
 
   const { scenarios } = await import('./scenarios.mjs')

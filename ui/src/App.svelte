@@ -6,7 +6,7 @@
   import { createDocumentApi, type ExportFormat } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
-  import { INSTRUMENTS, instrumentLabel, soundsOf } from './lib/instruments'
+  import { INSTRUMENTS, instrumentLabel, isPitchedTrack, soundsOf } from './lib/instruments'
   import { interpretKey } from './lib/keymap'
   import type { Instrument, SoundId } from './lib/score-types'
   import type { Selection } from './lib/selection'
@@ -16,8 +16,19 @@
   import { layoutTab, locateTick } from './lib/tab-layout'
   import { applyTheme, nextTheme, readTheme, saveTheme, themeLabel, type Theme } from './lib/theme'
   import { createTransport } from './lib/transport'
-  import { dropTrackFromView, readViewMode, saveViewMode, shownTracks, toggleCollapsed, viewModeLabel } from './lib/track-view'
-  import type { TrackView, ViewMode } from './lib/track-view'
+  import {
+    dropTrackFromView,
+    FRETTED_VIEWS,
+    frettedViewLabel,
+    readFrettedView,
+    readViewMode,
+    saveFrettedView,
+    saveViewMode,
+    shownTracks,
+    toggleCollapsed,
+    viewModeLabel,
+  } from './lib/track-view'
+  import type { FrettedView, TrackView, ViewMode } from './lib/track-view'
 
   const playback = new Playback(createTransport())
   const editor = new Editor({ api: createDocumentApi(), playback, prompts: createFilePrompts() })
@@ -38,6 +49,19 @@
     saveViewMode(mode)
   }
 
+  let fretted = $state<FrettedView>(readFrettedView())
+
+  function changeFrettedView(next: FrettedView) {
+    fretted = next
+    saveFrettedView(next)
+  }
+
+  const frettedViewTitle: Record<FrettedView, string> = {
+    tab: 'Write string instruments as tablature',
+    staff: 'Write string instruments on a staff',
+    both: 'Write string instruments on a staff above their tablature',
+  }
+
   let loadError = $state<string | null>(null)
   let paperWidth = $state(0)
   let stage = $state<HTMLElement>()
@@ -48,7 +72,7 @@
   const track = $derived(score?.tracks[editor.track] ?? null)
   const shown = $derived(shownTracks({ view, trackCount: score?.tracks.length ?? 0, current: editor.track }))
   const isRows = $derived(view.mode === 'rows')
-  const layout = $derived(track && !isRows && paperWidth > 0 ? layoutTab({ track, width: paperWidth }) : null)
+  const layout = $derived(track && !isRows && paperWidth > 0 ? layoutTab({ track, width: paperWidth, fretted }) : null)
 
   const hasStarted = $derived(playback.isPlaying || playback.tick > 0)
   const cursor = $derived(layout && hasStarted ? locateTick({ layout, tick: playback.tick }) : null)
@@ -95,7 +119,7 @@
     if (!system || !stage || !paper) return
 
     const top = paper.offsetTop + system.y
-    const bottom = top + (system.staffBottom - system.y) + 60
+    const bottom = paper.offsetTop + system.bottom + 20
     const isHidden = top < stage.scrollTop || bottom > stage.scrollTop + stage.clientHeight
     if (isHidden) stage.scrollTo({ top: Math.max(top - 32, 0), behavior: 'smooth' })
   })
@@ -285,6 +309,17 @@
           >
         {/each}
       </div>
+      <div class="view-switch" role="group" aria-label="String notation">
+        {#each FRETTED_VIEWS as mode (mode)}
+          <button
+            type="button"
+            aria-pressed={fretted === mode}
+            title={frettedViewTitle[mode]}
+            onmousedown={keepFocus}
+            onclick={() => changeFrettedView(mode)}>{frettedViewLabel[mode]}</button
+          >
+        {/each}
+      </div>
       {#if score}
         <label class="tempo" title="Tempo (beats per minute)">
           <span class="tempo-note" aria-hidden="true">♩</span> =
@@ -339,7 +374,7 @@
             <div class="track-tab" class:active={i === editor.track}>
               <button type="button" class="name" onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
                 {t.name}
-                <span class="strings">{t.tuning.length} strings</span>
+                <span class="strings">{isPitchedTrack(t) ? instrumentLabel(t.instrument) : `${t.tuning.length} strings`}</span>
               </button>
               <button
                 type="button"
@@ -414,7 +449,7 @@
               onchange={changeName}
             />
           </label>
-          <label class="track-field" title="The instrument of this track. The strings stay as they are.">
+          <label class="track-field" title="The instrument of this track. Between string instruments the strings stay as they are.">
             Instrument
             <select value={track.instrument} aria-label="Instrument of this track" onchange={changeInstrument}>
               {#each INSTRUMENTS as instrument (instrument)}
@@ -430,16 +465,18 @@
               {/each}
             </select>
           </label>
-          <label class="tuning" title="Open strings from the highest to the lowest, e.g. E4 B3 G3 D3 A2 D2">
-            Tuning
-            <input
-              type="text"
-              value={formatTuning(track.tuning)}
-              spellcheck="false"
-              aria-label="Tuning of this track"
-              onchange={changeTuning}
-            />
-          </label>
+          {#if !isPitchedTrack(track)}
+            <label class="tuning" title="Open strings from the highest to the lowest, e.g. E4 B3 G3 D3 A2 D2">
+              Tuning
+              <input
+                type="text"
+                value={formatTuning(track.tuning)}
+                spellcheck="false"
+                aria-label="Tuning of this track"
+                onchange={changeTuning}
+              />
+            </label>
+          {/if}
         {/if}
       {/if}
     </nav>
@@ -459,6 +496,7 @@
       <TrackRows
         {score}
         {shown}
+        {fretted}
         {editor}
         {playback}
         ontogglecollapse={(index) => (view = toggleCollapsed({ view, track: index }))}
@@ -476,6 +514,7 @@
             onselect={editor.canEdit ? (target, options) => editor.select(target, options) : undefined}
             ondrag={editor.canEdit ? (area) => editor.dragSelect(area) : undefined}
             onseek={(tick) => playback.seek(tick)}
+            onenter={editor.canEdit ? (target) => editor.enterPitch(target) : undefined}
             onmenu={editor.canEdit ? openMenu : undefined}
           />
         {/if}

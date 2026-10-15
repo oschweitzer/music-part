@@ -1,7 +1,24 @@
-import type { Instrument, SoundId } from './score-types'
+import type { Instrument, SoundId, Track } from './score-types'
 
 /** Every instrument a track can have, in the order menus list them. */
 export const INSTRUMENTS: Instrument[] = ['Guitar', 'ElectricGuitar', 'Bass', 'Violin', 'Banjo', 'Piano']
+
+/**
+ * How the notes of an instrument are stored, as `NoteKind` in `crates/score-model`: on strings and
+ * frets (tablature, and a staff on request), or as pitches (a staff only).
+ */
+export type NoteKind = 'fretted' | 'pitched'
+
+const PITCHED: readonly Instrument[] = ['Piano']
+
+export function noteKindOf(instrument: Instrument): NoteKind {
+  return PITCHED.includes(instrument) ? 'pitched' : 'fretted'
+}
+
+/** True for a track whose notes are pitches, without strings. */
+export function isPitchedTrack(track: Pick<Track, 'instrument'>): boolean {
+  return noteKindOf(track.instrument) === 'pitched'
+}
 
 const LABELS: Record<Instrument, string> = {
   Guitar: 'Acoustic guitar',
