@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use audio_engine::{pack, AudioOutput, Player, Program, SharedState};
+use audio_engine::{AudioOutput, PackBanks, PackFailure, Player, Program, SharedState, SoundPack};
 use score_model::Score;
 
 enum Command {
@@ -23,21 +23,27 @@ pub struct AudioController {
     commands: Mutex<Option<Sender<Command>>>,
     state: Arc<OnceLock<Arc<SharedState>>>,
     failure: Arc<Mutex<Option<String>>>,
+    /// The sample files of packs that could not be used, as they are found out.
+    pack_failures: Arc<Mutex<Vec<PackFailure>>>,
 }
 
 impl AudioController {
     /// Starts the audio thread without waiting for it: loading the SoundFont takes a moment and
     /// the window should not wait for it. A failure is reported by the first command instead.
-    /// `pack_roots` are the folders holding sound packs, lowest priority first.
-    pub fn start(soundfont: PathBuf, pack_roots: Vec<PathBuf>) -> Self {
+    /// `packs` are the sound packs found, lowest priority first: the samples of one are read here,
+    /// on the audio thread, when a score loaded uses one of its sounds.
+    pub fn start(soundfont: PathBuf, packs: Vec<SoundPack>) -> Self {
         let (tx, rx) = mpsc::channel::<Command>();
         let state = Arc::new(OnceLock::new());
         let failure = Arc::new(Mutex::new(None));
+        let pack_failures = Arc::new(Mutex::new(Vec::new()));
 
         let thread_state = Arc::clone(&state);
         let thread_failure = Arc::clone(&failure);
+        let thread_pack_failures = Arc::clone(&pack_failures);
         let spawned = thread::Builder::new().name("audio".into()).spawn(move || {
-            let (output, sample_rate) = match open_output(&soundfont, &pack_roots) {
+            let mut banks = PackBanks::new(packs);
+            let (output, sample_rate) = match open_output(&soundfont) {
                 Ok(opened) => opened,
                 Err(message) => {
                     eprintln!("Audio unavailable: {message}");
@@ -49,7 +55,23 @@ impl AudioController {
 
             for command in rx {
                 match command {
-                    Command::Load(score) => output.load(Program::new(&score, sample_rate)),
+                    Command::Load(score) => {
+                        let reported = banks.failures().len();
+                        let noted = banks.notes().len();
+                        output.change_banks(banks.update(&score));
+                        output.load(Program::new(&score, sample_rate));
+                        // What an SFZ file left out, each time one is loaded.
+                        for note in &banks.notes()[noted..] {
+                            eprintln!("{note}");
+                        }
+                        if banks.failures().len() > reported {
+                            for failure in &banks.failures()[reported..] {
+                                eprintln!("{}", failure.error);
+                            }
+                            *thread_pack_failures.lock().expect("pack failures lock") =
+                                banks.failures().to_vec();
+                        }
+                    }
                     Command::Play => output.play(),
                     Command::Pause => output.pause(),
                     Command::Stop => output.stop(),
@@ -67,6 +89,7 @@ impl AudioController {
             commands: Mutex::new(Some(tx)),
             state,
             failure,
+            pack_failures,
         }
     }
 
@@ -76,6 +99,7 @@ impl AudioController {
             commands: Mutex::new(None),
             state: Arc::new(OnceLock::new()),
             failure: Arc::new(Mutex::new(Some(reason))),
+            pack_failures: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -110,6 +134,15 @@ impl AudioController {
         self.state.get().cloned()
     }
 
+    /// The sample files of packs that could not be used so far. A file is read when a score first
+    /// uses its sound, so this grows as scores are opened.
+    pub fn pack_failures(&self) -> Vec<PackFailure> {
+        self.pack_failures
+            .lock()
+            .expect("pack failures lock")
+            .clone()
+    }
+
     fn send(&self, command: Command) -> Result<(), String> {
         if let Some(message) = self.failure.lock().expect("failure lock").clone() {
             return Err(message);
@@ -127,41 +160,15 @@ impl AudioController {
     }
 }
 
-fn open_output(soundfont: &Path, pack_roots: &[PathBuf]) -> Result<(AudioOutput, u32), String> {
+fn open_output(soundfont: &Path) -> Result<(AudioOutput, u32), String> {
     let sample_rate =
         AudioOutput::default_sample_rate().map_err(|e| format!("no audio output: {e}"))?;
     let mut file = File::open(soundfont)
         .map_err(|e| format!("cannot open the SoundFont {}: {e}", soundfont.display()))?;
-    let mut player = Player::new(&mut file, sample_rate).map_err(|e| e.to_string())?;
-    add_packs(&mut player, pack_roots);
+    let player = Player::new(&mut file, sample_rate).map_err(|e| e.to_string())?;
     let output =
         AudioOutput::start(player).map_err(|e| format!("cannot open the audio output: {e}"))?;
     Ok((output, sample_rate))
-}
-
-/// Adds the sound packs found in `roots`. A pack or a sample file that is missing or broken is
-/// reported and skipped: that sound then plays with its General MIDI program, which is no reason
-/// to stop the app.
-fn add_packs(player: &mut Player, roots: &[PathBuf]) {
-    let (packs, mut errors) = pack::discover(roots);
-    let (pack_errors, notes) = pack::add_packs_with_notes(player, &packs);
-    errors.extend(pack_errors);
-    for pack in &packs {
-        let manifest = &pack.manifest;
-        eprintln!(
-            "Sound pack {} ({}, {}) from {}",
-            manifest.id,
-            manifest.name,
-            manifest.licence,
-            pack.dir.display()
-        );
-    }
-    for note in notes {
-        eprintln!("{note}");
-    }
-    for error in errors {
-        eprintln!("{error}");
-    }
 }
 
 #[cfg(test)]

@@ -210,11 +210,16 @@ pub fn add_packs_with_notes(
             if sound.is_sfz() {
                 match sfz::load(&path, &pack.dir, &mut budget) {
                     Ok((instrument, report)) => {
-                        player.add_sfz(sound.sound, instrument, sound.keys());
-                        notes.push(PackNote {
-                            dir: pack.dir.clone(),
-                            note: format!("{}: {report}", sound.file),
-                        });
+                        match player.add_sfz(sound.sound, instrument, sound.keys()) {
+                            Ok(()) => notes.push(PackNote {
+                                dir: pack.dir.clone(),
+                                note: format!("{}: {report}", sound.file),
+                            }),
+                            Err(error) => errors.push(PackError {
+                                dir: pack.dir.clone(),
+                                reason: format!("{}: {error}", sound.file),
+                            }),
+                        }
                     }
                     Err(error) => errors.push(PackError {
                         dir: pack.dir.clone(),

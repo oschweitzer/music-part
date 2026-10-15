@@ -97,8 +97,8 @@ rate (resampled with linear interpolation at the output rate).
 
 ## What is ignored, and how
 
-Everything else is **ignored and counted**, never a failure: the console prints each pack's SFZ
-report, for instance `nylon.sfz: 48 regions, 48 samples, 21.3 MB; ignored: 12 × amp_velcurve_127,
+Everything else is **ignored and counted**, never a failure: when an `.sfz` file is loaded, the
+console prints its report, for instance `nylon.sfz: 48 regions, 48 samples, 21.3 MB; ignored: 12 × amp_velcurve_127,
 4 × off_by`. In particular, not yet:
 
 - key switches (`sw_*`) and other conditions on controllers (`locc`, `hicc`...): a later step for
@@ -111,8 +111,9 @@ report, for instance `nylon.sfz: 48 regions, 48 samples, 21.3 MB; ignored: 12 ×
 - FLAC and Ogg files: the region is dropped, as for a missing WAV.
 
 A region whose sample is missing, unreadable or in an unsupported format is dropped and counted;
-an instrument left with no region is refused as a whole, and that sound plays its General MIDI
-program.
+an instrument left with no region is refused as a whole: it is listed with the refused files in
+the `Sounds` panel and on the console, and that sound plays with the previous pack that has it, or
+its General MIDI program.
 
 ## Safety
 
@@ -123,16 +124,21 @@ The `.sfz` file and its samples are user input:
   also be inside the pack folder once symbolic links are followed. A path that escapes refuses the
   whole `.sfz` file: such a pack is not a mistake to work around.
 - **Memory is capped.** The `.sfz` text is read up to 1 MiB (4 MiB once `#define`s are expanded),
-  at most 8192 regions and 2048 sample files. The decoded samples of one pack, all its `.sfz`
-  files together, are capped at 256 MiB (about 25 minutes of mono 44.1 kHz audio, as `f32`): a
-  sample that would go over is dropped and counted. Every size read from a WAV header is checked
+  at most 8192 regions and 2048 sample files. The decoded samples of the `.sfz` files of one
+  pack loaded at the same time are capped at 256 MiB together (about 25 minutes of mono 44.1 kHz
+  audio, as `f32`): a sample that would go over is dropped and counted. Every size read from a WAV header is checked
   against the file length and the budget before anything is allocated.
 - **No panic.** Bad numbers, unknown opcodes, broken WAV chunks are errors or counts.
 
 ## Playback
 
-`Player::add_sfz` gives an `SfzInstrument` to a sound; a later SoundFont or SFZ for the same sound
-replaces it, as with SoundFonts. When a note of that sound starts:
+An `.sfz` file is loaded on demand like a SoundFont (see
+[`sound-packs.md`](sound-packs.md#when-the-samples-are-loaded)): `PackBanks` parses it and decodes
+its samples on the audio thread, outside the real-time callback, when a track first uses its sound,
+and the instrument is removed and freed there when no track does. `Player::add_sfz` gives an
+`SfzInstrument` to a sound. Of the banks of one sound, SoundFont or SFZ, the one added last plays
+it; `Player::remove_latest_bank` removes it and brings back the one before. When a note of that
+sound starts:
 
 1. a key outside `firstKey` to `lastKey` goes to the General MIDI program;
 2. otherwise every region whose key, velocity, random and round-robin conditions match starts a
@@ -164,12 +170,14 @@ Technique-specific samples (a palm-muted recording) need key switches, a later s
 **Envelope.** Attack is linear; decay and release are exponential, reaching -60 dB in the given
 time; a release is at least 5 ms to avoid clicks. `one_shot` regions ignore note-offs. A voice
 whose sustain level is 0 is freed once its decay is over. The test
-`playing_sfz_voices_does_not_allocate` (`audio-engine/tests/sfz_real_time.rs`) counts the allocations made while notes start, stop, bend
-and render, and expects none.
+`playing_sfz_voices_does_not_allocate` (`audio-engine/tests/sfz_real_time.rs`) counts the
+allocations made while notes start, stop, bend and render, and expects none. Adding or removing an
+instrument happens in the callback too, between two scores: the player keeps room for every bank
+up front, and a removed instrument is sent back to be freed outside the callback.
 
 **Loudness.** A region at `volume=0` and velocity 127 plays its sample at half its recorded
 level (`SFZ_GAIN`), close to the level of the General MIDI programs; velocity follows the SFZ
 default curve (gain `(velocity / 127)²` at `amp_veltrack=100`).
 
 Code: `audio-engine/src/sfz/` (`parse.rs` the text, `wav.rs` the samples, `mod.rs` loading and
-limits, `voice.rs` the voice pool), wired in `player.rs` and `pack.rs`.
+limits, `voice.rs` the voice pool), wired in `player.rs`, `banks.rs` and `pack.rs`.

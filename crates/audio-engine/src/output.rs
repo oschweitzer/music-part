@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use crate::player::{Player, Program};
+use crate::banks::{self, BankChange};
+use crate::player::{Player, Program, RemovedBank};
 
 enum Command {
     Play,
@@ -13,6 +14,7 @@ enum Command {
     Load(Box<Program>),
     Seek(f64),
     SetAudible(Vec<bool>),
+    ChangeBank(Box<BankChange>),
 }
 
 /// Playback state published by the audio callback for other threads to read, without locks.
@@ -45,11 +47,14 @@ impl SharedState {
 ///
 /// Loading a score swaps a prebuilt [`Program`] in the callback. The old one is freed there,
 /// which is the one allocation-related exception to the real-time rule: it only happens on a
-/// user action, while playback is stopped.
+/// user action, while playback is stopped. Sample banks are read before they reach the callback,
+/// and the samples of a removed bank are sent back to be freed by the next call to
+/// [`AudioOutput::change_banks`], not in the callback.
 pub struct AudioOutput {
     _stream: cpal::Stream,
     commands: Sender<Command>,
     state: Arc<SharedState>,
+    removed: Receiver<RemovedBank>,
 }
 
 impl AudioOutput {
@@ -78,6 +83,7 @@ impl AudioOutput {
         let (commands, rx): (Sender<Command>, Receiver<Command>) = mpsc::channel();
         let state = Arc::new(SharedState::default());
         let published = Arc::clone(&state);
+        let (removed_tx, removed) = mpsc::channel::<RemovedBank>();
         let mut stereo: Vec<f32> = Vec::new();
 
         let stream = device.build_output_stream(
@@ -91,6 +97,11 @@ impl AudioOutput {
                         Command::Load(program) => player.load(*program),
                         Command::Seek(ticks) => player.seek(ticks),
                         Command::SetAudible(audible) => player.set_audible(audible),
+                        Command::ChangeBank(change) => {
+                            if let Some(font) = banks::apply(&mut player, *change) {
+                                let _ = removed_tx.send(font);
+                            }
+                        }
                     }
                 }
                 let frames = data.len() / channels;
@@ -114,11 +125,21 @@ impl AudioOutput {
             _stream: stream,
             commands,
             state,
+            removed,
         })
     }
 
     pub fn state(&self) -> Arc<SharedState> {
         Arc::clone(&self.state)
+    }
+
+    /// Adds and removes sample banks; send them before the score that needs them. Frees the
+    /// samples of the banks removed by earlier calls.
+    pub fn change_banks(&self, changes: Vec<BankChange>) {
+        while self.removed.try_recv().is_ok() {}
+        for change in changes {
+            let _ = self.commands.send(Command::ChangeBank(Box::new(change)));
+        }
     }
 
     pub fn load(&self, program: Program) {

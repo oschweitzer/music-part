@@ -21,7 +21,9 @@ const uiPort = 14201
 class Backend {
   constructor(args = []) {
     this.waiting = new Map()
-    this.process = spawn(join(root, 'target', 'debug', 'examples', 'headless'), args, { stdio: ['pipe', 'pipe', 'inherit'] })
+    // The committed manifests of the bundled packs: the backend lists them, it reads no sample.
+    const env = { ...process.env, MUSIC_PART_PACKS: join(root, 'assets', 'soundfonts', 'packs') }
+    this.process = spawn(join(root, 'target', 'debug', 'examples', 'headless'), args, { stdio: ['pipe', 'pipe', 'inherit'], env })
     createInterface({ input: this.process.stdout }).on('line', (line) => {
       const answer = JSON.parse(line)
       this.waiting.get(answer.id)?.(answer)

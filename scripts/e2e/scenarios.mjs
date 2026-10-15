@@ -1090,4 +1090,28 @@ export const scenarios = [
       })
     },
   ],
+
+  [
+    'the Sounds panel lists the packs with their licence and says where the track sound comes from',
+    async ({ page }) => {
+      const panelText = () => text(page, '.sounds-panel')
+      await page.eval(`document.querySelector('.sounds-menu summary').click()`)
+      await page.waitFor(`document.querySelectorAll('.sounds-panel .pack').length > 0`, { what: 'the packs' })
+
+      const packs = await page.eval(`[...document.querySelectorAll('.sounds-panel .pack .name')].map(n => n.textContent.trim())`)
+      assert.ok(packs.some((name) => name.startsWith('Spanish classical guitar')), packs.join(', '))
+      assert.ok(packs.every((name) => name.endsWith('CC0-1.0')), 'each pack shows its licence')
+      assert.match(await text(page, '.sounds-panel .current'), /Nylon strings: Spanish classical guitar \(CC0-1\.0\)/)
+      assert.match(await panelText(), /only known in the desktop app/)
+
+      // Another track: the panel follows the selection.
+      await page.eval(`document.querySelectorAll('.track-tab .name')[1].click()`)
+      await settle()
+      assert.match(await text(page, '.sounds-panel .current'), /Electric bass: Finger: Finger Bass YR/)
+
+      // A press elsewhere closes it.
+      await clickOn(page, 'svg.tab')
+      assert.equal(await page.eval(`document.querySelector('.sounds-menu').open`), false)
+    },
+  ],
 ]
