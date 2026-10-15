@@ -662,10 +662,8 @@ mod tests {
                     dots: 0,
                 },
                 notes: vec![Note {
-                    string: 1,
-                    fret,
                     technique,
-                    tied: false,
+                    ..Note::fretted(1, fret)
                 }],
             };
             score.tracks[0].measures[0].voices[0].beats = vec![half(0, technique), half(2, None)];

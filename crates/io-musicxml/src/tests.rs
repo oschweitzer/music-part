@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use score_model::{Instrument, Score, Sound, Technique, GUITAR_STANDARD};
+use score_model::{Instrument, Note, Score, Sound, Technique, GUITAR_STANDARD};
 
 use super::*;
 
@@ -59,7 +59,10 @@ fn first_beats(score: &Score, measure: usize) -> &[Beat] {
 }
 
 fn placed(beat: &Beat) -> Vec<(u8, u8)> {
-    beat.notes.iter().map(|n| (n.string, n.fret)).collect()
+    beat.notes
+        .iter()
+        .map(|n| (n.key(), n.fret().unwrap_or(0)))
+        .collect()
 }
 
 #[test]
@@ -144,7 +147,7 @@ fn a_chord_is_spread_over_distinct_strings() {
 
     let beat = &first_beats(&imported.score, 0)[0];
     assert_eq!(beat.notes.len(), 3);
-    let mut strings: Vec<u8> = beat.notes.iter().map(|n| n.string).collect();
+    let mut strings: Vec<u8> = beat.notes.iter().map(Note::key).collect();
     strings.dedup();
     assert_eq!(strings.len(), 3, "three different strings");
 }
@@ -391,10 +394,51 @@ fn the_midi_program_picks_the_closest_sound() {
         Sound::GuitarSteel
     );
     assert_eq!(ok(&with_program(106)).score.tracks[0].sound, Sound::Banjo);
-    // A piano is not a string instrument: the part name decides, here the default guitar.
+    // A piano is not a string instrument: the part name decides, else the part is a piano.
+    assert_eq!(ok(&with_program(1)).score.tracks[0].sound, Sound::Piano);
+    let named_guitar = with_program(1).replace("<part-name>Part<", "<part-name>Guitar<");
+    assert_eq!(ok(&named_guitar).score.tracks[0].sound, Sound::GuitarNylon);
+}
+
+#[test]
+fn a_part_with_no_string_instrument_becomes_a_piano_with_its_pitches() {
+    let notes = [pitched("C", 2, 4, ""), pitched("E", 6, 4, "")].concat();
+    let imported = ok(&score_xml("Flute", FOUR_FOUR, &[&notes]));
+    let track = &imported.score.tracks[0];
+    assert_eq!(track.instrument, Instrument::Piano);
+    assert!(track.tuning.is_empty());
+    assert_eq!(imported.skipped_notes, 0, "no string limits the range");
+    let pitches: Vec<u8> = first_beats(&imported.score, 0)
+        .iter()
+        .flat_map(|b| b.notes.iter().map(Note::key))
+        .collect();
+    assert_eq!(pitches, vec![36, 88]);
+}
+
+#[test]
+fn the_staves_of_a_piano_part_are_merged_into_one_voice_of_tied_chords() {
+    // Right hand: two half notes E4 G4. Left hand, on staff 2: a whole note C3.
+    let staff = |n: u32| format!("<voice>{n}</voice><staff>{n}</staff>");
+    let measure = [
+        pitched("E", 4, 4, &staff(1)),
+        pitched("G", 4, 4, &staff(1)),
+        "<backup><duration>8</duration></backup>".to_string(),
+        pitched("C", 3, 8, &staff(2)),
+    ]
+    .concat();
+    let imported = ok(&score_xml("Piano", FOUR_FOUR, &[&measure]));
+    let track = &imported.score.tracks[0];
+    assert_eq!(track.measures[0].voices.len(), 1);
+    let chords: Vec<Vec<(u8, bool)>> = first_beats(&imported.score, 0)
+        .iter()
+        .map(|b| b.notes.iter().map(|n| (n.key(), n.tied)).collect())
+        .collect();
     assert_eq!(
-        ok(&with_program(1)).score.tracks[0].sound,
-        Sound::GuitarNylon
+        chords,
+        vec![
+            vec![(48, false), (64, false)],
+            vec![(48, true), (67, false)]
+        ]
     );
 }
 

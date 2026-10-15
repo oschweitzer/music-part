@@ -47,6 +47,7 @@ without changing the file format.
 | `bass/slap`                  | Slap          | 36         | Electric bass   |                       |
 | `violin/standard`            | Standard      | 40         | Violin          |                       |
 | `banjo/standard`             | Standard      | 105        | Banjo           |                       |
+| `piano/grand`                | Grand piano   | 0          | Piano           |                       |
 
 Programs are General MIDI, counted from 0. The first sound of each instrument is its default.
 `ui/src/lib/instruments.ts` mirrors this table by hand, and a Rust test
@@ -83,7 +84,7 @@ Both importers map a General MIDI program to the closest sound (`Sound::from_mid
 
 | Program               | Sound                                                     |
 | --------------------- | --------------------------------------------------------- |
-| 24, and none or other | `guitar/nylon` (a program no string instrument here has)  |
+| 24, and none          | `guitar/nylon` (a file for a tablature often names none)  |
 | 25                    | `guitar/steel`                                            |
 | 26, 27, 31            | `electric-guitar/clean` (jazz and harmonics: the closest) |
 | 28, 29, 30            | `electric-guitar/muted`, `overdrive`, `distortion`        |
@@ -92,11 +93,15 @@ Both importers map a General MIDI program to the closest sound (`Sound::from_mid
 | 36, 37                | `bass/slap`                                               |
 | 40                    | `violin/standard`                                         |
 | 105                   | `banjo/standard`                                          |
+| any other             | `piano/grand`: keyboards, winds, voice, other strings...  |
 
 - MIDI writes the program of the sound; reading it back gives the same sound.
 - MusicXML writes it in `midi-program` (counted from 1). On import, a program of a string
   instrument wins; otherwise the part name decides ("electric guitar", "bass", "violin", "banjo",
-  "steel"), else the nylon guitar.
+  "steel", "guitar"), then a tablature staff (the nylon guitar), else the piano.
+- A program that is not a string instrument gives a pitched track, the piano, which keeps every
+  note (see [`notation.md`](notation.md)). Organ, synthesizers, drums and voice get their own
+  instruments and sounds later; the mapping then sends their programs there.
 - Tests export a track of every sound to MIDI, MusicXML and `.mpart` and check that the sound comes
   back.
 
@@ -109,9 +114,9 @@ program.
 
 ## Phase B: instruments without strings
 
-Piano, organ, synthesizers, drums and voice are out of scope here. They need notes stored as
-pitches (and drum pieces) rather than strings and frets, a staff view instead of a tablature, and
-for drums the percussion channel. That is a change of the score model, planned separately.
+Notes stored as pitches and the standard staff are in place, with one pitched instrument, the
+piano (`piano/grand`, General MIDI program 0): see [`notation.md`](notation.md), which also says
+how organ, synthesizers, drums and voice fit in.
 
 ## Follow-ups: sound packs and realistic samples
 

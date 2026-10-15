@@ -2,15 +2,19 @@
 //! particular, a measure always stays exactly full. Lengthening a beat overwrites what follows it
 //! in the measure; shortening one leaves a rest behind.
 //!
-//! Beats are addressed as (track, measure, beat) in the first voice.
+//! Beats are addressed as (track, measure, beat) in the first voice. A note is addressed by its
+//! string on a fretted track (`SetFret`, `RemoveNote`, `SetTied`...) and by the pitch it sounds
+//! on any track (`AddPitch`, `RemovePitch`, `MovePitch`, `SetPitchTied`), which is how a staff
+//! shows it. See `docs/notation.md`.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    decompose_ticks, Beat, Duration, Instrument, Measure, Note, Score, Sound, Technique,
-    TimeSignature, Track, Voice, MAX_FRET,
+    decompose_ticks, fret_pitch, pitch_fret, place_chord, place_pitch, Beat, Duration, Instrument,
+    Measure, Note, NoteKind, Place, Score, Sound, Technique, TimeSignature, Track, Voice, MAX_FRET,
+    MAX_PITCH,
 };
 
 /// A beat of the first voice of a track.
@@ -27,6 +31,13 @@ pub struct StringSpan {
     pub last: u8,
 }
 
+/// The MIDI pitches from `low` to `high`, both included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PitchSpan {
+    pub low: u8,
+    pub high: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -34,7 +45,8 @@ pub struct StringSpan {
     rename_all_fields = "camelCase"
 )]
 pub enum Edit {
-    /// Puts a note on a string, replacing the one already there. A rest becomes a note.
+    /// Puts a note on a string, replacing the one already there. A rest becomes a note. Refused on
+    /// a track without strings.
     SetFret {
         track: usize,
         measure: usize,
@@ -119,9 +131,12 @@ pub enum Edit {
         name: String,
     },
     /// Changes the instrument of a track; its sound becomes the default sound of the new
-    /// instrument. The strings and frets of the notes are left alone (retune the track if the
-    /// strings differ). Refused if a note would land on a fret the instrument does not have (the
-    /// first frets of the short fifth string of a banjo).
+    /// instrument. Between two fretted instruments the strings and frets of the notes are left
+    /// alone (retune the track if the strings differ); refused if a note would land on a fret the
+    /// instrument does not have (the first frets of the short fifth string of a banjo). From a
+    /// fretted to a pitched instrument every note keeps its pitch and its tie, without technique.
+    /// From a pitched to a fretted one the track gets the standard tuning and the pitches are
+    /// placed on the strings; refused if a note cannot be.
     SetInstrument {
         track: usize,
         instrument: Instrument,
@@ -131,18 +146,58 @@ pub enum Edit {
         track: usize,
         sound: Sound,
     },
-    /// Retunes a track, highest string first. Refused if a note would no longer be playable.
+    /// Retunes a track, highest string first. Refused if a note would no longer be playable, and on
+    /// a track without strings.
     SetTuning {
         track: usize,
         tuning: Vec<u8>,
     },
     /// Removes the notes of the beats from `from` to `to` (across barlines), only those on
-    /// `strings` when given. The rhythm stays: a beat left without notes is a rest.
+    /// `strings`, or sounding within `pitches`, when given. The rhythm stays: a beat left without
+    /// notes is a rest.
     ClearNotes {
         track: usize,
         from: BeatAddress,
         to: BeatAddress,
         strings: Option<StringSpan>,
+        #[serde(default)]
+        pitches: Option<PitchSpan>,
+    },
+    /// Adds a note sounding at a MIDI pitch. On a pitched track it joins the notes of the beat (a
+    /// chord); on a fretted track it goes on a free string, at the lowest fret that plays it
+    /// (refused if none can). A rest becomes a note; a pitch the beat already has changes nothing.
+    AddPitch {
+        track: usize,
+        measure: usize,
+        beat: usize,
+        pitch: u8,
+    },
+    /// Removes the note sounding at a pitch. A beat left without notes becomes a rest.
+    RemovePitch {
+        track: usize,
+        measure: usize,
+        beat: usize,
+        pitch: u8,
+    },
+    /// Moves the note sounding at `pitch` to the pitch `to`, keeping its technique. It is no
+    /// longer tied, and neither is the note that continued it. On a fretted track it stays on its
+    /// string when the string reaches `to`, else it goes to a free one. Refused if the beat
+    /// already has `to`.
+    MovePitch {
+        track: usize,
+        measure: usize,
+        beat: usize,
+        pitch: u8,
+        to: u8,
+    },
+    /// Ties or unties the note sounding at a pitch to the same pitch on the previous beat (across
+    /// barlines too). On a fretted track it ties the note's string, as `SetTied` does.
+    SetPitchTied {
+        track: usize,
+        measure: usize,
+        beat: usize,
+        pitch: u8,
+        tied: bool,
     },
     /// Takes the rests from `from` to `to` out of the timeline of every track: what follows moves
     /// earlier and the measure gets shorter (its time signature follows), or disappears when it
@@ -184,6 +239,14 @@ pub enum EditError {
     NotARest,
     /// Another track has a note, or a beat that cannot be cut, in the time to remove.
     RestInUse,
+    /// The track has no strings: its notes are pitches.
+    NoStrings,
+    /// A MIDI pitch is 0 to 127.
+    InvalidPitch,
+    /// The beat already has a note at this pitch.
+    PitchTaken,
+    /// No free string of the instrument can play the pitch.
+    NoFreeString,
 }
 
 impl fmt::Display for EditError {
@@ -220,6 +283,15 @@ impl fmt::Display for EditError {
                 "another track has notes at this place, so the rest cannot be removed"
             ),
             Self::TooManyTracks => write!(f, "a score cannot have more than {MAX_TRACKS} tracks"),
+            Self::NoStrings => write!(
+                f,
+                "this track has no strings: write its notes on the staff"
+            ),
+            Self::InvalidPitch => write!(f, "the pitch must be between 0 and {MAX_PITCH}"),
+            Self::PitchTaken => write!(f, "this beat already has a note at this pitch"),
+            Self::NoFreeString => {
+                write!(f, "no free string of this instrument can play this pitch")
+            }
         }
     }
 }
@@ -243,32 +315,28 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             if fret > MAX_FRET {
                 return Err(EditError::InvalidFret);
             }
-            let strings = score
+            let target = score
                 .tracks
                 .get(track)
-                .ok_or(EditError::OutOfRange("track"))?
-                .tuning
-                .len();
-            if string == 0 || usize::from(string) > strings {
+                .ok_or(EditError::OutOfRange("track"))?;
+            if target.instrument.note_kind() != NoteKind::Fretted {
+                return Err(EditError::NoStrings);
+            }
+            if string == 0 || usize::from(string) > target.tuning.len() {
                 return Err(EditError::OutOfRange("string"));
             }
-            let note = Note {
-                string,
-                fret,
-                technique: None,
-                tied: false,
-            };
+            let note = Note::fretted(string, fret);
             // A very high tuning can leave no MIDI pitch for a fret that is otherwise allowed, and
             // a banjo's short string has no first frets.
             if score.tracks[track].pitch(&note).is_none() {
                 return Err(EditError::NoSuchFret);
             }
             let beat = beat_mut(score, track, measure, beat)?;
-            match beat.notes.iter_mut().find(|n| n.string == string) {
+            match beat.notes.iter_mut().find(|n| n.string() == Some(string)) {
                 Some(existing) => *existing = note,
                 None => {
                     beat.notes.push(note);
-                    beat.notes.sort_by_key(|n| n.string);
+                    beat.notes.sort_by_key(Note::key);
                 }
             }
             Ok(())
@@ -281,7 +349,7 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
         } => {
             beat_mut(score, track, measure, beat)?
                 .notes
-                .retain(|n| n.string != string);
+                .retain(|n| n.string() != Some(string));
             Ok(())
         }
         Edit::SetDuration {
@@ -301,7 +369,44 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             from,
             to,
             strings,
-        } => clear_notes(score, track, from, to, strings),
+            pitches,
+        } => clear_notes(score, track, (from, to), strings, pitches),
+        Edit::AddPitch {
+            track,
+            measure,
+            beat,
+            pitch,
+        } => add_pitch(score, (track, measure, beat), pitch),
+        Edit::RemovePitch {
+            track,
+            measure,
+            beat,
+            pitch,
+        } => {
+            let target = score
+                .tracks
+                .get(track)
+                .ok_or(EditError::OutOfRange("track"))?;
+            let keys = keys_sounding(target, beat_of(target, measure, beat)?, pitch);
+            beat_mut(score, track, measure, beat)?
+                .notes
+                .retain(|n| !keys.contains(&n.key()));
+            Ok(())
+        }
+        Edit::MovePitch {
+            track,
+            measure,
+            beat,
+            pitch,
+            to,
+        } => move_pitch(score, (track, measure, beat), pitch, to),
+        Edit::SetPitchTied {
+            track,
+            measure,
+            beat,
+            pitch,
+            tied,
+        } => set_pitch_tied(score, (track, measure, beat), pitch, tied),
         Edit::RemoveRests { track, from, to } => remove_rests(score, track, from, to),
         Edit::InsertMeasure { at } => insert_measure(score, at),
         Edit::DeleteMeasure { index, count } => delete_measures(score, index, count),
@@ -392,6 +497,185 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
     }
 }
 
+/// A beat of the first voice of a track.
+fn beat_of(track: &Track, measure: usize, beat: usize) -> Result<&Beat, EditError> {
+    track
+        .measures
+        .get(measure)
+        .ok_or(EditError::OutOfRange("measure"))?
+        .voices
+        .first()
+        .ok_or(EditError::OutOfRange("measure"))?
+        .beats
+        .get(beat)
+        .ok_or(EditError::OutOfRange("beat"))
+}
+
+/// The keys (`Note::key`) of the notes of a beat that sound at `pitch`.
+fn keys_sounding(track: &Track, beat: &Beat, pitch: u8) -> Vec<u8> {
+    beat.notes
+        .iter()
+        .filter(|n| track.pitch(n) == Some(pitch))
+        .map(Note::key)
+        .collect()
+}
+
+/// The beat before one in the first voice: the last of the previous measure for a first beat.
+fn previous_beat(track: &Track, measure: usize, beat: usize) -> Option<&Beat> {
+    match beat.checked_sub(1) {
+        Some(before) => track
+            .measures
+            .get(measure)?
+            .voices
+            .first()?
+            .beats
+            .get(before),
+        None => track
+            .measures
+            .get(measure.checked_sub(1)?)?
+            .voices
+            .first()?
+            .beats
+            .last(),
+    }
+}
+
+/// The (measure, beat) after one in the first voice: the first of the next measure after a last
+/// beat.
+fn next_address(track: &Track, measure: usize, beat: usize) -> Option<(usize, usize)> {
+    let count = track.measures.get(measure)?.voices.first()?.beats.len();
+    if beat + 1 < count {
+        return Some((measure, beat + 1));
+    }
+    let next = track.measures.get(measure + 1)?.voices.first()?;
+    (!next.beats.is_empty()).then_some((measure + 1, 0))
+}
+
+fn add_pitch(
+    score: &mut Score,
+    (track, measure, beat): (usize, usize, usize),
+    pitch: u8,
+) -> Result<(), EditError> {
+    if pitch > MAX_PITCH {
+        return Err(EditError::InvalidPitch);
+    }
+    let target = score
+        .tracks
+        .get(track)
+        .ok_or(EditError::OutOfRange("track"))?;
+    let current = beat_of(target, measure, beat)?;
+    if current.notes.iter().any(|n| target.pitch(n) == Some(pitch)) {
+        return Ok(());
+    }
+    let note = match target.instrument.note_kind() {
+        NoteKind::Pitched => Note::pitched(pitch),
+        NoteKind::Fretted => {
+            let taken: Vec<u8> = current.notes.iter().map(Note::key).collect();
+            let (string, fret) = place_pitch(target.instrument, &target.tuning, pitch, &taken)
+                .ok_or(EditError::NoFreeString)?;
+            Note::fretted(string, fret)
+        }
+    };
+    let notes = &mut beat_mut(score, track, measure, beat)?.notes;
+    notes.push(note);
+    notes.sort_by_key(Note::key);
+    Ok(())
+}
+
+fn move_pitch(
+    score: &mut Score,
+    (track, measure, beat): (usize, usize, usize),
+    pitch: u8,
+    to: u8,
+) -> Result<(), EditError> {
+    if to > MAX_PITCH {
+        return Err(EditError::InvalidPitch);
+    }
+    let target = score
+        .tracks
+        .get(track)
+        .ok_or(EditError::OutOfRange("track"))?;
+    let current = beat_of(target, measure, beat)?;
+    let index = current
+        .notes
+        .iter()
+        .position(|n| target.pitch(n) == Some(pitch))
+        .ok_or(EditError::NoSuchNote)?;
+    if to == pitch {
+        return Ok(());
+    }
+    if current.notes.iter().any(|n| target.pitch(n) == Some(to)) {
+        return Err(EditError::PitchTaken);
+    }
+    let place = match current.notes[index].place {
+        Place::Pitched { .. } => Place::Pitched { pitch: to },
+        Place::Fretted { string, .. } => {
+            let (instrument, tuning) = (target.instrument, &target.tuning);
+            let taken: Vec<u8> = current
+                .notes
+                .iter()
+                .map(Note::key)
+                .filter(|s| *s != string)
+                .collect();
+            let (string, fret) = pitch_fret(instrument, tuning, string, to)
+                .map(|fret| (string, fret))
+                .or_else(|| place_pitch(instrument, tuning, to, &taken))
+                .ok_or(EditError::NoFreeString)?;
+            Place::Fretted { string, fret }
+        }
+    };
+    // The note that continued this one no longer has anything to continue.
+    let continuation = next_address(target, measure, beat).map(|(m, b)| {
+        let next = &target.measures[m].voices[0].beats[b];
+        (m, b, keys_sounding(target, next, pitch))
+    });
+
+    let notes = &mut beat_mut(score, track, measure, beat)?.notes;
+    notes[index].place = place;
+    notes[index].tied = false;
+    notes.sort_by_key(Note::key);
+    if let Some((m, b, keys)) = continuation {
+        for note in &mut beat_mut(score, track, m, b)?.notes {
+            if keys.contains(&note.key()) {
+                note.tied = false;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set_pitch_tied(
+    score: &mut Score,
+    (track, measure, beat): (usize, usize, usize),
+    pitch: u8,
+    tied: bool,
+) -> Result<(), EditError> {
+    let target = score
+        .tracks
+        .get(track)
+        .ok_or(EditError::OutOfRange("track"))?;
+    let note = beat_of(target, measure, beat)?
+        .notes
+        .iter()
+        .find(|n| target.pitch(n) == Some(pitch))
+        .ok_or(EditError::NoSuchNote)?;
+    if let Some(string) = note.string() {
+        return set_tied(score, (track, measure, beat), string, tied);
+    }
+    let is_continued = previous_beat(target, measure, beat)
+        .is_some_and(|b| b.notes.iter().any(|n| target.pitch(n) == Some(pitch)));
+    if tied && !is_continued {
+        return Err(EditError::NothingToTie);
+    }
+    let key = note.key();
+    for note in &mut beat_mut(score, track, measure, beat)?.notes {
+        if note.key() == key {
+            note.tied = tied;
+        }
+    }
+    Ok(())
+}
+
 fn beats_mut(score: &mut Score, track: usize, measure: usize) -> Result<&mut Vec<Beat>, EditError> {
     let track = score
         .tracks
@@ -429,7 +713,7 @@ fn note_mut(
     beat_mut(score, track, measure, beat)?
         .notes
         .iter_mut()
-        .find(|n| n.string == string)
+        .find(|n| n.string() == Some(string))
         .ok_or(EditError::NoSuchNote)
 }
 
@@ -446,21 +730,13 @@ fn set_tied(
         return Ok(());
     }
 
-    let measures = &score.tracks[track].measures;
-    let previous = match beat.checked_sub(1) {
-        Some(before) => measures[measure].voices[0].beats.get(before),
-        None => measure
-            .checked_sub(1)
-            .and_then(|m| measures[m].voices.first())
-            .and_then(|v| v.beats.last()),
-    };
-    let fret = previous
-        .and_then(|b| b.notes.iter().find(|n| n.string == string))
-        .map(|n| n.fret)
+    let fret = previous_beat(&score.tracks[track], measure, beat)
+        .and_then(|b| b.notes.iter().find(|n| n.string() == Some(string)))
+        .and_then(Note::fret)
         .ok_or(EditError::NothingToTie)?;
 
     let note = note_mut(score, track, measure, beat, string)?;
-    note.fret = fret;
+    note.place = Place::Fretted { string, fret };
     note.tied = true;
     Ok(())
 }
@@ -480,7 +756,7 @@ fn paste(
     if pasted
         .iter()
         .flat_map(|b| &b.notes)
-        .any(|n| n.fret > MAX_FRET)
+        .any(|n| n.fret().is_some_and(|f| f > MAX_FRET))
     {
         return Err(EditError::InvalidFret);
     }
@@ -522,17 +798,22 @@ fn paste(
         return Ok(());
     }
 
-    // The pasted beats on the timeline of the piece, without the notes the track cannot play.
+    // The pasted beats on the timeline of the piece, without the notes the track cannot hold:
+    // on strings it does not have, or of the other kind (fretted notes on a piano).
     let strings = target.tuning.len();
+    let kind = target.instrument.note_kind();
     let mut at = start;
     let placed: Vec<(u32, u32, Beat)> = pasted
         .iter()
         .map(|b| {
             let mut beat = b.clone();
-            beat.notes
-                .retain(|n| n.string >= 1 && usize::from(n.string) <= strings);
-            beat.notes.sort_by_key(|n| n.string);
-            beat.notes.dedup_by_key(|n| n.string);
+            beat.notes.retain(|n| {
+                n.place.kind() == kind
+                    && n.string()
+                        .is_none_or(|s| s >= 1 && usize::from(s) <= strings)
+            });
+            beat.notes.sort_by_key(Note::key);
+            beat.notes.dedup_by_key(|n| n.key());
             let from = at;
             at += b.duration.ticks();
             (from, at, beat)
@@ -708,18 +989,67 @@ fn set_instrument(
     let mut changed = target.clone();
     changed.instrument = instrument;
     changed.sound = instrument.default_sound();
-    let is_playable = changed
-        .measures
-        .iter()
-        .flat_map(|m| &m.voices)
-        .flat_map(|v| &v.beats)
-        .flat_map(|b| &b.notes)
-        .all(|n| changed.pitch(n).is_some());
-    if !is_playable {
-        return Err(EditError::NoSuchFret);
+    match (target.instrument.note_kind(), instrument.note_kind()) {
+        (NoteKind::Fretted, NoteKind::Fretted) => {
+            let is_playable = changed
+                .measures
+                .iter()
+                .flat_map(|m| &m.voices)
+                .flat_map(|v| &v.beats)
+                .flat_map(|b| &b.notes)
+                .all(|n| changed.pitch(n).is_some());
+            if !is_playable {
+                return Err(EditError::NoSuchFret);
+            }
+        }
+        (NoteKind::Fretted, NoteKind::Pitched) => {
+            changed.tuning.clear();
+            for beat in beats_of_mut(&mut changed) {
+                let mut notes = Vec::with_capacity(beat.notes.len());
+                for note in &beat.notes {
+                    let pitch = target.pitch(note).ok_or(EditError::NoSuchFret)?;
+                    notes.push(Note {
+                        tied: note.tied,
+                        ..Note::pitched(pitch)
+                    });
+                }
+                notes.sort_by_key(Note::key);
+                // Two strings at the same pitch become one note.
+                notes.dedup_by_key(|n| n.key());
+                beat.notes = notes;
+            }
+        }
+        (NoteKind::Pitched, NoteKind::Fretted) => {
+            let tuning = instrument.standard_tuning();
+            changed.tuning = tuning.to_vec();
+            for beat in beats_of_mut(&mut changed) {
+                let pitches: Vec<u8> = beat.notes.iter().map(Note::key).collect();
+                let (mut placed, skipped) = place_chord(instrument, tuning, &pitches, &[]);
+                if skipped > 0 {
+                    return Err(EditError::NoFreeString);
+                }
+                for note in &mut placed {
+                    let pitch = note
+                        .fret()
+                        .and_then(|fret| fret_pitch(instrument, tuning, note.key(), fret));
+                    note.tied = beat.notes.iter().any(|n| Some(n.key()) == pitch && n.tied);
+                }
+                beat.notes = placed;
+            }
+        }
+        (NoteKind::Pitched, NoteKind::Pitched) => {}
     }
     *target = changed;
     Ok(())
+}
+
+/// Every beat of a track, in every voice.
+fn beats_of_mut(track: &mut Track) -> impl Iterator<Item = &mut Beat> {
+    track
+        .measures
+        .iter_mut()
+        .flat_map(|m| &mut m.voices)
+        .flat_map(|v| &mut v.beats)
 }
 
 fn add_track(score: &mut Score, sound: Sound) -> Result<(), EditError> {
@@ -770,6 +1100,9 @@ fn set_tuning(score: &mut Score, track: usize, tuning: &[u8]) -> Result<(), Edit
         .tracks
         .get_mut(track)
         .ok_or(EditError::OutOfRange("track"))?;
+    if target.instrument.note_kind() != NoteKind::Fretted {
+        return Err(EditError::NoStrings);
+    }
     if !(1..=MAX_STRINGS).contains(&tuning.len()) || tuning.iter().any(|&p| p > 127) {
         return Err(EditError::InvalidTuning);
     }
@@ -918,9 +1251,9 @@ fn beats_between(
 fn clear_notes(
     score: &mut Score,
     track: usize,
-    from: BeatAddress,
-    to: BeatAddress,
+    (from, to): (BeatAddress, BeatAddress),
     strings: Option<StringSpan>,
+    pitches: Option<PitchSpan>,
 ) -> Result<(), EditError> {
     let target = score
         .tracks
@@ -932,11 +1265,29 @@ fn clear_notes(
             return Err(EditError::OutOfRange("string"));
         }
     }
+    if pitches.is_some_and(|span| span.low > span.high || span.high > MAX_PITCH) {
+        return Err(EditError::InvalidPitch);
+    }
     let beats = beats_between(target, from, to)?;
     for (measure, beat) in beats {
-        target.measures[measure].voices[0].beats[beat]
+        let kept: Vec<Note> = target.measures[measure].voices[0].beats[beat]
             .notes
-            .retain(|n| strings.is_some_and(|s| n.string < s.first || n.string > s.last));
+            .iter()
+            .filter(|n| {
+                let is_off_strings = strings.is_some_and(|s| {
+                    n.string()
+                        .is_none_or(|string| string < s.first || string > s.last)
+                });
+                let is_off_pitches = pitches.is_some_and(|span| {
+                    target
+                        .pitch(n)
+                        .is_none_or(|p| p < span.low || p > span.high)
+                });
+                is_off_strings || is_off_pitches
+            })
+            .cloned()
+            .collect();
+        target.measures[measure].voices[0].beats[beat].notes = kept;
     }
     Ok(())
 }
@@ -1132,15 +1483,7 @@ mod tests {
         apply_edit(&mut score, &set_fret(0, 0, 3, 5)).unwrap();
 
         let first = &beats(&score, 0)[0];
-        assert_eq!(
-            first.notes,
-            vec![Note {
-                string: 3,
-                fret: 5,
-                technique: None,
-                tied: false
-            }]
-        );
+        assert_eq!(first.notes, vec![Note::fretted(3, 5)]);
         assert_eq!(score.validate(), Ok(()));
     }
 
@@ -1154,7 +1497,7 @@ mod tests {
         let notes: Vec<(u8, u8)> = beats(&score, 0)[0]
             .notes
             .iter()
-            .map(|n| (n.string, n.fret))
+            .map(|n| (n.key(), n.fret().unwrap_or(0)))
             .collect();
         assert_eq!(notes, vec![(1, 0), (5, 7)]);
     }
@@ -1423,6 +1766,7 @@ mod tests {
             from,
             to,
             strings: strings.map(|(first, last)| StringSpan { first, last }),
+            pitches: None,
         }
     }
 
@@ -1680,7 +2024,7 @@ mod tests {
 
         let note = &beats(&score, 0)[1].notes[0];
         assert!(note.tied);
-        assert_eq!(note.fret, 5);
+        assert_eq!(note.fret(), Some(5));
 
         apply_edit(&mut score, &set_tied_edit(0, 1, 2, false)).unwrap();
         assert!(!beats(&score, 0)[1].notes[0].tied);
@@ -1692,7 +2036,7 @@ mod tests {
         apply_edit(&mut score, &set_fret(0, 0, 3, 7)).unwrap();
         apply_edit(&mut score, &set_fret(1, 0, 3, 0)).unwrap();
         apply_edit(&mut score, &set_tied_edit(1, 0, 3, true)).unwrap();
-        assert_eq!(beats(&score, 1)[0].notes[0].fret, 7);
+        assert_eq!(beats(&score, 1)[0].notes[0].fret(), Some(7));
     }
 
     #[test]
@@ -1946,7 +2290,7 @@ mod tests {
         apply_edit(&mut score, &signature_edit(0, 3, 4)).unwrap();
         assert_eq!(score.tracks[0].measures[0].time_signature.numerator, 3);
         assert_eq!(lengths(&score, 0), vec![96]);
-        assert_eq!(beats(&score, 0)[0].notes[0].fret, 5);
+        assert_eq!(beats(&score, 0)[0].notes[0].fret(), Some(5));
         assert_eq!(score.validate(), Ok(()));
     }
 
@@ -1960,7 +2304,7 @@ mod tests {
         assert_eq!(lengths(&score, 0), vec![64, 16]);
         let notes: Vec<(u8, bool)> = beats(&score, 0)
             .iter()
-            .map(|b| (b.notes[0].fret, b.notes[0].tied))
+            .map(|b| (b.notes[0].fret().unwrap_or(0), b.notes[0].tied))
             .collect();
         assert_eq!(notes, vec![(5, false), (5, true)]);
         assert_eq!(score.validate(), Ok(()));
@@ -2081,12 +2425,7 @@ mod tests {
         let mut score = demo_score();
         // Five strings, with a note at fret 2 of the fifth: a banjo's fifth string has no fret 2.
         score.tracks[0].tuning.truncate(5);
-        score.tracks[0].measures[0].voices[0].beats[0].notes = vec![Note {
-            string: 5,
-            fret: 2,
-            technique: None,
-            tied: false,
-        }];
+        score.tracks[0].measures[0].voices[0].beats[0].notes = vec![Note::fretted(5, 2)];
         let before = score.clone();
         assert_eq!(
             apply_edit(
@@ -2158,12 +2497,7 @@ mod tests {
             duration: dur(value, 0),
             notes: notes
                 .iter()
-                .map(|&(string, fret)| Note {
-                    string,
-                    fret,
-                    technique: None,
-                    tied: false,
-                })
+                .map(|&(string, fret)| Note::fretted(string, fret))
                 .collect(),
         }
     }
@@ -2180,7 +2514,12 @@ mod tests {
     fn frets_of(score: &Score, measure: usize) -> Vec<Vec<(u8, u8)>> {
         beats(score, measure)
             .iter()
-            .map(|b| b.notes.iter().map(|n| (n.string, n.fret)).collect())
+            .map(|b| {
+                b.notes
+                    .iter()
+                    .map(|n| (n.key(), n.fret().unwrap_or(0)))
+                    .collect()
+            })
             .collect()
     }
 
@@ -2257,7 +2596,7 @@ mod tests {
 
         let first = &score.tracks[1].measures[0].voices[0].beats[0];
         assert_eq!(
-            first.notes.iter().map(|n| n.string).collect::<Vec<_>>(),
+            first.notes.iter().map(Note::key).collect::<Vec<_>>(),
             vec![2]
         );
         assert_eq!(score.validate(), Ok(()));
@@ -2330,6 +2669,371 @@ mod tests {
         assert_eq!(score, before);
     }
 
+    /// A blank score whose track is a piano: four measures of whole rests.
+    fn piano_score() -> Score {
+        let mut score = blank_score("p");
+        apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Piano,
+            },
+        )
+        .unwrap();
+        score
+    }
+
+    fn add_pitch(measure: usize, beat: usize, pitch: u8) -> Edit {
+        Edit::AddPitch {
+            track: 0,
+            measure,
+            beat,
+            pitch,
+        }
+    }
+
+    fn move_pitch(measure: usize, beat: usize, pitch: u8, to: u8) -> Edit {
+        Edit::MovePitch {
+            track: 0,
+            measure,
+            beat,
+            pitch,
+            to,
+        }
+    }
+
+    fn pitches_of(score: &Score, measure: usize, beat: usize) -> Vec<u8> {
+        beats(score, measure)[beat]
+            .notes
+            .iter()
+            .filter_map(|n| score.tracks[0].pitch(n))
+            .collect()
+    }
+
+    /// The first measure as two halves, the first holding `first`, the second `second`.
+    fn two_halves(score: &mut Score, first: &[u8], second: &[u8]) {
+        apply_edit(score, &set_duration_edit(0, 0, dur(NoteValue::Half, 0))).unwrap();
+        for &pitch in first {
+            apply_edit(score, &add_pitch(0, 0, pitch)).unwrap();
+        }
+        for &pitch in second {
+            apply_edit(score, &add_pitch(0, 1, pitch)).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_pitch_turns_a_rest_of_a_piano_into_a_note() {
+        let mut score = piano_score();
+        apply_edit(&mut score, &add_pitch(0, 0, 60)).unwrap();
+        assert_eq!(beats(&score, 0)[0].notes, vec![Note::pitched(60)]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn pitches_added_to_a_beat_make_a_sorted_chord_without_duplicates() {
+        let mut score = piano_score();
+        for pitch in [67, 60, 64, 60] {
+            apply_edit(&mut score, &add_pitch(0, 0, pitch)).unwrap();
+        }
+        assert_eq!(pitches_of(&score, 0, 0), vec![60, 64, 67]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_pitch_written_on_a_guitar_goes_on_a_free_string_at_the_lowest_fret() {
+        let mut score = blank_score("t");
+        // A3 is fret 2 of string 3; once that string is taken, fret 7 of string 4.
+        apply_edit(&mut score, &add_pitch(0, 0, 57)).unwrap();
+        apply_edit(&mut score, &set_fret(0, 0, 3, 0)).unwrap();
+        apply_edit(&mut score, &add_pitch(0, 0, 57)).unwrap();
+        let placed: Vec<Place> = beats(&score, 0)[0].notes.iter().map(|n| n.place).collect();
+        assert_eq!(
+            placed,
+            vec![
+                Place::Fretted { string: 3, fret: 0 },
+                Place::Fretted { string: 4, fret: 7 }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pitch_no_free_string_can_play_is_refused() {
+        let mut score = blank_score("t");
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &add_pitch(0, 0, 20)),
+            Err(EditError::NoFreeString)
+        );
+        assert_eq!(
+            apply_edit(&mut score, &add_pitch(0, 0, 128)),
+            Err(EditError::InvalidPitch)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn removing_a_pitch_leaves_the_rest_of_the_chord() {
+        let mut score = piano_score();
+        for pitch in [60, 64] {
+            apply_edit(&mut score, &add_pitch(0, 0, pitch)).unwrap();
+        }
+        let remove = |pitch| Edit::RemovePitch {
+            track: 0,
+            measure: 0,
+            beat: 0,
+            pitch,
+        };
+        apply_edit(&mut score, &remove(60)).unwrap();
+        assert_eq!(pitches_of(&score, 0, 0), vec![64]);
+        apply_edit(&mut score, &remove(64)).unwrap();
+        assert!(beats(&score, 0)[0].notes.is_empty(), "the beat is a rest");
+    }
+
+    #[test]
+    fn moving_a_pitch_keeps_the_chord_sorted() {
+        let mut score = piano_score();
+        for pitch in [60, 64] {
+            apply_edit(&mut score, &add_pitch(0, 0, pitch)).unwrap();
+        }
+        apply_edit(&mut score, &move_pitch(0, 0, 60, 66)).unwrap();
+        assert_eq!(pitches_of(&score, 0, 0), vec![64, 66]);
+    }
+
+    #[test]
+    fn moving_a_tied_pitch_unties_it_and_the_note_that_continued_it() {
+        let mut score = piano_score();
+        apply_edit(
+            &mut score,
+            &set_duration_edit(0, 0, dur(NoteValue::Quarter, 0)),
+        )
+        .unwrap();
+        apply_edit(
+            &mut score,
+            &set_duration_edit(0, 1, dur(NoteValue::Quarter, 0)),
+        )
+        .unwrap();
+        for beat in 0..3 {
+            apply_edit(&mut score, &add_pitch(0, beat, 62)).unwrap();
+        }
+        for beat in 1..3 {
+            let tie = Edit::SetPitchTied {
+                track: 0,
+                measure: 0,
+                beat,
+                pitch: 62,
+                tied: true,
+            };
+            apply_edit(&mut score, &tie).unwrap();
+        }
+        apply_edit(&mut score, &move_pitch(0, 1, 62, 63)).unwrap();
+        let ties: Vec<bool> = beats(&score, 0)[..3]
+            .iter()
+            .map(|b| b.notes[0].tied)
+            .collect();
+        assert_eq!(ties, vec![false, false, false]);
+        assert_eq!(pitches_of(&score, 0, 1), vec![63]);
+    }
+
+    #[test]
+    fn moving_onto_a_pitch_the_beat_has_or_from_one_it_lacks_is_refused() {
+        let mut score = piano_score();
+        for pitch in [60, 61] {
+            apply_edit(&mut score, &add_pitch(0, 0, pitch)).unwrap();
+        }
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &move_pitch(0, 0, 60, 61)),
+            Err(EditError::PitchTaken)
+        );
+        assert_eq!(
+            apply_edit(&mut score, &move_pitch(0, 0, 70, 71)),
+            Err(EditError::NoSuchNote)
+        );
+        assert_eq!(
+            apply_edit(&mut score, &move_pitch(0, 0, 61, 128)),
+            Err(EditError::InvalidPitch)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn moving_a_guitar_note_keeps_its_string_when_it_reaches_the_pitch() {
+        let mut score = blank_score("t");
+        apply_edit(&mut score, &set_fret(0, 0, 1, 0)).unwrap();
+        apply_edit(&mut score, &move_pitch(0, 0, 64, 65)).unwrap();
+        assert_eq!(
+            beats(&score, 0)[0].notes[0].place,
+            Place::Fretted { string: 1, fret: 1 }
+        );
+        // Below the open first string: another string takes it.
+        apply_edit(&mut score, &move_pitch(0, 0, 65, 63)).unwrap();
+        assert_eq!(
+            beats(&score, 0)[0].notes[0].place,
+            Place::Fretted { string: 2, fret: 4 }
+        );
+    }
+
+    #[test]
+    fn a_pitched_tie_needs_the_same_pitch_just_before() {
+        let mut score = piano_score();
+        two_halves(&mut score, &[60], &[60, 64]);
+        let tie = |pitch| Edit::SetPitchTied {
+            track: 0,
+            measure: 0,
+            beat: 1,
+            pitch,
+            tied: true,
+        };
+        assert_eq!(
+            apply_edit(&mut score, &tie(64)),
+            Err(EditError::NothingToTie)
+        );
+        apply_edit(&mut score, &tie(60)).unwrap();
+        let tied: Vec<bool> = beats(&score, 0)[1].notes.iter().map(|n| n.tied).collect();
+        assert_eq!(tied, vec![true, false]);
+    }
+
+    #[test]
+    fn strings_frets_and_tunings_are_refused_on_a_piano() {
+        let mut score = piano_score();
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &set_fret(0, 0, 1, 3)),
+            Err(EditError::NoStrings)
+        );
+        assert_eq!(
+            apply_edit(
+                &mut score,
+                &Edit::SetTuning {
+                    track: 0,
+                    tuning: GUITAR_STANDARD.to_vec()
+                }
+            ),
+            Err(EditError::NoStrings)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn clearing_by_pitch_keeps_the_notes_outside_the_span() {
+        let mut score = piano_score();
+        for pitch in [48, 60, 64, 72] {
+            apply_edit(&mut score, &add_pitch(0, 0, pitch)).unwrap();
+        }
+        let edit = Edit::ClearNotes {
+            track: 0,
+            from: at(0, 0),
+            to: at(0, 0),
+            strings: None,
+            pitches: Some(PitchSpan { low: 60, high: 64 }),
+        };
+        apply_edit(&mut score, &edit).unwrap();
+        assert_eq!(pitches_of(&score, 0, 0), vec![48, 72]);
+    }
+
+    #[test]
+    fn a_paste_keeps_only_the_notes_of_the_kind_of_the_track() {
+        let mut score = piano_score();
+        let beat = Beat {
+            duration: dur(NoteValue::Quarter, 0),
+            notes: vec![Note::fretted(1, 0), Note::pitched(67)],
+        };
+        apply_edit(&mut score, &paste_edit(0, 0, 0, vec![beat])).unwrap();
+        assert_eq!(beats(&score, 0)[0].notes, vec![Note::pitched(67)]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_guitar_becomes_a_piano_with_the_same_pitches_and_ties() {
+        let mut score = demo_score();
+        let guitar = score.tracks[0].clone();
+        apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Piano,
+            },
+        )
+        .unwrap();
+        let piano = &score.tracks[0];
+        assert!(piano.tuning.is_empty());
+        assert_eq!(piano.sound, Sound::Piano);
+        for (g, p) in guitar.measures.iter().zip(&piano.measures) {
+            for (a, b) in g.voices[0].beats.iter().zip(&p.voices[0].beats) {
+                let mut pitches: Vec<u8> = a.notes.iter().filter_map(|n| guitar.pitch(n)).collect();
+                pitches.sort_unstable();
+                pitches.dedup();
+                assert_eq!(b.notes.iter().map(Note::key).collect::<Vec<_>>(), pitches);
+                assert_eq!(
+                    a.notes.iter().any(|n| n.tied),
+                    b.notes.iter().any(|n| n.tied)
+                );
+            }
+        }
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_piano_becomes_a_guitar_when_its_pitches_fit_the_strings() {
+        let mut score = piano_score();
+        two_halves(&mut score, &[45, 52, 57], &[64]);
+        let to_guitar = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Guitar,
+        };
+        apply_edit(&mut score, &to_guitar).unwrap();
+        assert_eq!(score.tracks[0].tuning, GUITAR_STANDARD.to_vec());
+        assert_eq!(pitches_of(&score, 0, 0), vec![57, 52, 45]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_piano_with_a_pitch_the_guitar_cannot_play_stays_a_piano() {
+        let mut score = piano_score();
+        apply_edit(&mut score, &add_pitch(0, 0, 21)).unwrap();
+        let before = score.clone();
+        let to_guitar = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Guitar,
+        };
+        assert_eq!(
+            apply_edit(&mut score, &to_guitar),
+            Err(EditError::NoFreeString)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_piano_track_is_added_without_strings() {
+        let mut score = blank_score("t");
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Piano,
+                sound: None,
+            },
+        )
+        .unwrap();
+        let piano = &score.tracks[1];
+        assert_eq!((piano.name.as_str(), piano.sound), ("Piano", Sound::Piano));
+        assert!(piano.tuning.is_empty());
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn pitched_edits_travel_as_camel_case_json() {
+        let json = serde_json::to_value(move_pitch(1, 2, 60, 61)).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "movePitch", "track": 0, "measure": 1, "beat": 2, "pitch": 60, "to": 61 })
+        );
+        let clear: Edit = serde_json::from_str(
+            r#"{"type":"clearNotes","track":0,"from":{"measure":0,"beat":0},"to":{"measure":0,"beat":0},"strings":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(clear, Edit::ClearNotes { pitches: None, .. }));
+    }
+
     /// Whatever sequence of edits is thrown at a score, it stays valid, and a refused edit
     /// leaves it untouched.
     #[test]
@@ -2350,7 +3054,17 @@ mod tests {
             NoteValue::ThirtySecond,
         ];
 
-        for start in [demo_score(), blank_score("t")] {
+        let mut with_piano = demo_score();
+        apply_edit(
+            &mut with_piano,
+            &Edit::SetInstrument {
+                track: 1,
+                instrument: Instrument::Piano,
+            },
+        )
+        .unwrap();
+
+        for start in [demo_score(), blank_score("t"), with_piano] {
             let mut score = start;
             let mut applied = 0;
             for step in 0..600 {
@@ -2358,15 +3072,20 @@ mod tests {
                 let track = next(score.tracks.len());
                 let measure = next(score.tracks[track].measures.len());
                 let beat = next(score.tracks[track].measures[measure].voices[0].beats.len());
-                let string = 1 + next(score.tracks[track].tuning.len()) as u8;
+                let string = 1 + next(score.tracks[track].tuning.len().max(1)) as u8;
                 let wild = next(12) == 0;
+                let pitch = if wild {
+                    next(140) as u8
+                } else {
+                    30 + next(60) as u8
+                };
                 let (measure, beat) = if wild {
                     (next(20), next(20))
                 } else {
                     (measure, beat)
                 };
 
-                let edit = match next(18) {
+                let edit = match next(23) {
                     0 | 1 => Edit::SetFret {
                         track,
                         measure,
@@ -2433,6 +3152,39 @@ mod tests {
                                 last: string,
                             }),
                         ][next(2)],
+                        pitches: [
+                            None,
+                            Some(PitchSpan {
+                                low: pitch,
+                                high: pitch.saturating_add(next(12) as u8),
+                            }),
+                        ][next(2)],
+                    },
+                    18 | 19 => Edit::AddPitch {
+                        track,
+                        measure,
+                        beat,
+                        pitch,
+                    },
+                    20 => Edit::RemovePitch {
+                        track,
+                        measure,
+                        beat,
+                        pitch,
+                    },
+                    21 => Edit::MovePitch {
+                        track,
+                        measure,
+                        beat,
+                        pitch,
+                        to: pitch.saturating_add(next(3) as u8).saturating_sub(1),
+                    },
+                    22 => Edit::SetPitchTied {
+                        track,
+                        measure,
+                        beat,
+                        pitch,
+                        tied: next(3) != 0,
                     },
                     17 => Edit::RemoveRests {
                         track,
@@ -2461,15 +3213,16 @@ mod tests {
                         beats: (0..1 + next(4))
                             .map(|_| Beat {
                                 duration: dur(values[next(6)], next(3) as u8),
-                                notes: if next(3) == 0 {
-                                    vec![]
-                                } else {
-                                    vec![Note {
-                                        string,
-                                        fret: next(25) as u8,
-                                        technique: None,
+                                notes: match next(4) {
+                                    0 => vec![],
+                                    1 => vec![Note {
                                         tied: next(4) == 0,
-                                    }]
+                                        ..Note::pitched(pitch)
+                                    }],
+                                    _ => vec![Note {
+                                        tied: next(4) == 0,
+                                        ..Note::fretted(string, next(25) as u8)
+                                    }],
                                 },
                             })
                             .collect(),

@@ -1,16 +1,18 @@
 <script lang="ts">
   import TabView from './TabView.svelte'
   import type { Editor } from '../lib/editor.svelte'
-  import { soundLabel } from '../lib/instruments'
+  import { isPitchedTrack, soundLabel } from '../lib/instruments'
   import type { Playback } from '../lib/playback.svelte'
   import type { Score } from '../lib/score-types'
   import type { Selection } from '../lib/selection'
   import { layoutRows, locateTick, visibleRows } from '../lib/tab-layout'
   import type { ShownTrack } from '../lib/tab-layout'
+  import type { FrettedView } from '../lib/track-view'
 
   let {
     score,
     shown,
+    fretted,
     editor,
     playback,
     ontogglecollapse,
@@ -19,6 +21,8 @@
   }: {
     score: Score
     shown: ShownTrack[]
+    /** How fretted tracks are written: tablature, staff, or both. */
+    fretted: FrettedView
     editor: Editor
     playback: Playback
     ontogglecollapse: (track: number) => void
@@ -40,7 +44,7 @@
   let viewWidth = $state(0)
   let viewHeight = $state(0)
 
-  const layout = $derived(layoutRows({ tracks: score.tracks, shown, width: Math.max(viewWidth - HEADER_WIDTH, 0) }))
+  const layout = $derived(layoutRows({ tracks: score.tracks, shown, fretted, width: Math.max(viewWidth - HEADER_WIDTH, 0) }))
   const rows = $derived(visibleRows({ layout, top: scrollTop - OVERSCAN, bottom: scrollTop + SCROLL_STEP + viewHeight + OVERSCAN }))
   const visibleX = $derived({ left: scrollLeft - OVERSCAN, right: scrollLeft + SCROLL_STEP + viewWidth - HEADER_WIDTH + OVERSCAN })
 
@@ -112,7 +116,7 @@
                 class="fold"
                 aria-expanded={row.layout !== null}
                 aria-label="{row.layout ? 'Fold' : 'Unfold'} {track.name}"
-                title={row.layout ? 'Fold this row down to its header' : 'Show the tablature of this row'}
+                title={row.layout ? 'Fold this row down to its header' : 'Show the notes of this row'}
                 onmousedown={keepFocus}
                 onclick={() => ontogglecollapse(row.track)}
               >
@@ -127,7 +131,7 @@
               >
             </div>
             {#if row.layout}
-              <p class="instrument">{soundLabel(track.sound)} · {track.tuning.length} strings</p>
+              <p class="instrument">{soundLabel(track.sound)}{isPitchedTrack(track) ? '' : ` · ${track.tuning.length} strings`}</p>
             {/if}
             <div class="buttons">
               <button
@@ -174,6 +178,7 @@
                 onselect={editor.canEdit ? (target, options) => editor.select(target, { ...options, track: row.track }) : undefined}
                 ondrag={editor.canEdit ? (area) => editor.dragSelect({ ...area, track: row.track }) : undefined}
                 onseek={(tick) => playback.seek(tick)}
+                onenter={editor.canEdit ? (target) => editor.enterPitch({ ...target, track: row.track }) : undefined}
                 onmenu={editor.canEdit && onmenu ? (target, at) => onmenu(target, at, row.track) : undefined}
               />
             </div>

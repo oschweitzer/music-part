@@ -290,19 +290,30 @@ mod tests {
             )
             .unwrap();
             let track = score.tracks.len() - 1;
-            // A note on the last string, so that the banjo plays its short fifth string.
+            // A note on the last string, so that the banjo plays its short fifth string; a
+            // chord on the piano.
             let string = score.tracks[track].tuning.len() as u8;
-            score_model::apply_edit(
-                &mut score,
-                &Edit::SetFret {
+            let edits = if string == 0 {
+                [48, 64, 67]
+                    .map(|pitch| Edit::AddPitch {
+                        track,
+                        measure: 0,
+                        beat: 0,
+                        pitch,
+                    })
+                    .to_vec()
+            } else {
+                vec![Edit::SetFret {
                     track,
                     measure: 0,
                     beat: 0,
                     string,
                     fret: 7,
-                },
-            )
-            .unwrap();
+                }]
+            };
+            for edit in edits {
+                score_model::apply_edit(&mut score, &edit).unwrap();
+            }
         }
         // The blank first track has no notes, which the importer leaves out.
         score_model::apply_edit(&mut score, &Edit::RemoveTrack { index: 0 }).unwrap();

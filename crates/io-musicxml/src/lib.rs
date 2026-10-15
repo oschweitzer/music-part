@@ -2,9 +2,12 @@
 //! and builds a [`Score`].
 //!
 //! Positions are quantized to a 32nd note, like the MIDI importer, so triplets and other
-//! tuplets are rounded onto the grid and every measure stays exactly full. Notes that give a
-//! string and a fret (tablature exports) keep them; the others are placed on the strings by
-//! pitch. Repeats and endings are not unrolled: every measure is read once.
+//! tuplets are rounded onto the grid and every measure stays exactly full. A part of a string
+//! instrument (a tablature staff, a guitar, bass, violin or banjo program or name) keeps the
+//! string and fret its notes give, and the others are placed on the strings by pitch. Any other
+//! part becomes a pitched track (the piano for now): its staves and voices are merged into one
+//! voice of chords, notes held across the others being tied on, so no note is lost. Repeats and
+//! endings are not unrolled: every measure is read once.
 //!
 //! Like every importer, it never panics on a bad file: it returns an error, or leaves notes out
 //! and counts them in [`MusicXmlImport::skipped_notes`].
@@ -19,8 +22,8 @@ use std::io::{Cursor, Read};
 
 use roxmltree::{Document, Node, ParsingOptions};
 use score_model::{
-    decompose_ticks, fret_pitch, place_chord, Beat, Duration, Instrument, Measure, Note, Score,
-    Sound, Technique, TimeSignature, Track, Voice, MAX_FRET,
+    decompose_ticks, fret_pitch, pitched_segments, place_chord, Beat, Duration, Instrument,
+    Measure, Note, NoteKind, Score, Sound, Span, Technique, TimeSignature, Track, Voice, MAX_FRET,
 };
 
 /// Notes are quantized to a 32nd note: 4 units of 1/128 of a whole note.
@@ -348,12 +351,14 @@ fn pitch_of(step: &str, alter: i32, octave: i32) -> Option<i32> {
     (0..=127).contains(&pitch).then_some(pitch)
 }
 
-fn sound_for(info: Option<&PartInfo>) -> Sound {
-    // A program the file names wins when it is a guitar, bass, violin or banjo; a piano default
-    // is not.
-    if let Some(program) = info
-        .and_then(|i| i.midi_program)
-        .filter(|p| (24..=40).contains(p) || *p == Sound::Banjo.midi_program())
+/// The sound of a part: a string instrument when its program, its name or a tablature staff says
+/// so, else the piano (pitched).
+fn sound_for(info: Option<&PartInfo>, has_tab: bool) -> Sound {
+    // A program the file names wins when it is a guitar, bass, violin or banjo. Other programs
+    // come after the name: some programs write the piano for every part.
+    let program = info.and_then(|i| i.midi_program);
+    if let Some(program) =
+        program.filter(|p| (24..=40).contains(p) || *p == Sound::Banjo.midi_program())
     {
         return Sound::from_midi_program(Some(program));
     }
@@ -363,7 +368,7 @@ fn sound_for(info: Option<&PartInfo>) -> Sound {
         .to_lowercase();
     if name.contains("electric") && name.contains("guitar") {
         Instrument::ElectricGuitar.default_sound()
-    } else if name.contains("bass") {
+    } else if name.contains("bass") && !name.contains("bassoon") {
         Instrument::Bass.default_sound()
     } else if name.contains("violin") {
         Instrument::Violin.default_sound()
@@ -371,8 +376,10 @@ fn sound_for(info: Option<&PartInfo>) -> Sound {
         Instrument::Banjo.default_sound()
     } else if name.contains("steel") {
         Sound::GuitarSteel
-    } else {
+    } else if name.contains("guitar") || has_tab {
         Instrument::Guitar.default_sound()
+    } else {
+        Instrument::Piano.default_sound()
     }
 }
 
@@ -563,12 +570,18 @@ fn read_part(
         return Ok(None);
     }
 
-    let sound = sound_for(info);
+    let sound = sound_for(info, setup.tab_staff.is_some());
     let instrument = sound.instrument();
-    let tuning = setup
-        .tuning
-        .unwrap_or_else(|| instrument.standard_tuning().to_vec());
-    let voice_count = voice_keys.len().max(1);
+    let (tuning, voice_count) = match instrument.note_kind() {
+        NoteKind::Fretted => (
+            setup
+                .tuning
+                .unwrap_or_else(|| instrument.standard_tuning().to_vec()),
+            voice_keys.len().max(1),
+        ),
+        // Every staff and voice goes into one.
+        NoteKind::Pitched => (Vec::new(), 1),
+    };
 
     let mut measures = Vec::with_capacity(raw_measures.len());
     for raw in &raw_measures {
@@ -661,6 +674,13 @@ fn build_measure(
     }
     let measure_ticks = i64::from(signature.ticks());
 
+    if instrument.note_kind() == NoteKind::Pitched {
+        let beats = merge_voices(raw, measure_ticks, &to_ticks, skipped)?;
+        return Ok(Measure {
+            time_signature: signature,
+            voices: vec![Voice { beats }],
+        });
+    }
     let mut voices = Vec::with_capacity(voice_count);
     for voice in 0..voice_count {
         let mut events: Vec<&RawNote> = raw.notes.iter().filter(|n| n.voice == voice).collect();
@@ -673,6 +693,51 @@ fn build_measure(
         time_signature: signature,
         voices,
     })
+}
+
+/// Every note of a measure, whatever its staff and voice, as one voice of chords for a pitched
+/// track: notes are cut where others start or end, the parts after the first being tied on.
+fn merge_voices(
+    raw: &RawMeasure,
+    measure_ticks: i64,
+    to_ticks: &dyn Fn(i64) -> i64,
+    skipped: &mut usize,
+) -> Result<Vec<Beat>, MusicXmlImportError> {
+    let at = |divisions: i64| -> u32 {
+        // Clamped to the measure, which `MAX_MEASURES` keeps far below `u32::MAX`.
+        u32::try_from(to_ticks(divisions).clamp(0, measure_ticks)).unwrap_or(0)
+    };
+    let mut spans = Vec::new();
+    for note in &raw.notes {
+        let RawKind::Pitched { pitch, fixed } = note.kind else {
+            continue;
+        };
+        // A part read as pitched may still give a string and fret without a pitch: there is
+        // no tuning to make sense of them.
+        let (Some(pitch), _) = (pitch, fixed) else {
+            *skipped += 1;
+            continue;
+        };
+        let (start, end) = (at(note.start), at(note.start.saturating_add(note.length)));
+        if end <= start {
+            *skipped += 1;
+            continue;
+        }
+        spans.push(Span {
+            start,
+            end,
+            pitch,
+            is_tie_end: note.is_tie_end,
+        });
+    }
+    let mut beats = Vec::new();
+    let mut cursor = 0;
+    for (start, length, notes) in pitched_segments(&spans) {
+        push_beat(&mut beats, i64::from(length), &notes)?;
+        cursor = start + length;
+    }
+    push_rests(&mut beats, measure_ticks - i64::from(cursor))?;
+    Ok(beats)
 }
 
 /// A time signature of exactly `ticks`, in the simplest denominator.
@@ -755,17 +820,16 @@ fn place_notes(members: &[&RawNote], strings: Strings, skipped: &mut usize) -> V
             continue;
         };
         let note = |string: u8, fret: u8| Note {
-            string,
-            fret,
             technique: member.technique,
             tied: member.is_tie_end,
+            ..Note::fretted(string, fret)
         };
         match (fixed, pitch) {
             // A fret the string does not have (the first frets of a banjo's short string) is
             // placed again from the pitch.
             (Some((string, fret)), _)
                 if fret_pitch(instrument, tuning, string, fret).is_some()
-                    && !notes.iter().any(|n| n.string == string) =>
+                    && !notes.iter().any(|n| n.string() == Some(string)) =>
             {
                 notes.push(note(string, fret));
             }
@@ -774,20 +838,20 @@ fn place_notes(members: &[&RawNote], strings: Strings, skipped: &mut usize) -> V
         }
     }
 
-    let taken: Vec<u8> = notes.iter().map(|n| n.string).collect();
+    let taken: Vec<u8> = notes.iter().map(Note::key).collect();
     let pitches: Vec<u8> = loose.iter().map(|&(p, _)| p).collect();
     let (placed, left_out) = place_chord(instrument, tuning, &pitches, &taken);
     *skipped += left_out;
     for mut note in placed {
         // Carry the tie and technique of the source note over to where it was placed.
-        let pitch = fret_pitch(instrument, tuning, note.string, note.fret);
+        let pitch = fret_pitch(instrument, tuning, note.key(), note.fret().unwrap_or(0));
         if let Some((_, source)) = loose.iter().find(|(p, _)| Some(*p) == pitch) {
             note.tied = source.is_tie_end;
             note.technique = source.technique;
         }
         notes.push(note);
     }
-    notes.sort_by_key(|n| n.string);
+    notes.sort_by_key(Note::key);
     notes
 }
 

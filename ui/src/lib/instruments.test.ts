@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INSTRUMENTS, SOUNDS, instrumentLabel, soundLabel, soundsOf } from './instruments'
+import { INSTRUMENTS, SOUNDS, instrumentLabel, isPitchedTrack, noteKindOf, soundLabel, soundsOf } from './instruments'
 
 describe('instruments', () => {
   it('should give every instrument a distinct label', () => {
@@ -35,5 +35,10 @@ describe('sounds', () => {
     const programs = SOUNDS.map((s) => s.program)
     expect(new Set(programs).size).toBe(SOUNDS.length)
     expect(programs.every((p) => p >= 0 && p <= 127)).toBe(true)
+  })
+
+  it('should store the notes of the piano as pitches, those of string instruments on strings', () => {
+    expect(INSTRUMENTS.filter((i) => noteKindOf(i) === 'pitched')).toEqual(['Piano'])
+    expect(isPitchedTrack({ instrument: 'Banjo' })).toBe(false)
   })
 })

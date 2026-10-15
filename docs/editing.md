@@ -9,6 +9,26 @@ Click a note, or an empty spot on a string, to select a beat and a string. The s
 outlined, and its beat is lightly highlighted. The arrow keys move it: left and right along the beats
 (crossing barlines), up and down between strings.
 
+On a staff (a piano track, or a string track shown as `Staff` or `Both`), click a note head or a
+line or space. On a piano the selection is a pitch: an empty spot shows a dashed head where the
+note would go. On the staff of a string track a click on a head selects that note's string; a
+click elsewhere keeps the selected string.
+
+## Writing on a staff
+
+A piano track has no strings: its notes are pitches, written on a grand staff (treble and bass,
+split at middle C). See [`notation.md`](notation.md) for the design.
+
+- **Double-click** a line or space to write a note there (a note of C major; move it with the
+  arrows for a sharp or a flat). Double-clicking the staff of a string track writes the pitch on a
+  free string, at the lowest fret, and selects that string.
+- **Enter** writes a note at the selected pitch; **Shift+A** to **Shift+G** write the note of that
+  name nearest to the selected pitch. Notes added to a beat that has some make a chord.
+- **Up / Down** on a note move it a semitone (the selection follows it); on an empty spot they move
+  the selection one line or space.
+- `Delete`, `L` (tie to the same pitch on the beat before), durations, dots, copy, cut and paste
+  work as on a tablature. Digits and techniques are for strings: on a piano the app says so.
+
 ## Keyboard
 
 | Key                         | Does                                                                          |
@@ -31,6 +51,9 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | `Space`                     | Play or pause                                                                 |
 | `Home`                      | Moves playback back to the beginning                                          |
 | `Esc`                       | Clears the selection                                                          |
+| `Enter`                     | On a staff: writes a note at the selected pitch                               |
+| `Shift+A` to `Shift+G`      | On a staff: writes the note of that name nearest to the selected pitch        |
+| `Up` / `Down` on a staff    | Moves the selected note a semitone, or the selection a line or space          |
 
 On macOS, `Cmd` replaces `Ctrl`. The same actions are in the toolbars.
 
@@ -148,6 +171,11 @@ between runs, like the theme.
   row has a header on the left (name, instrument, number of strings, mute, solo, remove, and an
   arrow that folds the row down to its header) and its tablature on the right.
 
+The `Tab` / `Staff` / `Both` switch next to it says how string instruments are written: as
+tablature, on a standard staff, or on a staff above the tablature. It applies to every string
+track, in both views, and is kept between runs. A piano is always written on its grand staff.
+Rows of different heights still share their barlines and their time axis.
+
 Selecting is the same in both: a click or a drag in a row selects in that row's track, and the
 keys, paste and the track fields act on the track of the selection. A drag stays in the row it
 started in, even when the mouse moves over another row. `Alt+Up` and `Alt+Down` move the selection
@@ -182,7 +210,7 @@ closes; the mode is remembered.
 
 ## Tracks and tuning
 
-`+ Track` adds a nylon guitar, electric guitar, electric bass or violin in standard tuning with empty measures matching the first
+`+ Track` adds a nylon guitar, electric guitar, electric bass, violin, banjo or piano with empty measures matching the first
 track. The cross on a track's tab deletes it (the last track cannot be removed; Ctrl+Z brings a track back). The tuning field
 takes note names from the highest string to the lowest, for example `E4 B3 G3 D3 A2 D2` (`#` and `b`
 are accepted, middle C is `C4`); the number of strings follows the number of names, up to 12. A
@@ -190,6 +218,11 @@ tuning that would leave a note without a string, or above MIDI pitch 127, is ref
 
 The track bar also has the track's name and its sound (nylon guitar, electric guitar, electric bass or violin). Changing the sound
 keeps the strings: retune the track if they differ.
+
+A piano has no tuning field. Changing a string track to the piano keeps every pitch (and drops the
+techniques); changing a piano to a string instrument gives it the standard tuning and places its
+pitches on the strings, and is refused when a note cannot be placed (too low, or a chord with more
+notes than strings).
 
 ## Time signature
 
@@ -215,7 +248,8 @@ back to the state that was opened or saved clears the unsaved mark.
   dialog leaves it off.
   - MIDI: one track per instrument on its own channel, tempo and time signatures, ties merged
     into long notes. Techniques are not written.
-  - MusicXML: one tablature staff per track with its tuning, string and fret on every note, ties,
+  - MusicXML: one tablature staff per string track with its tuning, string and fret on every note
+    (a piano: one standard staff), ties,
     voices, and the techniques (hammer-on, pull-off, slide, bend, harmonic, palm mute). Other
     programs can show and play it, and Music Part reads it back to the same score.
 - The app asks before discarding unsaved changes: when opening a file, creating a score, or closing

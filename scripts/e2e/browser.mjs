@@ -135,6 +135,13 @@ export async function launchBrowser({ width = 1200, height = 800, port = 9444 } 
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
     },
 
+    /** Two clicks in a row, the second one counted as a double-click. */
+    async mouseDoubleClick(x, y) {
+      await page.mouseClick(x, y)
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 2 })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 2 })
+    },
+
     async mouseRightClick(x, y) {
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'right', buttons: 2, clickCount: 1 })

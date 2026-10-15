@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { dropTrackFromView, readViewMode, saveViewMode, shownTracks, toggleCollapsed } from './track-view'
+import { dropTrackFromView, readFrettedView, readViewMode, saveFrettedView, saveViewMode, shownTracks, toggleCollapsed } from './track-view'
 import type { TrackView } from './track-view'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -67,5 +67,14 @@ describe('the saved view mode', () => {
     vi.stubGlobal('localStorage', { getItem: blocked, setItem: blocked })
     expect(readViewMode()).toBe('tabs')
     expect(() => saveViewMode('rows')).not.toThrow()
+  })
+
+  it('should keep the way fretted tracks are written, tablature by default', () => {
+    stubStorage({})
+    expect(readFrettedView()).toBe('tab')
+    saveFrettedView('both')
+    expect(readFrettedView()).toBe('both')
+    stubStorage({ 'music-part-fretted-view': 'score' })
+    expect(readFrettedView()).toBe('tab')
   })
 })
