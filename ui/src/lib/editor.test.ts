@@ -39,6 +39,7 @@ function fakeApi(overrides: Partial<DocumentApi> = {}) {
     exportScore: vi.fn(async ({ path }: { path: string }) => path),
     undo: vi.fn(async () => state()),
     redo: vi.fn(async () => state({ isDirty: true })),
+    soundPacks: vi.fn(async () => ({ packs: [], refused: [], userFolder: null })),
     ...overrides,
   }
   return { api, edits }

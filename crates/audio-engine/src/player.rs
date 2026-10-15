@@ -1,10 +1,11 @@
 use std::io::{Read, Seek};
 use std::ops::RangeInclusive;
 
-use oxisynth::{MidiEvent, SoundFont, Synth, SynthDescriptor};
+use oxisynth::{MidiEvent, SoundFont, SoundFontId, Synth, SynthDescriptor};
 use score_model::{Score, Sound};
 
 use crate::sequencer::{self, Action, Event, Timbre, BEND_CENTER, BEND_RANGE_SEMITONES};
+use crate::sfz::{self, SfzInstrument, SfzSound};
 
 /// Silence kept after the last event so the notes can ring out.
 const RELEASE_TAIL_SECS: u64 = 2;
@@ -94,6 +95,20 @@ struct Bank {
     number: u8,
     /// Keys the recordings cover; notes outside are played with the General MIDI sound.
     keys: RangeInclusive<u8>,
+    /// The SoundFont in the synthesizer, to change its bank number or remove it.
+    font: SoundFontId,
+}
+
+/// A sample bank read from its file and ready to add to a [`Player`]. Reading one takes a while
+/// (the samples are decoded and copied), so it is done away from the real-time audio thread and
+/// the result handed over; see [`Player::add_bank_font`].
+pub struct BankFont(SoundFont);
+
+impl BankFont {
+    /// Reads a SoundFont 2 file. A corrupted file is an error, not a panic.
+    pub fn read<R: Read + Seek>(soundfont: &mut R) -> Result<Self, PlayerError> {
+        read_soundfont(soundfont).map(Self)
+    }
 }
 
 /// Everything the player needs to play one score, precomputed so that handing it to a running
@@ -218,8 +233,9 @@ fn timbre_offsets(timbre: Timbre) -> &'static [(u8, i32)] {
         Timbre::Legato => &[(GEN_VOL_ENV_ATTACK, 4000), (GEN_FILTER_FC, -1200)],
     }
 }
-/// Sample banks a player can hold. Bank numbers stay well under the 128 a controller can carry.
-const MAX_BANKS: u8 = 32;
+/// Sample banks a player can hold at once. Bank numbers stay well under the 128 a controller can
+/// carry.
+pub const MAX_BANKS: u8 = 32;
 /// Bank number of the first sample bank added; see `Player::add_bank`.
 const FIRST_BANK: u8 = 100;
 
@@ -242,6 +258,24 @@ pub struct Player {
     audible: Vec<bool>,
     /// Sample banks: the bank number the SoundFont of each sound answers to.
     banks: Vec<Bank>,
+    /// SFZ instruments and the voices that play them (see `docs/sfz.md`).
+    sfz: Vec<SfzSound>,
+    sfz_voices: sfz::Voices,
+    /// Every bank, SoundFont or SFZ, in the order added: the last one of a sound plays it.
+    order: Vec<(Sound, BankKind)>,
+}
+
+/// The two kinds of sample bank a sound can have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BankKind {
+    Font,
+    Sfz,
+}
+
+/// The samples of a bank taken out of a [`Player`], to be freed away from the audio thread.
+pub enum RemovedBank {
+    Font(BankFont),
+    Sfz(SfzInstrument),
 }
 
 impl Player {
@@ -263,7 +297,11 @@ impl Player {
             position: 0,
             playing: false,
             audible: Vec::new(),
-            banks: Vec::new(),
+            banks: Vec::with_capacity(usize::from(MAX_BANKS)),
+            // Room for every bank up front: adding one happens on the audio thread.
+            sfz: Vec::with_capacity(usize::from(MAX_BANKS)),
+            sfz_voices: sfz::Voices::new(),
+            order: Vec::with_capacity(2 * usize::from(MAX_BANKS)),
         })
     }
 
@@ -278,7 +316,18 @@ impl Player {
         soundfont: &mut R,
         keys: RangeInclusive<u8>,
     ) -> Result<(), PlayerError> {
-        let font = read_soundfont(soundfont)?;
+        self.add_bank_font(sound, BankFont::read(soundfont)?, keys)
+    }
+
+    /// [`Player::add_bank`] with a file already read, so that the slow part can happen on another
+    /// thread. Takes effect for the next score loaded. Banks can be added and removed in any order
+    /// between two loads.
+    pub fn add_bank_font(
+        &mut self,
+        sound: Sound,
+        BankFont(font): BankFont,
+        keys: RangeInclusive<u8>,
+    ) -> Result<(), PlayerError> {
         // Bank 0 is the base SoundFont. Each bank is shifted to a number counting down from
         // `FIRST_BANK`, so the most recent one, on top of the synthesizer's stack of fonts, has the
         // lowest. The synthesizer subtracts a font's shift from the requested bank and clamps at
@@ -289,17 +338,126 @@ impl Player {
             .filter(|n| *n < MAX_BANKS)
             .map(|n| FIRST_BANK - n)
             .ok_or_else(|| PlayerError::SoundFont("too many sample banks".into()))?;
+        // `number` follows from the count of banks held, so the newest is always the lowest:
+        // `remove_bank` renumbers the banks after the one it removes to keep it so.
         let id = self.synth.add_font(font, false);
         self.synth.set_bank_offset(id, u32::from(number));
+        self.order.push((sound, BankKind::Font));
         self.banks.push(Bank {
             sound,
             number,
             keys,
+            font: id,
         });
         Ok(())
     }
 
+    /// Plays the tracks with `sound` with an SFZ instrument, instead of the General MIDI program.
+    /// `keys` are the MIDI keys it covers, as for `add_bank`; a note inside them that no region
+    /// answers is also played by the General MIDI program. Takes effect for the next score
+    /// loaded. The latest bank added for a sound is heard, SoundFont or SFZ; removing it brings
+    /// back the one before.
+    pub fn add_sfz(
+        &mut self,
+        sound: Sound,
+        instrument: SfzInstrument,
+        keys: RangeInclusive<u8>,
+    ) -> Result<(), PlayerError> {
+        if self.sfz.len() >= usize::from(MAX_BANKS) {
+            return Err(PlayerError::SoundFont("too many SFZ instruments".into()));
+        }
+        // Voices point into the list by index: none may sound while it changes.
+        self.sfz_voices.cut_all();
+        self.sfz.push(SfzSound {
+            sound,
+            keys,
+            instrument,
+        });
+        self.order.push((sound, BankKind::Sfz));
+        Ok(())
+    }
+
+    /// Removes the SFZ instrument that plays `sound` (the most recent one), and returns it for
+    /// the caller to free away from the real-time audio thread.
+    pub fn remove_sfz(&mut self, sound: Sound) -> Option<SfzInstrument> {
+        let index = self.sfz.iter().rposition(|s| s.sound == sound)?;
+        self.sfz_voices.cut_all();
+        let removed = self.sfz.remove(index);
+        self.forget(sound, BankKind::Sfz);
+        Some(removed.instrument)
+    }
+
+    /// Removes the bank that plays `sound` now, SoundFont or SFZ, so the sound goes back to the
+    /// one it had before. Returns its samples, for the caller to free away from the audio thread.
+    pub fn remove_latest_bank(&mut self, sound: Sound) -> Option<RemovedBank> {
+        match self.latest_kind(sound)? {
+            BankKind::Font => self.remove_bank(sound).map(RemovedBank::Font),
+            BankKind::Sfz => self.remove_sfz(sound).map(RemovedBank::Sfz),
+        }
+    }
+
+    /// Which kind of bank plays `sound`: the one added last.
+    fn latest_kind(&self, sound: Sound) -> Option<BankKind> {
+        self.order
+            .iter()
+            .rev()
+            .find(|(s, _)| *s == sound)
+            .map(|(_, kind)| *kind)
+    }
+
+    /// Drops the latest entry of `sound` and `kind` from the order the banks were added in.
+    fn forget(&mut self, sound: Sound, kind: BankKind) {
+        if let Some(at) = self.order.iter().rposition(|entry| *entry == (sound, kind)) {
+            self.order.remove(at);
+        }
+    }
+
+    /// The SFZ instrument that plays `sound`, by index, when it is the latest bank of the sound.
+    fn sfz_of(&self, sound: Sound) -> Option<usize> {
+        (self.latest_kind(sound) == Some(BankKind::Sfz))
+            .then(|| self.sfz.iter().rposition(|s| s.sound == sound))
+            .flatten()
+    }
+
+    /// Removes the sample bank that plays `sound` (the most recent one, if it was given several),
+    /// so the sound goes back to the one it had before: an older bank or the General MIDI program.
+    /// Takes effect for the next score loaded. Returns the bank's samples, for the caller to free
+    /// away from the real-time audio thread.
+    pub fn remove_bank(&mut self, sound: Sound) -> Option<BankFont> {
+        let index = self.banks.iter().rposition(|b| b.sound == sound)?;
+        let bank = self.banks.remove(index);
+        self.forget(sound, BankKind::Font);
+        let font = self.synth.remove_font(bank.font, false);
+        // The banks added after it move up one number, back to `FIRST_BANK` minus their place:
+        // fonts higher on the synthesizer's stack keep lower numbers, which `add_bank_font`
+        // relies on.
+        for (place, later) in self.banks.iter_mut().enumerate().skip(index) {
+            later.number = FIRST_BANK - place as u8;
+            self.synth
+                .set_bank_offset(later.font, u32::from(later.number));
+        }
+        font.map(BankFont)
+    }
+
+    /// The sounds that have a sample bank, SoundFont or SFZ, oldest bank first.
+    pub fn bank_sounds(&self) -> impl Iterator<Item = Sound> + '_ {
+        self.order.iter().map(|(sound, _)| *sound)
+    }
+
+    /// Name of the preset the open channel of `track` plays: which bank a track got.
+    #[cfg(test)]
+    pub(crate) fn preset_of_track(&self, track: usize) -> Option<String> {
+        let channel = self.program.voices.get(track)?.open.channel;
+        self.synth
+            .channel_preset(channel)
+            .map(|preset| preset.name().to_string())
+    }
+
+    /// The SoundFont bank that plays `sound`, unless a later SFZ instrument does.
     fn bank_of(&self, sound: Sound) -> Option<&Bank> {
+        if self.latest_kind(sound) != Some(BankKind::Font) {
+            return None;
+        }
         self.banks.iter().rev().find(|b| b.sound == sound)
     }
 
@@ -310,6 +468,7 @@ impl Player {
     /// Replaces the score being played. Stops and rewinds.
     pub fn load(&mut self, program: Program) {
         self.stop();
+        self.sfz_voices.cut_all();
         for voice in &program.voices {
             // A sample bank for the sound sits at its own bank number, with the sound at
             // program 0; the fallback channel and sounds without a bank use the General MIDI
@@ -409,6 +568,7 @@ impl Player {
                 let _ = self.synth.send_event(MidiEvent::AllSoundOff { channel });
             }
         }
+        self.sfz_voices.cut_all();
         self.silence();
         let ticks = if ticks.is_finite() {
             ticks.max(0.0)
@@ -437,6 +597,7 @@ impl Player {
                 for channel in voice.channels() {
                     let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
                 }
+                self.sfz_voices.release_track(track);
             }
         }
     }
@@ -460,6 +621,7 @@ impl Player {
     }
 
     fn silence(&mut self) {
+        self.sfz_voices.release_all();
         for voice in &self.program.voices {
             for channel in voice.channels() {
                 let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
@@ -487,12 +649,47 @@ impl Player {
                 self.next += 1;
             }
             let (l, r) = self.synth.read_next();
-            frame[0] = l;
-            frame[1] = r;
+            let (sfz_l, sfz_r) = self.sfz_voices.next_frame(&self.sfz);
+            frame[0] = l + sfz_l;
+            frame[1] = r + sfz_r;
             self.position += 1;
             if self.position >= self.program.end_sample {
                 self.stop();
             }
+        }
+    }
+
+    /// Plays an event with the SFZ instrument of `sound`, if it has one. True when nothing is
+    /// left for the synthesizer to do: a note-on that a region answered. A note-off still goes
+    /// to the synthesizer too, in case the note-on fell back to the General MIDI program.
+    fn dispatch_sfz(&mut self, e: Event, sound: Sound) -> bool {
+        let Some(index) = self.sfz_of(sound) else {
+            return false;
+        };
+        match e.action {
+            Action::NoteOn {
+                pitch,
+                velocity,
+                timbre,
+            } => {
+                self.sfz[index].keys.contains(&pitch)
+                    && self.sfz_voices.note_on(
+                        &mut self.sfz,
+                        index,
+                        sfz::NoteOn {
+                            track: e.track,
+                            key: pitch,
+                            velocity,
+                            timbre,
+                            sample_rate: self.program.sample_rate,
+                        },
+                    )
+            }
+            Action::NoteOff { pitch, .. } => {
+                self.sfz_voices.note_off(e.track, pitch);
+                false
+            }
+            Action::PitchBend(_) => false,
         }
     }
 
@@ -507,6 +704,9 @@ impl Player {
         let Some(sound) = self.program.voices.get(e.track).map(|v| v.sound) else {
             return;
         };
+        if self.dispatch_sfz(e, sound) {
+            return;
+        }
         let keys = self.bank_of(sound).map(|b| b.keys.clone());
         let Some(voice) = self.program.voices.get(e.track) else {
             return;
@@ -537,6 +737,7 @@ impl Player {
             }
             // The wheel moves the notes of every channel of the track together.
             Action::PitchBend(value) => {
+                self.sfz_voices.set_bend(e.track, value);
                 for channel in voice.channels() {
                     let _ = self
                         .synth

@@ -45,6 +45,37 @@ export type OpenedDocument = {
   notice: string | null
 }
 
+/** A sound a pack plays, and the MIDI keys its recordings cover (General MIDI plays the others). */
+export type PackSound = { sound: SoundId; firstKey: number; lastKey: number }
+
+/** A sound pack in use. Mirrors `PackInfo` in `src-tauri/src/service.rs`. */
+export type SoundPack = {
+  id: string
+  name: string
+  author: string
+  /** SPDX identifier of the licence of the samples, such as `CC0-1.0`. */
+  licence: string
+  /** Where the samples come from. */
+  source: string | null
+  folder: string
+  /** A sound whose sample file could not be used is not listed: it is in `refused`. */
+  sounds: PackSound[]
+}
+
+/** A pack folder, or a file of a pack, that could not be used. */
+export type RefusedPack = { folder: string; reason: string }
+
+/** Mirrors `SoundPacks` in `src-tauri/src/service.rs`. */
+export type SoundPacks = {
+  /** Lowest priority first: when two packs play the same sound, the later one is heard. */
+  packs: SoundPack[]
+  refused: RefusedPack[]
+  /** Where the user adds packs, when the app knows it. */
+  userFolder: string | null
+}
+
+export const NO_SOUND_PACKS: SoundPacks = { packs: [], refused: [], userFolder: null }
+
 /** The document lives in the desktop app. Rejected promises carry a message fit to show the user. */
 export type DocumentApi = {
   /** False in a plain browser, where the demo can be shown but not changed. */
@@ -59,6 +90,8 @@ export type DocumentApi = {
   edit(edit: Edit): Promise<DocumentState>
   undo(): Promise<DocumentState>
   redo(): Promise<DocumentState>
+  /** The sound packs found at start, and the ones refused. */
+  soundPacks(): Promise<SoundPacks>
 }
 
 export function createDocumentApi(): DocumentApi {
@@ -84,6 +117,7 @@ function createTauriDocumentApi(): DocumentApi {
     edit: (edit) => call('edit_score', { edit }),
     undo: () => call('undo'),
     redo: () => call('redo'),
+    soundPacks: () => call('sound_packs'),
   }
 }
 
@@ -107,5 +141,7 @@ function createBrowserDocumentApi(): DocumentApi {
     edit: needsDesktop,
     undo: needsDesktop,
     redo: needsDesktop,
+    // Without the desktop app there is no audio engine, so no pack either.
+    soundPacks: async () => NO_SOUND_PACKS,
   }
 }

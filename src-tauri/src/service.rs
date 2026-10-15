@@ -2,13 +2,14 @@
 //! functions in commands; the end-to-end test backend (`examples/headless.rs`) calls them directly,
 //! so both speak exactly the same JSON.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::document::{Document, DocumentState};
 use crate::files;
-use score_model::{blank_score, demo_score, Edit};
+use audio_engine::{pack, PackError, PackFailure, SoundPack};
+use score_model::{blank_score, demo_score, Edit, Sound};
 
 /// A document that was just opened, with what the UI should tell the user about it.
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +119,125 @@ pub fn redo(document: &mut Document) -> DocumentState {
     document.state()
 }
 
+/// The sound packs found at start. Their manifests are read once; the audio engine reads a pack's
+/// samples only when the score uses one of its sounds.
+#[derive(Default)]
+pub struct FoundPacks {
+    /// In order of priority, lowest first.
+    pub packs: Vec<SoundPack>,
+    /// The pack folders that could not be used.
+    pub refused: Vec<PackError>,
+    /// Where the user adds packs, when the app knows it.
+    pub user_folder: Option<PathBuf>,
+}
+
+impl FoundPacks {
+    /// Reads the manifests of the packs in `roots`, lowest priority first.
+    pub fn discover(roots: &[PathBuf], user_folder: Option<PathBuf>) -> Self {
+        let (packs, refused) = pack::discover(roots);
+        Self {
+            packs,
+            refused,
+            user_folder,
+        }
+    }
+}
+
+/// What the UI shows about the sound packs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundPacks {
+    /// The packs in use, lowest priority first: when two play the same sound, the later one is
+    /// heard.
+    pub packs: Vec<PackInfo>,
+    pub refused: Vec<RefusedPack>,
+    pub user_folder: Option<String>,
+}
+
+/// A pack in use, as the UI lists it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInfo {
+    pub id: String,
+    pub name: String,
+    pub author: String,
+    /// SPDX identifier of the licence of the samples.
+    pub licence: String,
+    pub source: Option<String>,
+    pub folder: String,
+    /// The sounds the pack plays. A sound whose sample file could not be used is left out: it
+    /// plays with another pack or its General MIDI program, and is listed in `refused`.
+    pub sounds: Vec<PackSoundInfo>,
+}
+
+/// A sound a pack plays, and the keys its recordings cover.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackSoundInfo {
+    pub sound: Sound,
+    pub first_key: u8,
+    pub last_key: u8,
+}
+
+/// A pack folder, or one file of a pack, that could not be used, and why.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedPack {
+    pub folder: String,
+    pub reason: String,
+}
+
+/// The packs found at start, less the sample files the audio engine could not use (`failures`).
+pub fn sound_packs(found: &FoundPacks, failures: &[PackFailure]) -> SoundPacks {
+    let packs = found
+        .packs
+        .iter()
+        .map(|pack| {
+            let manifest = &pack.manifest;
+            let has_failed = |sound: Sound| {
+                failures
+                    .iter()
+                    .any(|f| f.pack == manifest.id && f.sound == sound)
+            };
+            PackInfo {
+                id: manifest.id.clone(),
+                name: manifest.name.clone(),
+                author: manifest.author.clone(),
+                licence: manifest.licence.clone(),
+                source: manifest.source.clone(),
+                folder: pack.dir.display().to_string(),
+                sounds: manifest
+                    .sounds
+                    .iter()
+                    .filter(|s| !has_failed(s.sound))
+                    .map(|s| PackSoundInfo {
+                        sound: s.sound,
+                        first_key: s.first_key,
+                        last_key: s.last_key,
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    let refused = found
+        .refused
+        .iter()
+        .chain(failures.iter().map(|f| &f.error))
+        .map(|error| RefusedPack {
+            folder: error.dir.display().to_string(),
+            reason: error.reason.clone(),
+        })
+        .collect();
+    SoundPacks {
+        packs,
+        refused,
+        user_folder: found
+            .user_folder
+            .as_ref()
+            .map(|dir| dir.display().to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +341,56 @@ mod tests {
         let mut document = demo();
         assert!(!undo(&mut document).can_undo);
         assert!(!redo(&mut document).can_redo);
+    }
+
+    fn write_pack(root: &Path, id: &str, manifest: &str) {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(pack::MANIFEST), manifest).unwrap();
+    }
+
+    const NYLON: &str = r#"{ "format": 1, "id": "nylon", "name": "Nylon", "author": "Me",
+        "licence": "CC0-1.0", "sounds": [
+            { "sound": "guitar/nylon", "file": "nylon.sf2", "firstKey": 40, "lastKey": 88 },
+            { "sound": "guitar/steel", "file": "steel.sf2", "firstKey": 40, "lastKey": 88 }
+        ] }"#;
+
+    #[test]
+    fn the_packs_list_what_they_play_and_the_refused_ones_say_why() {
+        let root = scratch("service-packs");
+        write_pack(&root, "nylon", NYLON);
+        write_pack(&root, "broken", "{ not json");
+        let found = FoundPacks::discover(std::slice::from_ref(&root), Some(root.join("user")));
+
+        let packs = sound_packs(&found, &[]);
+
+        assert_eq!(packs.packs.len(), 1);
+        assert_eq!(packs.packs[0].licence, "CC0-1.0");
+        assert_eq!(packs.packs[0].sounds.len(), 2);
+        assert_eq!(packs.refused.len(), 1);
+        assert!(packs.refused[0].folder.ends_with("broken"));
+        assert!(packs.user_folder.unwrap().ends_with("user"));
+    }
+
+    #[test]
+    fn a_sound_whose_file_failed_is_refused_and_no_longer_listed_by_its_pack() {
+        let root = scratch("service-pack-failure");
+        write_pack(&root, "nylon", NYLON);
+        let found = FoundPacks::discover(std::slice::from_ref(&root), None);
+        let failure = PackFailure {
+            pack: "nylon".into(),
+            sound: Sound::GuitarSteel,
+            error: PackError {
+                dir: root.join("nylon"),
+                reason: "steel.sf2: missing".into(),
+            },
+        };
+
+        let packs = sound_packs(&found, &[failure]);
+
+        let sounds: Vec<Sound> = packs.packs[0].sounds.iter().map(|s| s.sound).collect();
+        assert_eq!(sounds, [Sound::GuitarNylon]);
+        assert_eq!(packs.refused[0].reason, "steel.sf2: missing");
     }
 
     #[test]

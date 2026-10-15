@@ -26,7 +26,7 @@ root/
 ├── ui/                # Svelte + TypeScript front end
 │   ├── public/        # demo-score.json: export of the Rust demo score, checked by a Rust test
 │   └── src/lib/       # tab-layout.ts (pure layout), editor.svelte.ts (editing), keymap, selection, playback
-└── docs/              # Design notes: soundfonts.md, sounds.md, sound-packs.md, editing.md, musicxml.md
+└── docs/              # Design notes: soundfonts.md, sounds.md, sound-packs.md, editing.md, musicxml.md, sfz.md
 ```
 
 The roadmap is in the approved plan: foundations, playback, tab rendering, editing, realistic

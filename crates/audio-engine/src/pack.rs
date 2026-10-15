@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::{Player, PlayerError};
+use crate::{sfz, Player, PlayerError};
 use score_model::Sound;
 
 /// Name of the manifest file at the root of a pack folder.
@@ -46,7 +46,8 @@ pub struct Manifest {
 pub struct PackSound {
     /// A sound of the built-in table, by its id (`"guitar/nylon"`).
     pub sound: Sound,
-    /// A SoundFont (`.sf2`) in the pack folder, by its plain file name.
+    /// A SoundFont (`.sf2`) or an SFZ instrument (`.sfz`, see `docs/sfz.md`) in the pack folder,
+    /// by its plain file name.
     pub file: String,
     /// First and last MIDI key the recordings cover. Notes outside are played with the General
     /// MIDI sound.
@@ -57,6 +58,11 @@ pub struct PackSound {
 impl PackSound {
     pub fn keys(&self) -> RangeInclusive<u8> {
         self.first_key..=self.last_key
+    }
+
+    /// Whether the file is an SFZ instrument rather than a SoundFont.
+    pub fn is_sfz(&self) -> bool {
+        self.file.to_ascii_lowercase().ends_with(".sfz")
     }
 }
 
@@ -86,6 +92,19 @@ impl fmt::Display for PackError {
 }
 
 impl std::error::Error for PackError {}
+
+/// Something worth knowing about a pack that was loaded: what its SFZ files left out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PackNote {
+    pub dir: PathBuf,
+    pub note: String,
+}
+
+impl fmt::Display for PackNote {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "sound pack {}: {}", self.dir.display(), self.note)
+    }
+}
 
 impl SoundPack {
     /// Reads and checks the manifest of the pack in `dir`. The sample files are not opened here.
@@ -172,10 +191,43 @@ pub fn discover(roots: &[PathBuf]) -> (Vec<SoundPack>, Vec<PackError>) {
 /// later one is heard. A file that is missing or broken is returned as an error and skipped; that
 /// sound then plays with its General MIDI program.
 pub fn add_packs(player: &mut Player, packs: &[SoundPack]) -> Vec<PackError> {
+    add_packs_with_notes(player, packs).0
+}
+
+/// [`add_packs`], also returning what each SFZ file of the packs left out (opcodes not supported,
+/// samples missing), for the console. The decoded samples of a pack's SFZ files share
+/// [`sfz::MAX_PACK_SAMPLE_BYTES`].
+pub fn add_packs_with_notes(
+    player: &mut Player,
+    packs: &[SoundPack],
+) -> (Vec<PackError>, Vec<PackNote>) {
     let mut errors = Vec::new();
+    let mut notes = Vec::new();
     for pack in packs {
+        let mut budget = sfz::MAX_PACK_SAMPLE_BYTES;
         for sound in &pack.manifest.sounds {
             let path = pack.file(sound);
+            if sound.is_sfz() {
+                match sfz::load(&path, &pack.dir, &mut budget) {
+                    Ok((instrument, report)) => {
+                        match player.add_sfz(sound.sound, instrument, sound.keys()) {
+                            Ok(()) => notes.push(PackNote {
+                                dir: pack.dir.clone(),
+                                note: format!("{}: {report}", sound.file),
+                            }),
+                            Err(error) => errors.push(PackError {
+                                dir: pack.dir.clone(),
+                                reason: format!("{}: {error}", sound.file),
+                            }),
+                        }
+                    }
+                    Err(error) => errors.push(PackError {
+                        dir: pack.dir.clone(),
+                        reason: format!("{}: {error}", sound.file),
+                    }),
+                }
+                continue;
+            }
             let added = File::open(&path)
                 .map_err(|e| PlayerError::SoundFont(e.to_string()))
                 .and_then(|mut file| player.add_bank(sound.sound, &mut file, sound.keys()));
@@ -187,7 +239,7 @@ pub fn add_packs(player: &mut Player, packs: &[SoundPack]) -> Vec<PackError> {
             }
         }
     }
-    errors
+    (errors, notes)
 }
 
 fn check(manifest: &Manifest) -> Result<(), String> {
@@ -235,9 +287,10 @@ fn check(manifest: &Manifest) -> Result<(), String> {
                 sound.file
             ));
         }
-        if !sound.file.to_ascii_lowercase().ends_with(".sf2") {
+        let lower = sound.file.to_ascii_lowercase();
+        if !lower.ends_with(".sf2") && !lower.ends_with(".sfz") {
             return Err(format!(
-                "{}: only SoundFont (.sf2) files are supported",
+                "{}: only SoundFont (.sf2) and SFZ (.sfz) files are supported",
                 sound.file
             ));
         }
@@ -319,7 +372,7 @@ mod tests {
             with(r#""guitar/nylon""#, r#""guitar/banjo""#),
             with(r#""firstKey": 29"#, r#""firstKey": 90"#),
             with(r#""lastKey": 88"#, r#""lastKey": 128"#),
-            with(r#""nylon.sf2""#, r#""nylon.sfz""#),
+            with(r#""nylon.sf2""#, r#""nylon.wav""#),
             with(r#""test-nylon""#, r#""Test Nylon""#),
             with(r#""CC0-1.0""#, r#""  ""#),
             with(r#""author""#, r#""auteur""#),
@@ -436,6 +489,203 @@ mod tests {
             render(Sound::GuitarSteel, true),
             render(Sound::GuitarSteel, false)
         );
+    }
+
+    /// A pack whose nylon guitar is an SFZ instrument: a sine at 440 Hz recorded at key 69 for the
+    /// keys 60 to 70 (the open high E string is 64), declared for the keys `first` to `last`.
+    fn sfz_pack(name: &str, sfz: &str, first: u8, last: u8) -> Vec<SoundPack> {
+        let root = temp_dir(name);
+        let manifest = NYLON
+            .replace("nylon.sf2", "nylon.sfz")
+            .replace("29", &first.to_string())
+            .replace("88", &last.to_string());
+        let dir = write_pack(&root, "nylon", &manifest);
+        crate::sfz::tests::write_sfz(
+            &dir,
+            sfz,
+            &[("a4.wav", crate::sfz::tests::sine_wav(440.0, 0.8, 2.0))],
+        );
+        fs::rename(dir.join("test.sfz"), dir.join("nylon.sfz")).unwrap();
+        let (packs, errors) = discover(&[root]);
+        assert!(errors.is_empty(), "{errors:?}");
+        packs
+    }
+
+    const SFZ: &str = "<region> sample=a4.wav lokey=60 hikey=70 pitch_keycenter=69 \
+                       ampeg_release=0.2 loop_mode=one_shot";
+
+    #[test]
+    fn a_manifest_may_name_an_sfz_file() {
+        let manifest = parse_manifest(&with("nylon.sf2", "Nylon.SFZ")).unwrap();
+        assert!(manifest.sounds[0].is_sfz());
+        assert!(!parse_manifest(NYLON).unwrap().sounds[0].is_sfz());
+    }
+
+    /// Renders one second of the one-note score (open high E, key 64) with `packs`, through
+    /// `prepare` before playing.
+    fn render_sfz(
+        base: &Path,
+        packs: &[SoundPack],
+        score: &score_model::Score,
+        prepare: impl FnOnce(&mut Player),
+    ) -> Vec<f32> {
+        let mut player = Player::new(&mut File::open(base).unwrap(), 44_100).unwrap();
+        let (errors, _) = add_packs_with_notes(&mut player, packs);
+        assert!(errors.is_empty(), "{errors:?}");
+        player.load_score(score);
+        prepare(&mut player);
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100];
+        player.render(&mut buf);
+        buf
+    }
+
+    fn peak(buf: &[f32]) -> f32 {
+        buf.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn an_sfz_pack_reports_what_it_left_out() {
+        let Some(base) = crate::player::tests::test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let packs = sfz_pack("sfz-notes", &format!("{SFZ} sw_last=36"), 29, 88);
+        let mut player = Player::new(&mut File::open(base).unwrap(), 44_100).unwrap();
+        let (errors, notes) = add_packs_with_notes(&mut player, &packs);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].note.starts_with("nylon.sfz: 1 regions"),
+            "{}",
+            notes[0]
+        );
+        assert!(notes[0].note.contains("1 × sw_last"), "{}", notes[0]);
+    }
+
+    #[test]
+    fn an_sfz_pack_plays_its_samples_instead_of_general_midi() {
+        let Some(base) = crate::player::tests::test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = crate::player::tests::one_note_score();
+        let packs = sfz_pack("sfz-plays", SFZ, 29, 88);
+        let with_sfz = render_sfz(&base, &packs, &score, |_| {});
+        let general_midi = render_sfz(&base, &[], &score, |_| {});
+        assert_ne!(with_sfz, general_midi);
+        let peak = peak(&with_sfz);
+        assert!(peak > 0.05 && peak <= 1.0, "peak {peak}");
+
+        // The sine of the recording, transposed from A4 down to E4: 329.6 Hz. Count the rising
+        // zero crossings of the left channel over the first half second.
+        let left: Vec<f32> = with_sfz.iter().step_by(2).take(22_050).copied().collect();
+        let crossings = left
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count();
+        assert!((160..=170).contains(&crossings), "{crossings}");
+    }
+
+    #[test]
+    fn notes_the_sfz_does_not_cover_play_the_general_midi_program() {
+        let Some(base) = crate::player::tests::test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = crate::player::tests::one_note_score();
+        let general_midi = render_sfz(&base, &[], &score, |_| {});
+        // Key 64 outside the keys the manifest declares.
+        let outside_manifest = sfz_pack("sfz-outside-manifest", SFZ, 29, 63);
+        // Key 64 inside them, but no region answers it.
+        let no_region = sfz_pack(
+            "sfz-no-region",
+            "<region> sample=a4.wav lokey=65 hikey=70 pitch_keycenter=69",
+            29,
+            88,
+        );
+        for packs in [outside_manifest, no_region] {
+            assert_eq!(render_sfz(&base, &packs, &score, |_| {}), general_midi);
+        }
+    }
+
+    #[test]
+    fn an_sfz_track_that_is_not_audible_stays_silent() {
+        let Some(base) = crate::player::tests::test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let packs = sfz_pack("sfz-muted", SFZ, 29, 88);
+        let score = crate::player::tests::one_note_score();
+        let buf = render_sfz(&base, &packs, &score, |player| {
+            player.set_audible(vec![false])
+        });
+        assert!(peak(&buf) < 1e-3, "peak {}", peak(&buf));
+    }
+
+    #[test]
+    fn seeking_and_stopping_cut_the_sfz_voices() {
+        let Some(base) = crate::player::tests::test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let packs = sfz_pack("sfz-seek", SFZ, 29, 88);
+        let mut player = Player::new(&mut File::open(base).unwrap(), 44_100).unwrap();
+        add_packs(&mut player, &packs);
+        player.load_score(&crate::player::tests::one_note_score());
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 4410];
+        player.render(&mut buf);
+        assert!(peak(&buf) > 0.05);
+
+        // Past the attack of the only note: nothing may sound any more.
+        player.seek(64.0);
+        player.render(&mut buf);
+        player.render(&mut buf);
+        assert!(peak(&buf) < 1e-3, "peak {}", peak(&buf));
+    }
+
+    #[test]
+    fn every_technique_plays_through_an_sfz_instrument() {
+        let Some(base) = crate::player::tests::test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        use score_model::{Beat, Duration, Note, NoteValue, Technique};
+        let packs = sfz_pack("sfz-techniques", SFZ, 29, 88);
+        // Two half notes, E4 then F#4, the first one with the technique.
+        let score = |technique| {
+            let mut score = crate::player::tests::one_note_score();
+            let half = |fret, technique| Beat {
+                duration: Duration {
+                    value: NoteValue::Half,
+                    dots: 0,
+                },
+                notes: vec![Note {
+                    string: 1,
+                    fret,
+                    technique,
+                    tied: false,
+                }],
+            };
+            score.tracks[0].measures[0].voices[0].beats = vec![half(0, technique), half(2, None)];
+            score
+        };
+        let plain = render_sfz(&base, &packs, &score(None), |_| {});
+        for technique in [
+            Technique::PalmMute,
+            Technique::Harmonic,
+            Technique::HammerOn,
+            Technique::PullOff,
+            Technique::Bend,
+            Technique::Slide,
+        ] {
+            let buf = render_sfz(&base, &packs, &score(Some(technique)), |_| {});
+            let peak = peak(&buf);
+            assert!(peak > 0.01 && peak <= 1.0, "{technique:?}: peak {peak}");
+            assert!(buf.iter().all(|s| s.is_finite()));
+            assert_ne!(buf, plain, "{technique:?} sounds like plain notes");
+        }
     }
 
     /// The packs committed in `assets/soundfonts/packs`, whose samples are fetched separately.
