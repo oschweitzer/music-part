@@ -83,6 +83,14 @@ describe('interpretKey', () => {
     expect(press('c')).toBeNull()
   })
 
+  it('should write a note with Enter, or with shift and a note name', () => {
+    expect(press('Enter')).toEqual({ type: 'enterNote' })
+    expect(press('Enter', { ctrlKey: true })).toEqual({ type: 'insertMeasure' })
+    expect(press('E', { shiftKey: true })).toEqual({ type: 'noteName', letter: 'E' })
+    expect(press('g', { shiftKey: true })).toEqual({ type: 'noteName', letter: 'G' })
+    expect(press('H', { shiftKey: true })).toBeNull()
+  })
+
   it('should ignore every other key', () => {
     expect(press('a')).toBeNull()
     expect(press('F5')).toBeNull()

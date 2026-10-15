@@ -160,7 +160,7 @@ mod tests {
         assert!(document.state().can_redo);
 
         assert!(document.redo());
-        assert_eq!(first_note(&document, 0).map(|n| n.fret), Some(5));
+        assert_eq!(first_note(&document, 0).and_then(|n| n.fret()), Some(5));
         assert!(!document.redo(), "nothing left to redo");
 
         document.undo();

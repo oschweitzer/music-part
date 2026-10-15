@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::{Score, MAX_FRET};
+use crate::{NoteKind, Place, Score, Track, Voice, MAX_FRET, MAX_PITCH};
 
 const MAX_TRACKS: usize = 64;
 const MAX_STRINGS: usize = 12;
@@ -27,8 +27,9 @@ fn fail<T>(message: String) -> Result<T, ScoreError> {
 
 impl Score {
     /// Verifies the invariants the rest of the program relies on: sizes within limits, valid time
-    /// signatures and durations, a sound of the track's instrument, notes on existing strings and
-    /// frets, and every voice filling its measure.
+    /// signatures and durations, a sound of the track's instrument, notes of the kind of the
+    /// instrument (on existing strings and frets, or at distinct pitches up to 127), and every
+    /// voice filling its measure.
     pub fn validate(&self) -> Result<(), ScoreError> {
         if !(1..=MAX_TEMPO).contains(&self.tempo_bpm) {
             return fail(format!("the tempo must be between 1 and {MAX_TEMPO} bpm"));
@@ -45,10 +46,19 @@ impl Score {
                     track.sound.id()
                 ));
             }
-            if !(1..=MAX_STRINGS).contains(&track.tuning.len()) {
-                return fail(format!(
-                    "track \"{name}\" must have between 1 and {MAX_STRINGS} strings"
-                ));
+            let kind = track.instrument.note_kind();
+            match kind {
+                NoteKind::Fretted if !(1..=MAX_STRINGS).contains(&track.tuning.len()) => {
+                    return fail(format!(
+                        "track \"{name}\" must have between 1 and {MAX_STRINGS} strings"
+                    ));
+                }
+                NoteKind::Pitched if !track.tuning.is_empty() => {
+                    return fail(format!(
+                        "track \"{name}\" has strings, but its instrument has none"
+                    ));
+                }
+                _ => {}
             }
             if track.tuning.iter().any(|&pitch| pitch > 127) {
                 return fail(format!(
@@ -82,20 +92,7 @@ impl Score {
                     if voice.ticks() != ticks {
                         return fail(format!("{at}: the notes do not fill the measure exactly"));
                     }
-                    for note in voice.beats.iter().flat_map(|b| &b.notes) {
-                        if note.string == 0 || usize::from(note.string) > track.tuning.len() {
-                            return fail(format!(
-                                "{at}: a note is on string {}, which does not exist",
-                                note.string
-                            ));
-                        }
-                        if note.fret > MAX_FRET || track.pitch(note).is_none() {
-                            return fail(format!(
-                                "{at}: a note is on fret {}, which is out of range",
-                                note.fret
-                            ));
-                        }
-                    }
+                    check_notes(track, voice, &at)?;
                 }
             }
         }
@@ -103,10 +100,55 @@ impl Score {
     }
 }
 
+/// The notes of a voice are of the kind of the track, playable, and distinct within a beat.
+fn check_notes(track: &Track, voice: &Voice, at: &str) -> Result<(), ScoreError> {
+    let kind = track.instrument.note_kind();
+    for beat in &voice.beats {
+        for (i, note) in beat.notes.iter().enumerate() {
+            if note.place.kind() != kind {
+                let what = match kind {
+                    NoteKind::Fretted => "a string and a fret",
+                    NoteKind::Pitched => "a pitch",
+                };
+                return fail(format!(
+                    "{at}: a note does not give {what}, as the instrument of the track needs"
+                ));
+            }
+            match note.place {
+                Place::Fretted { string, fret } => {
+                    if string == 0 || usize::from(string) > track.tuning.len() {
+                        return fail(format!(
+                            "{at}: a note is on string {string}, which does not exist"
+                        ));
+                    }
+                    if fret > MAX_FRET || track.pitch(note).is_none() {
+                        return fail(format!(
+                            "{at}: a note is on fret {fret}, which is out of range"
+                        ));
+                    }
+                }
+                Place::Pitched { pitch } => {
+                    if pitch > MAX_PITCH {
+                        return fail(format!(
+                            "{at}: a note has the pitch {pitch}, above the highest MIDI pitch"
+                        ));
+                    }
+                    if beat.notes[..i].iter().any(|n| n.key() == pitch) {
+                        return fail(format!("{at}: a beat has the pitch {pitch} twice"));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{demo_score, Duration, NoteValue, Sound, TimeSignature};
+    use crate::{
+        demo_score, Beat, Duration, Instrument, Measure, Note, NoteValue, Sound, TimeSignature,
+    };
 
     fn error(score: &Score) -> String {
         score.validate().unwrap_err().to_string()
@@ -142,12 +184,67 @@ mod tests {
     #[test]
     fn notes_must_be_on_existing_strings_and_frets() {
         let mut score = demo_score();
-        score.tracks[0].measures[0].voices[0].beats[0].notes[0].string = 7;
+        score.tracks[0].measures[0].voices[0].beats[0].notes[0] = Note::fretted(7, 0);
         assert!(error(&score).contains("string 7"));
 
         let mut score = demo_score();
-        score.tracks[0].measures[0].voices[0].beats[0].notes[0].fret = 40;
+        score.tracks[0].measures[0].voices[0].beats[0].notes[0] = Note::fretted(1, 40);
         assert!(error(&score).contains("fret 40"));
+    }
+
+    /// A score with one piano track: one measure, a whole note at each pitch given.
+    fn piano(pitches: &[u8]) -> Score {
+        let mut score = crate::blank_score("p");
+        let track = &mut score.tracks[0];
+        track.instrument = Instrument::Piano;
+        track.sound = Sound::Piano;
+        track.tuning.clear();
+        track.measures.truncate(1);
+        track.measures[0] = Measure {
+            time_signature: TimeSignature {
+                numerator: 4,
+                denominator: 4,
+            },
+            voices: vec![crate::Voice {
+                beats: vec![Beat {
+                    duration: Duration {
+                        value: NoteValue::Whole,
+                        dots: 0,
+                    },
+                    notes: pitches.iter().map(|&p| Note::pitched(p)).collect(),
+                }],
+            }],
+        };
+        score
+    }
+
+    #[test]
+    fn a_piano_track_with_distinct_pitches_is_valid() {
+        assert_eq!(piano(&[48, 60, 64, 67, 127]).validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_pitch_above_127_or_twice_in_a_beat_is_refused() {
+        assert!(error(&piano(&[128])).contains("pitch 128"));
+        assert!(error(&piano(&[60, 64, 60])).contains("pitch 60 twice"));
+    }
+
+    #[test]
+    fn a_track_holds_only_notes_of_its_kind() {
+        let mut score = piano(&[60]);
+        score.tracks[0].measures[0].voices[0].beats[0].notes[0] = Note::fretted(1, 0);
+        assert!(error(&score).contains("a pitch"), "{}", error(&score));
+
+        let mut score = demo_score();
+        score.tracks[0].measures[0].voices[0].beats[0].notes[0] = Note::pitched(60);
+        assert!(error(&score).contains("a string and a fret"));
+    }
+
+    #[test]
+    fn a_piano_has_no_strings() {
+        let mut score = piano(&[60]);
+        score.tracks[0].tuning = vec![64];
+        assert!(error(&score).contains("has strings"));
     }
 
     #[test]

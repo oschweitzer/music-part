@@ -33,12 +33,14 @@ pub enum Sound {
     Violin,
     #[serde(rename = "banjo/standard")]
     Banjo,
+    #[serde(rename = "piano/grand")]
+    Piano,
 }
 
 impl Sound {
     /// Every sound, grouped by instrument in the order of `Instrument::ALL`, the default sound of
     /// each instrument first.
-    pub const ALL: [Sound; 11] = [
+    pub const ALL: [Sound; 12] = [
         Sound::GuitarNylon,
         Sound::GuitarSteel,
         Sound::ElectricGuitarClean,
@@ -50,6 +52,7 @@ impl Sound {
         Sound::BassSlap,
         Sound::Violin,
         Sound::Banjo,
+        Sound::Piano,
     ];
 
     /// The id written in files, `"<instrument>/<sound>"`.
@@ -66,6 +69,7 @@ impl Sound {
             Sound::BassSlap => "bass/slap",
             Sound::Violin => "violin/standard",
             Sound::Banjo => "banjo/standard",
+            Sound::Piano => "piano/grand",
         }
     }
 
@@ -82,6 +86,7 @@ impl Sound {
             Sound::BassPick => "Pick",
             Sound::BassSlap => "Slap",
             Sound::Violin | Sound::Banjo => "Standard",
+            Sound::Piano => "Grand piano",
         }
     }
 
@@ -96,6 +101,7 @@ impl Sound {
             Sound::BassFinger | Sound::BassPick | Sound::BassSlap => Instrument::Bass,
             Sound::Violin => Instrument::Violin,
             Sound::Banjo => Instrument::Banjo,
+            Sound::Piano => Instrument::Piano,
         }
     }
 
@@ -113,15 +119,19 @@ impl Sound {
             Sound::BassSlap => 36,
             Sound::Violin => 40,
             Sound::Banjo => 105,
+            Sound::Piano => 0,
         }
     }
 
     /// The closest sound to a General MIDI program, when a file names one. Programs of the same
     /// family without a sound of their own go to the nearest one (jazz guitar plays clean,
-    /// fretless bass plays finger); programs no string instrument here can play, or none, give
-    /// the nylon guitar.
+    /// fretless bass plays finger). Every other program is an instrument without strings here
+    /// (keyboards, winds, voice, other strings...): it gets the piano, whose track keeps every
+    /// pitch, until those instruments have their own sounds. No program at all gives the nylon
+    /// guitar, as files written for a tablature often name none.
     pub fn from_midi_program(program: Option<u8>) -> Sound {
         match program {
+            None | Some(24) => Sound::GuitarNylon,
             Some(25) => Sound::GuitarSteel,
             Some(26 | 27 | 31) => Sound::ElectricGuitarClean,
             Some(28) => Sound::ElectricGuitarMuted,
@@ -132,7 +142,7 @@ impl Sound {
             Some(32..=39) => Sound::BassFinger,
             Some(40) => Sound::Violin,
             Some(105) => Sound::Banjo,
-            _ => Sound::GuitarNylon,
+            Some(_) => Sound::Piano,
         }
     }
 }
@@ -147,6 +157,7 @@ impl Instrument {
             Instrument::Bass => Sound::BassFinger,
             Instrument::Violin => Sound::Violin,
             Instrument::Banjo => Sound::Banjo,
+            Instrument::Piano => Sound::Piano,
         }
     }
 
@@ -181,8 +192,18 @@ mod tests {
         );
         assert_eq!(Sound::from_midi_program(Some(35)), Sound::BassFinger);
         assert_eq!(Sound::from_midi_program(Some(37)), Sound::BassSlap);
-        assert_eq!(Sound::from_midi_program(Some(0)), Sound::GuitarNylon);
         assert_eq!(Sound::from_midi_program(None), Sound::GuitarNylon);
+    }
+
+    #[test]
+    fn a_program_without_strings_here_gets_the_piano() {
+        for program in [0, 1, 19, 41, 56, 73, 81, 104, 127] {
+            assert_eq!(
+                Sound::from_midi_program(Some(program)),
+                Sound::Piano,
+                "{program}"
+            );
+        }
     }
 
     #[test]

@@ -2,29 +2,37 @@ import type { DocumentApi, DocumentState, Edit, ExportFormat, OpenedDocument } f
 import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
+import { isPitchedTrack, noteKindOf } from './instruments'
+import { notePitch, noteRow } from './notes'
 import type { Beat, Instrument, Note, NoteValue, SoundId, TimeSignature } from './score-types'
 import {
   clampSelection,
+  DEFAULT_PITCH,
   extendSelection,
   FIRST_NOTE,
+  firstSelection,
   isBeatSelected,
   moveSelection,
   moveToTrack,
   nextFret,
   selectedRange,
-  selectedStrings,
+  selectedRows,
   type BeatPosition,
   type Selection,
 } from './selection'
+import { pitchOfLetter } from './staff-layout'
 import { parseTuning } from './tuning'
 
 export type Message = { tone: 'error' | 'info'; text: string }
 
-type Where = { track: number; measure: number; beat: number; string: number }
+const STAFF_HINT = 'This track is written on a staff: press Enter, Shift and a note name, or double-click the staff to write a note.'
+
+/** The selected spot with its track. `row` is a string on a fretted track, a pitch on a pitched one. */
+type Where = { track: number; measure: number; beat: number; row: number }
 
 /**
  * Turns what the user does into calls on the document, and keeps what the screen needs: the
- * selected beat and string, the current message, whether there is something to save.
+ * selected beat and row, the current message, whether there is something to save.
  * The score itself is owned by the desktop app; this class only holds the latest copy it sent.
  */
 export class Editor {
@@ -72,10 +80,16 @@ export class Editor {
     return this.document?.isDirty ?? false
   }
 
-  /** The note under the selection, if the selected string has one in this beat. */
+  /** The note under the selection: on the selected string, or at the selected pitch. */
   get currentNote(): Note | null {
-    const string = this.selection?.string
-    return this.currentBeat?.notes.find((n) => n.string === string) ?? null
+    const row = this.selection?.row
+    return this.currentBeat?.notes.find((n) => noteRow(n) === row) ?? null
+  }
+
+  /** True when the track of the selection stores pitches: rows are pitches, notes go on a staff. */
+  get isPitched(): boolean {
+    const track = this.document?.score.tracks[this.track]
+    return track !== undefined && isPitchedTrack(track)
   }
 
   /** The beat under the selection, to show its duration. */
@@ -104,25 +118,48 @@ export class Editor {
         ? {
             ...selection,
             anchor: current.anchor ?? { measure: current.measure, beat: current.beat },
-            ...(current.anchorString === undefined ? {} : { anchorString: current.anchorString }),
+            ...(current.anchorRow === undefined ? {} : { anchorRow: current.anchorRow }),
           }
         : selection
     this.#typed = null
   }
 
   /**
-   * Selects the rectangle dragged from one spot to another: the beats between, and the strings
-   * between. A drag stays in the track it started in.
+   * Selects the rectangle dragged from one spot to another: the beats between, and the strings (or
+   * pitches) between. With `byRows` false, whole beats. A drag stays in the track it started in.
    */
-  dragSelect({ from, to, track = this.track }: { from: Selection; to: Selection; track?: number }): void {
+  dragSelect({ from, to, track = this.track, byRows = true }: { from: Selection; to: Selection; track?: number; byRows?: boolean }): void {
     this.track = track
-    this.selection = { ...to, anchor: { measure: from.measure, beat: from.beat }, anchorString: from.string }
+    const anchor = { measure: from.measure, beat: from.beat }
+    this.selection = byRows ? { ...to, anchor, anchorRow: from.row } : { ...to, anchor }
     this.#typed = null
   }
 
   selectTrack(track: number): void {
+    const wasPitched = this.isPitched
     this.track = track
+    // A string number means nothing as a pitch, and the other way round.
+    if (this.document && this.selection && wasPitched !== this.isPitched) {
+      this.selection = { ...firstSelection({ score: this.document.score, track }), measure: this.selection.measure }
+    }
     this.#reselect()
+  }
+
+  /**
+   * Writes a note at a pitch on a beat (a double-click on a staff) and selects it. On a fretted
+   * track it goes on a free string, and the selection follows it there.
+   */
+  enterPitch({ track = this.track, measure, beat, pitch }: { track?: number; measure: number; beat: number; pitch: number }): Promise<void> {
+    if (!this.#api.canEdit) return this.#send({ type: 'addPitch', track, measure, beat, pitch })
+    return this.#enqueue(async () => {
+      const state = await this.#api.edit({ type: 'addPitch', track, measure, beat, pitch })
+      const target = state.score.tracks[track]
+      const note = target?.measures[measure]?.voices[0]?.beats[beat]?.notes.find((n) => notePitch({ track: target, note: n }) === pitch)
+      this.track = track
+      this.selection = { measure, beat, row: note ? noteRow(note) : (this.selection?.row ?? 1) }
+      this.#typed = null
+      await this.#apply(state)
+    })
   }
 
   setTempo(bpm: number): Promise<void> {
@@ -134,6 +171,10 @@ export class Editor {
     switch (command.type) {
       case 'digit':
         return this.#typeFret(command.digit)
+      case 'enterNote':
+        return this.#enterSelectedPitch(() => this.selection?.row ?? null)
+      case 'noteName':
+        return this.#enterSelectedPitch(() => pitchOfLetter({ letter: command.letter, near: this.selection?.row ?? DEFAULT_PITCH }))
       case 'move':
         return this.#move(command.direction)
       case 'extend':
@@ -153,11 +194,18 @@ export class Editor {
       case 'dot':
         return this.#setDuration((beat) => ({ value: beat.duration.value, dots: beat.duration.dots === 0 ? 1 : 0 }))
       case 'tie':
-        return this.#withNote((at, note) => ({ type: 'setTied', ...at, tied: !note.tied }))
+        return this.#withNote(({ row, ...at }, note) =>
+          this.isPitched ? { type: 'setPitchTied', ...at, pitch: row, tied: !note.tied } : { type: 'setTied', ...at, string: row, tied: !note.tied },
+        )
       case 'technique':
-        return this.#withNote((at, note) => ({
+        if (this.isPitched) {
+          this.message = { tone: 'info', text: 'Techniques are for notes played on strings.' }
+          return Promise.resolve()
+        }
+        return this.#withNote(({ row, ...at }, note) => ({
           type: 'setTechnique',
           ...at,
+          string: row,
           technique: note.technique === command.technique ? null : command.technique,
         }))
       case 'insertMeasure':
@@ -205,7 +253,7 @@ export class Editor {
     const measures = this.selectedMeasures
     const at = measures ? (before ? measures.from : measures.from + measures.count) : this.#measureCount()
     return this.#send({ type: 'insertMeasure', at }, () => {
-      this.selection = { measure: at, beat: 0, string: this.selection?.string ?? 1 }
+      this.selection = { measure: at, beat: 0, row: this.selection?.row ?? 1 }
     })
   }
 
@@ -215,7 +263,7 @@ export class Editor {
     if (!measures) return Promise.resolve()
     return this.#send({ type: 'deleteMeasure', index: measures.from, count: measures.count }, () => {
       // The range is gone; the selection falls on the measure that took its place (or the last).
-      this.selection = { measure: measures.from, beat: 0, string: this.selection?.string ?? 1 }
+      this.selection = { measure: measures.from, beat: 0, row: this.selection?.row ?? 1 }
     })
   }
 
@@ -249,7 +297,7 @@ export class Editor {
     return this.#send({ type: 'setSound', track: this.track, sound })
   }
 
-  /** Copies the selected beats (or the selected beat) of this track, all strings. */
+  /** Copies the selected beats (or the selected beat) of this track, all their notes. */
   copy(): Promise<void> {
     const beats = this.#selectedBeats()
     if (beats === null) return Promise.resolve()
@@ -274,7 +322,7 @@ export class Editor {
     const start = this.#rangeStart()
     return this.#send(
       { type: 'paste', track: at.track, measure: start.measure, beat: start.beat, beats: structuredClone($state.snapshot(this.clipboard)) },
-      () => (this.selection = { ...start, string: at.string }),
+      () => (this.selection = { ...start, row: at.row }),
     )
   }
 
@@ -283,7 +331,7 @@ export class Editor {
     const index = this.document?.score.tracks.length ?? 0
     return this.#send(sound ? { type: 'addTrack', instrument, sound } : { type: 'addTrack', instrument }, () => {
       this.track = index
-      this.selection = FIRST_NOTE
+      this.selection = noteKindOf(instrument) === 'pitched' ? { ...FIRST_NOTE, row: DEFAULT_PITCH } : FIRST_NOTE
     })
   }
 
@@ -384,29 +432,36 @@ export class Editor {
     return beats
   }
 
-  /** The selected beats as a copy, with the first one untied; only the selected strings of a rectangle. */
+  /** The selected beats as a copy, with the first one untied; only the selected rows of a rectangle. */
   #selectedBeats(): Beat[] | null {
     if (!this.selection) return null
     const range = selectedRange(this.selection)
     const from = range?.from ?? { measure: this.selection.measure, beat: this.selection.beat }
-    const strings = selectedStrings(this.selection)
+    const rows = selectedRows(this.selection)
 
     const beats: Beat[] = structuredClone($state.snapshot(this.#beatsBetween(from, range?.to ?? from)))
-    if (strings) {
-      for (const beat of beats) beat.notes = beat.notes.filter((n) => n.string >= strings.first && n.string <= strings.last)
+    if (rows) {
+      for (const beat of beats) beat.notes = beat.notes.filter((n) => noteRow(n) >= rows.first && noteRow(n) <= rows.last)
     }
     // A tie on the first beat points at a note that is not part of the copy.
     beats[0]?.notes.forEach((note) => (note.tied = false))
     return beats
   }
 
-  /** Empties the selected beats, or only the selected strings of them; the rhythm stays. */
+  /** Empties the selected beats, or only the selected rows of them; the rhythm stays. */
   #clearRange(): Promise<void> {
     const selection = this.selection
     if (!selection) return Promise.resolve()
     const spot = { measure: selection.measure, beat: selection.beat }
     const range = selectedRange(selection) ?? { from: spot, to: spot }
-    return this.#send({ type: 'clearNotes', track: this.track, from: range.from, to: range.to, strings: selectedStrings(selection) })
+    return this.#send({ type: 'clearNotes', track: this.track, from: range.from, to: range.to, ...this.#rowSpans(selection) })
+  }
+
+  /** The rows of a rectangle as the strings or the pitches to clear. */
+  #rowSpans(selection: Selection): { strings: { first: number; last: number } | null; pitches: { low: number; high: number } | null } {
+    const rows = selectedRows(selection)
+    if (!rows) return { strings: null, pitches: null }
+    return this.isPitched ? { strings: null, pitches: { low: rows.first, high: rows.last } } : { strings: rows, pitches: null }
   }
 
   /**
@@ -432,13 +487,14 @@ export class Editor {
       if (isAllRests) {
         const state = await this.#api.edit({ type: 'removeRests', track: this.track, from, to })
         // What followed the rests now sits where they were.
-        this.selection = { ...from, string: selection.string }
+        this.selection = { ...from, row: selection.row }
         await this.#apply(state)
       } else if (range) {
-        const strings = selectedStrings(selection)
-        await this.#apply(await this.#api.edit({ type: 'clearNotes', track: this.track, from, to, strings }))
+        await this.#apply(await this.#api.edit({ type: 'clearNotes', track: this.track, from, to, ...this.#rowSpans(selection) }))
+      } else if (this.isPitched) {
+        await this.#apply(await this.#api.edit({ type: 'removePitch', track: this.track, ...from, pitch: selection.row }))
       } else {
-        await this.#apply(await this.#api.edit({ type: 'removeNote', track: this.track, ...from, string: selection.string }))
+        await this.#apply(await this.#api.edit({ type: 'removeNote', track: this.track, ...from, string: selection.row }))
       }
     })
   }
@@ -487,7 +543,7 @@ export class Editor {
   #withNote(build: (at: Where, note: Note) => Edit): Promise<void> {
     const at = this.#where()
     if (!at) return Promise.resolve()
-    if (!this.#api.canEdit) return this.#send(build(at, { string: at.string, fret: 0, technique: null, tied: false }))
+    if (!this.#api.canEdit) return this.#send(build(at, { pitch: at.row, technique: null, tied: false }))
     return this.#enqueue(async () => {
       const note = this.currentNote
       if (!note) {
@@ -501,16 +557,44 @@ export class Editor {
   #typeFret(digit: number): Promise<void> {
     const at = this.#where()
     if (!at) return Promise.resolve()
+    if (this.isPitched) {
+      this.message = { tone: 'info', text: STAFF_HINT }
+      return Promise.resolve()
+    }
 
-    const cell = `${at.track}:${at.measure}:${at.beat}:${at.string}`
+    const cell = `${at.track}:${at.measure}:${at.beat}:${at.row}`
     const now = this.#now()
     const previous = this.#typed?.cell === cell ? this.#typed : null
     const fret = nextFret({ previous, digit, now })
     this.#typed = { fret, at: now, cell }
-    return this.#send({ type: 'setFret', ...at, fret })
+    const { row, ...beat } = at
+    return this.#send({ type: 'setFret', ...beat, string: row, fret })
   }
 
+  /** Writes a note at a pitch on the selected beat of a pitched track, and selects it. */
+  #enterSelectedPitch(pitchOf: () => number | null): Promise<void> {
+    const at = this.#where()
+    if (!at) return Promise.resolve()
+    const pitch = pitchOf()
+    if (!this.isPitched || pitch === null) return Promise.resolve()
+    return this.enterPitch({ track: at.track, measure: at.measure, beat: at.beat, pitch })
+  }
+
+  /**
+   * Up and down on a note of a pitched track move it a semitone (the selection follows it); on an
+   * empty spot they move the selection a step of the staff. Elsewhere the arrows move the selection.
+   */
   #move(direction: 'left' | 'right' | 'up' | 'down'): Promise<void> {
+    const at = this.#where()
+    if (at && this.isPitched && (direction === 'up' || direction === 'down') && this.currentNote) {
+      const to = at.row + (direction === 'up' ? 1 : -1)
+      if (to < 0 || to > 127) return Promise.resolve()
+      const { row, ...beat } = at
+      this.#typed = null
+      return this.#send({ type: 'movePitch', ...beat, pitch: row, to }, () => {
+        if (this.selection) this.selection = { ...this.selection, row: to }
+      })
+    }
     if (this.document) {
       this.selection = moveSelection({
         score: this.document.score,
@@ -561,7 +645,7 @@ export class Editor {
   /** A different score: start on its first note and say what the user should know about it. */
   async #adopt(opened: OpenedDocument): Promise<void> {
     this.track = 0
-    this.selection = FIRST_NOTE
+    this.selection = firstSelection({ score: opened.document.score, track: 0 })
     this.#typed = null
     this.message = null
     await this.#show(opened.document)

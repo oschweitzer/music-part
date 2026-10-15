@@ -169,7 +169,7 @@ fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
 fn import_midi_bytes(bytes: &[u8], file_stem: Option<&str>) -> Result<(Score, usize), String> {
     let mut imported = io_midi::import_midi(bytes).map_err(|e| e.to_string())?;
     if imported.score.tracks.is_empty() {
-        return Err("This file has no notes that a string instrument can play.".into());
+        return Err("This file has no notes to import (drum parts are not imported yet).".into());
     }
     if let (Some(stem), "Untitled") = (file_stem, imported.score.title.as_str()) {
         imported.score.title = stem.to_string();

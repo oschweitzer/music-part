@@ -44,15 +44,24 @@ export async function launchBrowser({ width = 1200, height = 800, port = 9444 } 
     { stdio: 'ignore' },
   )
 
+  let exit = null
+  process_.on('exit', (code, signal) => (exit = signal ?? `code ${code}`))
+  process_.on('error', (error) => (exit = error.message))
+
+  // A cold CI runner can take well over the few seconds Chrome needs locally to open its port.
   let targets
-  for (let attempt = 0; attempt < 80 && !targets; attempt++) {
+  const deadline = Date.now() + 30_000
+  while (!targets && exit === null && Date.now() < deadline) {
     try {
       targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json()
     } catch {
       await sleep(100)
     }
   }
-  if (!targets) throw new Error('Chrome did not start')
+  if (!targets) {
+    process_.kill()
+    throw new Error(exit === null ? `${chrome} did not open its debugging port in 30 s` : `${chrome} exited (${exit})`)
+  }
 
   const socket = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl)
   await new Promise((resolve, reject) => {
@@ -133,6 +142,13 @@ export async function launchBrowser({ width = 1200, height = 800, port = 9444 } 
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+    },
+
+    /** Two clicks in a row, the second one counted as a double-click. */
+    async mouseDoubleClick(x, y) {
+      await page.mouseClick(x, y)
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 2 })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 2 })
     },
 
     async mouseRightClick(x, y) {

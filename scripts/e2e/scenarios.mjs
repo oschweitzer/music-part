@@ -61,6 +61,16 @@ const pressTimes = async (page, key, times) => {
 /** Waits for the UI to have caught up with what the backend holds. */
 const settle = () => sleep(150)
 
+/**
+ * Reloads the page and waits until `ready` holds on the new one. The marker keeps the wait from
+ * being met by the old page before the reload takes effect, which let the next step act on a page
+ * being torn down.
+ */
+async function reload(page, ready, what) {
+  await page.eval(`window.__beforeReload = true; location.reload()`)
+  await page.waitFor(`!window.__beforeReload && (${ready})`, { what })
+}
+
 /** Shows the tracks as rows, runs `steps`, and goes back to tabs so the next scenarios start as usual. */
 async function inRows(page, steps) {
   try {
@@ -83,6 +93,48 @@ async function clickOn(page, selector) {
 
 const rowLabels = (page) => page.eval(`[...document.querySelectorAll('section.row')].map(r => r.getAttribute('aria-label'))`)
 const selectedRow = (page) => page.eval(`document.querySelector('section.row.selected')?.getAttribute('aria-label') ?? null`)
+
+/** Picks the track to edit from the track menu. */
+const pickTrack = (page, index) =>
+  page.eval(`(() => { const s = document.querySelector('select[aria-label="Track to edit"]'); s.value = '${index}'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+
+/** Adds a piano track (the third, after the demo's guitar and bass) and shows it. */
+async function withPiano({ page, backend }) {
+  await backend.request('edit_score', { edit: { type: 'addTrack', instrument: 'Piano' } })
+  await reload(page, `document.querySelector('svg.tab line.string')`, 'the score to appear')
+  await pickTrack(page, 2)
+  await page.waitFor(`document.querySelector('svg.tab g.staff[data-clef="bass"]')`, { what: 'the grand staff' })
+}
+
+/**
+ * The client point of a staff position on the first measure of the staff with `clef` (in `root`):
+ * `position` steps above its bottom line, at the x of the `beat`th rest or note head of the measure.
+ */
+const staffPoint = (page, { clef, position, root = 'svg.tab' }) =>
+  page.eval(`(() => {
+    const staff = document.querySelector(${JSON.stringify(root)} + ' g.staff[data-clef="${clef}"]')
+    const lines = [...staff.querySelectorAll('line.staff-line')].map(l => l.getBoundingClientRect().y)
+    const bottom = Math.max(...lines)
+    const gap = (bottom - Math.min(...lines)) / 4
+    const mark = document.querySelector(${JSON.stringify(root)} + ' .staff-notes .staff-rest, ' + ${JSON.stringify(root)} + ' .staff-notes .head')
+    const box = mark.getBoundingClientRect()
+    return { x: box.x + box.width / 2, y: bottom - ${position} * gap / 2 }
+  })()`)
+
+const pianoNotes = async (context, measure = 0) => {
+  const doc = await document_(context)
+  return doc.score.tracks[2].measures[measure].voices[0].beats.map((b) => b.notes.map((n) => [n.pitch, n.tied === true]))
+}
+
+/** Sets how string instruments are written, and forgets it afterwards for the next scenarios. */
+async function withFrettedView(page, label, steps) {
+  try {
+    await clickButton(page, label)
+    await steps()
+  } finally {
+    await page.eval(`localStorage.removeItem('music-part-fretted-view')`)
+  }
+}
 
 // ---- scenarios -----------------------------------------------------------------------------
 
@@ -867,7 +919,7 @@ export const scenarios = [
       const { page, out } = context
       const xml = `<?xml version="1.0"?>
 <score-partwise><work><work-title>XML tune</work-title></work>
-<part-list><score-part id="P1"><part-name>Lead</part-name></score-part></part-list>
+<part-list><score-part id="P1"><part-name>Lead guitar</part-name></score-part></part-list>
 <part id="P1">
 <measure number="1"><attributes><divisions>2</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
 <direction><sound tempo="88"/></direction>
@@ -1071,12 +1123,7 @@ export const scenarios = [
     async (context) => {
       const { page, backend } = context
       for (let i = 0; i < 22; i++) await backend.request('edit_score', { edit: { type: 'addTrack', instrument: 'Guitar' } })
-      // Mark the page so the wait below cannot be met by the page that is still there before the
-      // reload takes effect: the next click would then land on a page being torn down.
-      await page.eval(`window.__beforeReload = true; location.reload()`)
-      await page.waitFor(`!window.__beforeReload && document.querySelectorAll('svg.tab line.string').length > 0`, {
-        what: 'the reloaded score to appear',
-      })
+      await reload(page, `document.querySelector('svg.tab line.string')`, 'the reloaded score to appear')
 
       await inRows(page, async () => {
         const drawn = await page.eval(`document.querySelectorAll('section.row').length`)
@@ -1116,6 +1163,161 @@ export const scenarios = [
       // A press elsewhere closes it.
       await clickOn(page, 'svg.tab')
       assert.equal(await page.eval(`document.querySelector('.sounds-menu').open`), false)
+    },
+  ],
+
+  [
+    'writes a guitar track on a staff, alone or above its tablature, and remembers the choice',
+    async ({ page }) => {
+      await withFrettedView(page, 'Staff', async () => {
+        assert.equal(await exists(page, 'svg.tab line.string'), false, 'no tablature')
+        assert.ok(await exists(page, 'svg.tab g.staff[data-clef="treble8vb"] line.staff-line'), 'a treble staff, an octave down')
+        assert.ok((await page.eval(`document.querySelectorAll('svg.tab .staff-notes .head').length`)) > 10, 'the notes have heads')
+
+        await clickButton(page, 'Both')
+        const order = await page.eval(`(() => {
+          const staff = document.querySelector('svg.tab line.staff-line').getBoundingClientRect().y
+          const tab = document.querySelector('svg.tab line.string').getBoundingClientRect().y
+          return staff < tab
+        })()`)
+        assert.equal(order, true, 'the staff is above the tablature')
+
+        await reload(page, `document.querySelector('svg.tab line.staff-line')`, 'the staff after a reload')
+        assert.ok(await exists(page, 'svg.tab line.string'), 'both are still shown after a restart')
+
+        // Clicking a note head on the staff selects that note's string on the tablature too.
+        await clickOn(page, 'svg.tab .staff-notes .head')
+        await settle()
+        assert.ok(await exists(page, 'svg.tab .staff-selection'), 'the head is selected')
+        assert.ok(await exists(page, 'svg.tab rect.selection:not(.staff-selection)'), 'and its fret on the tablature')
+
+        await clickButton(page, 'Tab')
+        assert.equal(await exists(page, 'svg.tab line.staff-line'), false)
+      })
+    },
+  ],
+
+  [
+    'writes a guitar note by double-clicking its staff',
+    async (context) => {
+      const { page } = context
+      await withFrettedView(page, 'Both', async () => {
+        // A new empty measure after the first one: its whole rest is the first rest of the page.
+        await page.press('Enter', ['ctrl'])
+        await settle()
+        const point = await page.eval(`(() => {
+          const rest = document.querySelector('svg.tab .staff-notes .staff-rest').getBoundingClientRect()
+          const lines = [...document.querySelectorAll('svg.tab g.staff line.staff-line')].map(l => l.getBoundingClientRect().y)
+          const bottom = Math.max(...lines.slice(0, 5))
+          const gap = (bottom - Math.min(...lines.slice(0, 5))) / 4
+          // The second space from the bottom: A4 written, A3 sounding.
+          return { x: rest.x + rest.width / 2, y: bottom - 3 * gap / 2 }
+        })()`)
+        await page.mouseDoubleClick(point.x, point.y)
+        await settle()
+        assert.deepEqual(beatsOf(await document_(context), 1)[0].notes, [{ string: 3, fret: 2, technique: null, tied: false }], 'A3 is fret 2 of string 3')
+      })
+    },
+  ],
+
+  [
+    'enters, moves, ties and deletes notes on a piano staff with the mouse and the keyboard',
+    async (context) => {
+      const { page } = context
+      await withPiano(context)
+      assert.equal(await exists(page, 'svg.tab line.string'), false, 'a piano has no tablature')
+      assert.equal(await text(page, 'nav.tracks .track-tab.active .strings'), 'Piano')
+      assert.equal(await exists(page, 'input[aria-label="Tuning of this track"]'), false)
+
+      // Middle C: one ledger line below the treble staff.
+      const middleC = await staffPoint(page, { clef: 'treble', position: -2 })
+      await page.mouseDoubleClick(middleC.x, middleC.y)
+      await settle()
+      assert.deepEqual((await pianoNotes(context))[0], [[60, false]])
+      assert.ok(await exists(page, 'svg.tab .staff-notes .ledger'), 'middle C has its ledger line')
+
+      await page.press('ArrowUp')
+      await settle()
+      assert.deepEqual((await pianoNotes(context))[0], [[61, false]], 'up moves the note a semitone')
+      assert.ok(await exists(page, 'svg.tab .staff-notes path.accidental'), 'C# shows its sharp')
+
+      await page.press('G', ['shift'])
+      await settle()
+      assert.deepEqual((await pianoNotes(context))[0], [[61, false], [67, false]], 'Shift+G adds the nearest G')
+
+      await page.press('q')
+      await settle()
+      await page.press('ArrowRight')
+      await page.press('Enter')
+      await settle()
+      await page.press('l')
+      await settle()
+      const notes = await pianoNotes(context)
+      assert.deepEqual(notes[1], [[67, true]], 'Enter writes the selected pitch on the next beat, L ties it')
+
+      await page.press('Delete')
+      await settle()
+      assert.deepEqual((await pianoNotes(context))[1], [], 'Delete leaves a rest')
+      await page.press('1')
+      await settle()
+      assert.match(await text(page, '.notice'), /staff/, 'digits explain how to write on a staff')
+    },
+  ],
+
+  [
+    'selects and writes on a piano staff in the rows view',
+    async (context) => {
+      const { page } = context
+      await withPiano(context)
+      await inRows(page, async () => {
+        const root = 'section.row:nth-of-type(3) svg.tab'
+        // The F clef staff: its middle line is D3.
+        const d3 = await staffPoint(page, { clef: 'bass', position: 4, root })
+        await page.mouseClick(d3.x, d3.y)
+        await settle()
+        assert.match(await selectedRow(page), /^Track 3: Piano/)
+        assert.ok(await exists(page, `${root} .ghost-head`), 'an empty spot shows where the note would go')
+        await page.press('Enter')
+        await settle()
+        assert.deepEqual((await pianoNotes(context))[0], [[50, false]])
+        assert.ok(await exists(page, `${root} g.staff[data-clef="bass"] ~ .staff-notes .head, ${root} .staff-notes .head`))
+      })
+    },
+  ],
+
+  [
+    'draws staves that read well (screenshots in target/e2e)',
+    async (context) => {
+      const { page, backend, out } = context
+      const beat = (value, pitches, tied = false) => ({
+        duration: { value, dots: 0 },
+        notes: pitches.map((pitch) => ({ pitch, technique: null, tied })),
+      })
+      const dotted = (value, pitches) => ({ ...beat(value, pitches), duration: { value, dots: 1 } })
+      await backend.request('edit_score', { edit: { type: 'addTrack', instrument: 'Piano' } })
+      const beats = [
+        ...[60, 62, 64, 66, 67, 69, 70, 72].map((p) => beat('Eighth', [p, p - 24])),
+        beat('Quarter', [48, 52, 55, 72, 74, 77]),
+        dotted('Quarter', [65, 69, 72]),
+        beat('Sixteenth', [79]),
+        beat('Sixteenth', [81]),
+        beat('Quarter', []),
+        beat('Half', [36, 84]),
+        beat('Half', [36], true),
+        beat('Whole', [33, 45, 61, 63]),
+      ]
+      await backend.request('edit_score', { edit: { type: 'paste', track: 2, measure: 0, beat: 0, beats } })
+      await reload(page, `document.querySelector('svg.tab line.string')`, 'the score to appear')
+      await withFrettedView(page, 'Both', async () => {
+        await settle()
+        await page.screenshot(join(out, 'staff.png'))
+        await pickTrack(page, 2)
+        await page.waitFor(`document.querySelector('svg.tab g.staff[data-clef="bass"]')`, { what: 'the grand staff' })
+        await settle()
+        await page.screenshot(join(out, 'staff-2.png'))
+        const heads = await page.eval(`document.querySelectorAll('svg.tab .staff-notes .head').length`)
+        assert.ok(heads >= 30, `${heads} note heads drawn`)
+      })
     },
   ],
 ]

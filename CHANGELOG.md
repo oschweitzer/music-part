@@ -19,6 +19,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of the selected track, and the folder where the user adds packs.
 - Sound packs: a pack's samples are read only when a track of the score uses one of its sounds,
   and freed when no track uses them any more, so unused packs cost no memory or start-up time.
+- `score-model`: notes stored as pitches. A note has a place, a string and a fret
+  (`Place::Fretted`) or a MIDI pitch (`Place::Pitched`), and the instrument says which
+  (`NoteKind`). Files keep the same format: fretted notes are written as before and older
+  `.mpart` files load unchanged; a pitched note is written `{"pitch":60,...}`. See
+  `docs/notation.md`.
+- A new instrument, the piano (sound `piano/grand`, General MIDI program 0), written on a grand
+  staff. `Score::validate` checks its notes (pitches 0 to 127, no pitch twice in a beat).
+- `score-model`: edits by pitch, `AddPitch`, `RemovePitch`, `MovePitch`, `SetPitchTied`, and a
+  `pitches` span on `ClearNotes`; on a string track a pitch goes on a free string.
+- UI: a standard notation staff, with clefs, key signatures, accidentals, ledger lines, stems,
+  beams, rests, dots and ties, in the tabs and the rows views. The new `Tab` / `Staff` / `Both`
+  switch shows string tracks as tablature, on a staff, or both (the choice is remembered).
+- UI: writing on a staff: double-click a line or space, or press `Enter` at the selected pitch or
+  `Shift+A` to `Shift+G` for a note name; `Up` and `Down` move a note a semitone.
 - UI: a rows view of the tracks, one under the other on the same time axis like a DAW, switched
   with the new `Tabs` / `Rows` toggle in the toolbar (the choice is remembered). Each row has a
   header with mute, solo, remove and fold, rows share their barlines and one playback cursor, and
@@ -108,6 +122,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Import: MIDI and MusicXML parts that are not a string instrument (keyboards, winds, voices...)
+  now become piano tracks that keep every note, instead of nylon guitar tracks that lost the notes
+  no string could play. A MusicXML piano part is merged into one voice, held notes tied on.
+- Export: piano tracks are written to MIDI by pitch and to MusicXML on a standard staff.
+- Changing the instrument of a track between a string instrument and the piano converts its
+  notes; it is refused when a pitch cannot be placed on the strings.
 - The three recorded sounds (nylon guitar, clean electric guitar, finger bass) are now sound
   packs in `assets/soundfonts/packs/`, each with its licence text. `MUSIC_PART_BANKS` is replaced
   by `MUSIC_PART_PACKS`, and `render_wav --no-banks` by `--no-packs`.

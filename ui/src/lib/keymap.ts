@@ -3,6 +3,10 @@ import type { Direction } from './selection'
 
 export type Command =
   | { type: 'digit'; digit: number }
+  /** Writes a note at the selected pitch of a staff (pitched tracks). */
+  | { type: 'enterNote' }
+  /** Writes the note of that name (A to G) nearest to the selected pitch (pitched tracks). */
+  | { type: 'noteName'; letter: string }
   | { type: 'move'; direction: Direction }
   /** To the previous (-1) or next (1) track, at the same moment. */
   | { type: 'switchTrack'; step: -1 | 1 }
@@ -92,6 +96,9 @@ export function interpretKey(input: KeyInput): Command | null {
   if (key in ARROWS) return { type: 'move', direction: ARROWS[key] as Direction }
   if (key === 'Delete' || key === 'Backspace') return { type: 'remove' }
   if (key === 'Escape') return { type: 'clearSelection' }
+  if (key === 'Enter' && !shiftKey) return { type: 'enterNote' }
+  // Shift: the plain letters are durations and techniques.
+  if (shiftKey && /^[a-g]$/.test(lower)) return { type: 'noteName', letter: lower.toUpperCase() }
   if (key === '.') return { type: 'dot' }
   if (!shiftKey && lower === 'l') return { type: 'tie' }
   if (!shiftKey && lower in TECHNIQUE_KEYS) return { type: 'technique', technique: TECHNIQUE_KEYS[lower] as Technique }

@@ -10,6 +10,7 @@ import {
   locateTick,
   measureTicks,
   METRICS,
+  notationOf,
   ROW_METRICS,
   visibleRows,
 } from './tab-layout'
@@ -283,7 +284,7 @@ describe('hitTest', () => {
 
   it('should find the beat and string under the point', () => {
     const hit = hitTest({ layout, x: beat.x, y: system.stringYs[3]! })
-    expect(hit).toEqual({ measure: 0, beat: 2, string: 4, tick: beat.startTick })
+    expect(hit).toEqual({ measure: 0, beat: 2, row: 4, tick: beat.startTick, area: 'tab', pitch: null })
   })
 
   it('should pick the nearest beat when the click falls between two', () => {
@@ -295,9 +296,9 @@ describe('hitTest', () => {
   })
 
   it('should pick the nearest string, with generous reach above and below the staff', () => {
-    expect(hitTest({ layout, x: beat.x, y: system.stringYs[0]! - 5 })?.string).toBe(1)
-    expect(hitTest({ layout, x: beat.x, y: system.stringYs[5]! + 5 })?.string).toBe(6)
-    expect(hitTest({ layout, x: beat.x, y: system.stringYs[2]! + 4 })?.string).toBe(3)
+    expect(hitTest({ layout, x: beat.x, y: system.stringYs[0]! - 5 })?.row).toBe(1)
+    expect(hitTest({ layout, x: beat.x, y: system.stringYs[5]! + 5 })?.row).toBe(6)
+    expect(hitTest({ layout, x: beat.x, y: system.stringYs[2]! + 4 })?.row).toBe(3)
   })
 
   it('should not hit anything outside the staves', () => {
@@ -315,7 +316,7 @@ describe('hitTest', () => {
     const target = later.measures[0]!
     const hit = hitTest({ layout: narrow, x: target.beats[0]!.x, y: later.stringYs[1]! })
     expect(hit?.measure).toBe(target.index)
-    expect(hit?.string).toBe(2)
+    expect(hit?.row).toBe(2)
   })
 
   it('should return null for a layout without systems', () => {
@@ -396,7 +397,7 @@ describe('layoutRows', () => {
   it('should let a click in a row find its beat and string', () => {
     const row = layout.rows[0]!.layout!
     const beat = measuresOf(0)[1]!.beats[3]!
-    expect(hitTest({ layout: row, x: beat.x, y: row.systems[0]!.stringYs[2]! })).toMatchObject({ measure: 1, beat: 3, string: 3 })
+    expect(hitTest({ layout: row, x: beat.x, y: row.systems[0]!.stringYs[2]! })).toMatchObject({ measure: 1, beat: 3, row: 3 })
   })
 
   it('should lay out a score without tracks', () => {
@@ -427,5 +428,87 @@ describe('clipLayout', () => {
     const clipped = clipLayout({ layout, left: second.x + 1, right: second.x + second.width - 1 })
     expect(clipped.systems[0]!.measures.map((m) => m.index)).toEqual([1])
     expect(clipped.width).toBe(layout.width)
+  })
+})
+
+describe('staves', () => {
+  const piano: Track = {
+    name: 'Piano',
+    instrument: 'Piano',
+    sound: 'piano/grand',
+    tuning: [],
+    measures: [
+      measureOf([
+        { duration: { value: 'Half', dots: 0 }, notes: [{ pitch: 48, technique: null }, { pitch: 64, technique: null }] },
+        { duration: { value: 'Half', dots: 0 }, notes: [{ pitch: 72, technique: null }] },
+      ]),
+    ],
+  }
+
+  it('should write a piano on a grand staff without tablature', () => {
+    expect(notationOf({ track: piano, fretted: 'tab' })).toEqual({ clefs: ['treble', 'bass'], hasTab: false })
+    const system = layoutTab({ track: piano, width: 900 }).systems[0]!
+    expect(system.stringYs).toEqual([])
+    expect(system.staves.map((s) => s.clef)).toEqual(['treble', 'bass'])
+    expect(system.staves[0]!.bottom).toBeLessThan(system.staves[1]!.top)
+    expect(system.measures[0]!.beams).toEqual([])
+  })
+
+  it('should split a chord between the staves at middle C, and rest where a staff has nothing', () => {
+    const [upper, lower] = layoutTab({ track: piano, width: 900 }).systems[0]!.measures[0]!.staves
+    expect(upper!.beats[0]!.heads.map((h) => h.pitch)).toEqual([64])
+    expect(lower!.beats[0]!.heads.map((h) => h.pitch)).toEqual([48])
+    expect(lower!.beats[1]!.rest?.value).toBe('Half')
+  })
+
+  it('should give a fretted track its tablature, its staff, or the staff above the tablature', () => {
+    expect(notationOf({ track: guitar, fretted: 'tab' })).toEqual({ clefs: [], hasTab: true })
+    expect(notationOf({ track: guitar, fretted: 'staff' })).toEqual({ clefs: ['treble8vb'], hasTab: false })
+    const both = layoutTab({ track: guitar, width: 900, fretted: 'both' }).systems[0]!
+    expect(both.staves[0]!.bottom).toBeLessThan(both.staffTop)
+    expect(both.top).toBe(both.staves[0]!.top)
+    const notes = both.measures[0]!.staves[0]!.beats.flatMap((b) => b.heads)
+    expect(notes[0]).toMatchObject({ pitch: 45, row: 5 })
+  })
+
+  it('should make a system with a staff taller, and its beats keep their x', () => {
+    const tab = layoutTab({ track: guitar, width: 900 })
+    const both = layoutTab({ track: guitar, width: 900, fretted: 'both' })
+    expect(both.height).toBeGreaterThan(tab.height)
+    const xs = (layout: typeof tab) => layout.systems[0]!.measures[0]!.beats.map((b) => b.x)
+    expect(xs(both)).toEqual(xs(tab))
+  })
+
+  it('should find the pitch under a click on a staff, the note there first', () => {
+    const layout = layoutTab({ track: piano, width: 900 })
+    const system = layout.systems[0]!
+    const beat = system.measures[0]!.beats[1]!
+    const treble = system.staves[0]!
+    // The top line of the treble staff is F5, of the bass staff A3.
+    expect(hitTest({ layout, x: beat.x, y: treble.top })).toMatchObject({ area: 'staff', pitch: 77, row: 77, beat: 1 })
+    const head = system.measures[0]!.staves[0]!.beats[1]!.heads[0]!
+    expect(hitTest({ layout, x: beat.x, y: head.y + 1 })).toMatchObject({ pitch: 72, row: 72 })
+    expect(hitTest({ layout, x: beat.x, y: system.staves[1]!.top })).toMatchObject({ pitch: 57 })
+  })
+
+  it('should give no string for an empty spot of the staff of a fretted track', () => {
+    const layout = layoutTab({ track: guitar, width: 900, fretted: 'both' })
+    const system = layout.systems[0]!
+    const beat = system.measures[0]!.beats[0]!
+    expect(hitTest({ layout, x: beat.x, y: system.staves[0]!.top - 12 })).toMatchObject({ area: 'staff', row: null })
+    expect(hitTest({ layout, x: beat.x, y: system.stringYs[1]! })).toMatchObject({ area: 'tab', row: 2 })
+  })
+
+  it('should keep the rows of a guitar and a piano on the same measure x', () => {
+    const shown = [
+      { track: 0, isCollapsed: false },
+      { track: 1, isCollapsed: false },
+    ]
+    const rows = layoutRows({ tracks: [guitar, piano], shown, width: 600, fretted: 'both' })
+    const [first, second] = rows.rows.map((r) => r.layout!.systems[0]!)
+    expect(first!.measures[0]!.x).toBe(second!.measures[0]!.x)
+    expect(rows.rows[1]!.layout!.rowKind).toBe('pitch')
+    expect(second!.staves).toHaveLength(2)
+    expect(rows.rows[1]!.height).toBeGreaterThan(ROW_METRICS.minHeight)
   })
 })

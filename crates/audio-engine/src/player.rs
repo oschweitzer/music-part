@@ -774,12 +774,7 @@ pub(crate) mod tests {
                                 value: NoteValue::Whole,
                                 dots: 0,
                             },
-                            notes: vec![Note {
-                                string: 1,
-                                fret: 0,
-                                technique: None,
-                                tied: false,
-                            }],
+                            notes: vec![Note::fretted(1, 0)],
                         }],
                     }],
                 }],
@@ -915,10 +910,9 @@ pub(crate) mod tests {
                 dots: 0,
             },
             notes: vec![Note {
-                string: 1,
-                fret,
                 technique,
                 tied: false,
+                ..Note::fretted(1, fret)
             }],
         };
         score.tracks[0].measures[0].voices[0].beats = vec![half(0, technique), half(5, None)];
@@ -1058,10 +1052,9 @@ pub(crate) mod tests {
                 dots: 0,
             },
             notes: vec![Note {
-                string: 1,
-                fret: 5,
                 technique,
                 tied: false,
+                ..Note::fretted(1, 5)
             }],
         };
         score.tracks[0].measures[0].voices[0].beats = vec![
@@ -1383,7 +1376,7 @@ pub(crate) mod tests {
             for string in 1..=strings {
                 for fret in [0, 12, 24] {
                     let note = &mut score.tracks[0].measures[0].voices[0].beats[0].notes[0];
-                    (note.string, note.fret) = (string, fret);
+                    note.place = score_model::Place::Fretted { string, fret };
                     let buf =
                         render_with_bank(&base, Some((bank.sound, path, bank.keys())), &score);
                     let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -1412,7 +1405,10 @@ pub(crate) mod tests {
         score.tracks[0].tuning = Instrument::Bass.standard_tuning().to_vec();
         let note = &mut score.tracks[0].measures[0].voices[0].beats[0].notes[0];
         // G2 string at the 24th fret is G4 (67), above the recorded keys.
-        (note.string, note.fret) = (1, 24);
+        note.place = score_model::Place::Fretted {
+            string: 1,
+            fret: 24,
+        };
         assert!(67 > bank.last_key);
 
         let with_bank = render_with_bank(

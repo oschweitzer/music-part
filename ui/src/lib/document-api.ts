@@ -22,7 +22,18 @@ export type Edit =
   | { type: 'renameTrack'; track: number; name: string }
   | { type: 'setInstrument'; track: number; instrument: Instrument }
   | { type: 'setSound'; track: number; sound: SoundId }
-  | { type: 'clearNotes'; track: number; from: BeatAddress; to: BeatAddress; strings: { first: number; last: number } | null }
+  | {
+      type: 'clearNotes'
+      track: number
+      from: BeatAddress
+      to: BeatAddress
+      strings: { first: number; last: number } | null
+      pitches?: { low: number; high: number } | null
+    }
+  | { type: 'addPitch'; track: number; measure: number; beat: number; pitch: number }
+  | { type: 'removePitch'; track: number; measure: number; beat: number; pitch: number }
+  | { type: 'movePitch'; track: number; measure: number; beat: number; pitch: number; to: number }
+  | { type: 'setPitchTied'; track: number; measure: number; beat: number; pitch: number; tied: boolean }
   | { type: 'removeRests'; track: number; from: BeatAddress; to: BeatAddress }
 
 /** A format a score can be exported to, besides the native one. */
