@@ -1,12 +1,14 @@
 //! Export a `Score` as a MusicXML `score-partwise` file.
 //!
-//! Each track is a part with one tablature staff (`TAB` clef, tuning, string and fret on every
-//! note), so other programs show the tablature and can play it. Durations are written in
-//! divisions of 32 per quarter note, which is exactly the unit of the score: nothing is rounded.
+//! Each track of a string instrument is a part with one tablature staff (`TAB` clef, tuning,
+//! string and fret on every note), so other programs show the tablature and can play it. A
+//! pitched track (piano) is a part with one standard staff, in the treble or bass clef that suits
+//! its notes best. Durations are written in divisions of 32 per quarter note, which is exactly the
+//! unit of the score: nothing is rounded.
 
 use std::fmt::Write;
 
-use score_model::{Beat, Note, Score, Technique, Track};
+use score_model::{Beat, Note, NoteKind, Score, Technique, Track};
 
 const DIVISIONS: u32 = 32;
 const PERCUSSION_CHANNEL: usize = 9;
@@ -104,7 +106,9 @@ fn write_part(out: &mut String, score: &Score, track: &Track, index: usize) -> s
                 "<time><beats>{}</beats><beat-type>{}</beat-type></time>",
                 signature.numerator, signature.denominator
             )?;
-            if m == 0 {
+            if m == 0 && track.instrument.note_kind() == NoteKind::Pitched {
+                write!(out, "{}", clef_for(track))?;
+            } else if m == 0 {
                 write!(out, "<clef><sign>TAB</sign><line>5</line></clef>")?;
                 write!(
                     out,
@@ -220,8 +224,8 @@ fn write_beat(
             continue;
         };
         let (step, alter, octave) = spell(pitch);
-        let next = note_on_string(around.after, note.string);
-        let previous = note_on_string(around.before, note.string);
+        let next = same_note(around.after, note);
+        let previous = same_note(around.before, note);
 
         let continues = next.is_some_and(|n| n.tied);
         let mut ties = String::new();
@@ -249,19 +253,44 @@ fn write_beat(
         )?;
         write!(out, "<notations>{tied}")?;
         write_slide(out, note, previous)?;
-        write!(
-            out,
-            "<technical><string>{}</string><fret>{}</fret>",
-            note.string, note.fret
-        )?;
-        write_technique(out, note, next)?;
-        writeln!(out, "</technical></notations></note>")?;
+        if let (Some(string), Some(fret)) = (note.string(), note.fret()) {
+            write!(
+                out,
+                "<technical><string>{string}</string><fret>{fret}</fret>"
+            )?;
+            write_technique(out, note, next)?;
+            write!(out, "</technical>")?;
+        }
+        writeln!(out, "</notations></note>")?;
     }
     Ok(())
 }
 
-fn note_on_string(beat: Option<&Beat>, string: u8) -> Option<&Note> {
-    beat?.notes.iter().find(|n| n.string == string)
+/// The note of a neighbouring beat on the same string, or at the same pitch on a pitched track.
+fn same_note<'a>(beat: Option<&'a Beat>, note: &Note) -> Option<&'a Note> {
+    beat?.notes.iter().find(|n| n.key() == note.key())
+}
+
+/// The treble clef, or the bass clef when most notes of the track are below middle C.
+fn clef_for(track: &Track) -> &'static str {
+    let (low, high) = track
+        .measures
+        .iter()
+        .flat_map(|m| &m.voices)
+        .flat_map(|v| &v.beats)
+        .flat_map(|b| &b.notes)
+        .fold((0usize, 0usize), |(low, high), n| {
+            if n.key() < 60 {
+                (low + 1, high)
+            } else {
+                (low, high + 1)
+            }
+        });
+    if low > high {
+        "<clef><sign>F</sign><line>4</line></clef>"
+    } else {
+        "<clef><sign>G</sign><line>2</line></clef>"
+    }
 }
 
 fn write_slide(out: &mut String, note: &Note, previous: Option<&Note>) -> std::fmt::Result {
@@ -346,7 +375,7 @@ mod tests {
             for measure in &mut track.measures {
                 for voice in &mut measure.voices {
                     for beat in &mut voice.beats {
-                        beat.notes.sort_by_key(|n| n.string);
+                        beat.notes.sort_by_key(Note::key);
                     }
                 }
                 let mut index = 0;
@@ -402,20 +431,72 @@ mod tests {
             )
             .unwrap();
             let track = score.tracks.len() - 1;
-            // The last string at fret 7: on a banjo, the short fifth string.
+            // The last string at fret 7: on a banjo, the short fifth string. A chord on a piano.
             let string = score.tracks[track].tuning.len() as u8;
-            apply_edit(
-                &mut score,
-                &Edit::SetFret {
+            let edits = if string == 0 {
+                [48, 61, 67]
+                    .map(|pitch| Edit::AddPitch {
+                        track,
+                        measure: 0,
+                        beat: 0,
+                        pitch,
+                    })
+                    .to_vec()
+            } else {
+                vec![Edit::SetFret {
                     track,
                     measure: 0,
                     beat: 0,
                     string,
                     fret: 7,
-                },
-            )
-            .unwrap();
+                }]
+            };
+            for edit in edits {
+                apply_edit(&mut score, &edit).unwrap();
+            }
         }
+        assert_same_music(&roundtrip(&score), &score);
+    }
+
+    #[test]
+    fn a_low_piano_part_is_written_in_the_bass_clef_with_its_ties() {
+        let mut score = blank_score("Low");
+        let edits = [
+            Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Piano,
+            },
+            // A part named after a string instrument would be read back as one.
+            Edit::RenameTrack {
+                track: 0,
+                name: "Left hand".into(),
+            },
+            Edit::AddPitch {
+                track: 0,
+                measure: 0,
+                beat: 0,
+                pitch: 40,
+            },
+            Edit::AddPitch {
+                track: 0,
+                measure: 1,
+                beat: 0,
+                pitch: 40,
+            },
+            Edit::SetPitchTied {
+                track: 0,
+                measure: 1,
+                beat: 0,
+                pitch: 40,
+                tied: true,
+            },
+        ];
+        for edit in edits {
+            apply_edit(&mut score, &edit).unwrap();
+        }
+        let xml = export_musicxml(&score);
+        assert!(xml.contains("<clef><sign>F</sign><line>4</line></clef>"));
+        assert!(!xml.contains("<technical>"), "no string or fret on a piano");
         assert_same_music(&roundtrip(&score), &score);
     }
 
@@ -506,10 +587,8 @@ mod tests {
                     dots: 0,
                 },
                 notes: vec![Note {
-                    string: 5,
-                    fret: 2,
                     technique: Some(Technique::Harmonic),
-                    tied: false,
+                    ..Note::fretted(5, 2)
                 }],
             }],
         });

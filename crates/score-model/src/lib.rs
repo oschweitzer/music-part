@@ -1,14 +1,16 @@
 //! Score model: Score > Track > Measure > Voice > Beat > Note.
 
+mod chords;
 mod demo;
 mod edit;
 mod fretting;
 mod sound;
 mod validate;
 
+pub use chords::{pitched_segments, Segment, Span};
 pub use demo::{blank_score, demo_score};
 pub use edit::{apply_edit, Edit, EditError};
-pub use fretting::place_chord;
+pub use fretting::{place_chord, place_pitch};
 pub use sound::Sound;
 pub use validate::ScoreError;
 
@@ -30,6 +32,7 @@ pub struct Track {
     pub sound: Sound,
     /// MIDI pitches of the open strings, from string 1 to the last. String 1 is the highest
     /// except on a banjo, whose short fifth string is tuned higher (see `Instrument::first_fret`).
+    /// Empty for an instrument without strings (`NoteKind::Pitched`).
     pub tuning: Vec<u8>,
     pub measures: Vec<Measure>,
 }
@@ -60,8 +63,8 @@ impl From<TrackFile> for Track {
     }
 }
 
-/// An instrument family: it decides the strings, how frets are counted and the default tuning.
-/// How it sounds is the track's `Sound`.
+/// An instrument family: it decides how its notes are stored (`NoteKind`), the strings, how
+/// frets are counted and the default tuning. How it sounds is the track's `Sound`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instrument {
     /// Acoustic guitar, with nylon or steel strings (the name predates the steel sound).
@@ -71,6 +74,17 @@ pub enum Instrument {
     Violin,
     /// Five-string banjo, with its short fifth string.
     Banjo,
+    /// A keyboard: notes are pitches, written on a grand staff. See `docs/notation.md`.
+    Piano,
+}
+
+/// How the notes of an instrument are stored, and so how they are entered and written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteKind {
+    /// On a string and a fret (`Place::Fretted`), written as tablature and optionally a staff.
+    Fretted,
+    /// At a MIDI pitch (`Place::Pitched`), written on a staff. The track has no strings.
+    Pitched,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,14 +129,85 @@ pub enum NoteValue {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
-    /// String number, 1 = the highest.
-    pub string: u8,
-    pub fret: u8,
+    /// Where the note is played. Files write its fields flat in the note, so a fretted note reads
+    /// `{"string":1,"fret":3,...}` as it always did and a pitched one `{"pitch":60,...}`.
+    #[serde(flatten)]
+    pub place: Place,
     pub technique: Option<Technique>,
     /// Tie: this note continues the same pitch from the previous beat of the
     /// voice (across barlines too) without being replayed.
     #[serde(default)]
     pub tied: bool,
+}
+
+/// Where a note is played: a string and a fret, or a pitch. A track holds only the kind of its
+/// instrument (`Instrument::note_kind`, checked by `Score::validate`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Place {
+    Fretted {
+        /// String number, 1 = the highest.
+        string: u8,
+        fret: u8,
+    },
+    Pitched {
+        /// MIDI pitch, 60 = middle C (C4).
+        pitch: u8,
+    },
+}
+
+impl Place {
+    pub fn kind(self) -> NoteKind {
+        match self {
+            Place::Fretted { .. } => NoteKind::Fretted,
+            Place::Pitched { .. } => NoteKind::Pitched,
+        }
+    }
+}
+
+impl Note {
+    /// A note on a string and fret, untied, without technique.
+    pub fn fretted(string: u8, fret: u8) -> Note {
+        Note {
+            place: Place::Fretted { string, fret },
+            technique: None,
+            tied: false,
+        }
+    }
+
+    /// A note at a MIDI pitch, untied, without technique.
+    pub fn pitched(pitch: u8) -> Note {
+        Note {
+            place: Place::Pitched { pitch },
+            technique: None,
+            tied: false,
+        }
+    }
+
+    /// The string of a fretted note.
+    pub fn string(&self) -> Option<u8> {
+        match self.place {
+            Place::Fretted { string, .. } => Some(string),
+            Place::Pitched { .. } => None,
+        }
+    }
+
+    /// The fret of a fretted note.
+    pub fn fret(&self) -> Option<u8> {
+        match self.place {
+            Place::Fretted { fret, .. } => Some(fret),
+            Place::Pitched { .. } => None,
+        }
+    }
+
+    /// What tells the note apart from the others of its beat: its string, or its pitch. Beats
+    /// keep their notes sorted by it, with no two notes sharing one.
+    pub fn key(&self) -> u8 {
+        match self.place {
+            Place::Fretted { string, .. } => string,
+            Place::Pitched { pitch } => pitch,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,11 +302,20 @@ pub fn decompose_ticks(mut len: u32) -> Option<Vec<Duration>> {
 }
 
 impl Track {
-    /// MIDI pitch of a note, or `None` if the string or the fret does not exist.
+    /// MIDI pitch of a note, or `None` if the string or the fret does not exist, or the pitch is
+    /// above 127.
     pub fn pitch(&self, note: &Note) -> Option<u8> {
-        fret_pitch(self.instrument, &self.tuning, note.string, note.fret)
+        match note.place {
+            Place::Fretted { string, fret } => {
+                fret_pitch(self.instrument, &self.tuning, string, fret)
+            }
+            Place::Pitched { pitch } => (pitch <= MAX_PITCH).then_some(pitch),
+        }
     }
 }
+
+/// Highest MIDI pitch.
+pub const MAX_PITCH: u8 = 127;
 
 /// MIDI pitch of a fret of a string (1 is the first) of an instrument, or `None` if the string or
 /// the fret does not exist.
@@ -279,21 +373,35 @@ pub const BANJO_STANDARD: [u8; 5] = [62, 59, 55, 50, 67];
 const BANJO_FIFTH_STRING_START: u8 = 5;
 
 impl Instrument {
-    pub const ALL: [Instrument; 5] = [
+    pub const ALL: [Instrument; 6] = [
         Instrument::Guitar,
         Instrument::ElectricGuitar,
         Instrument::Bass,
         Instrument::Violin,
         Instrument::Banjo,
+        Instrument::Piano,
     ];
 
-    /// Open-string pitches, string 1 first.
+    /// How the notes of a track of this instrument are stored.
+    pub fn note_kind(self) -> NoteKind {
+        match self {
+            Instrument::Guitar
+            | Instrument::ElectricGuitar
+            | Instrument::Bass
+            | Instrument::Violin
+            | Instrument::Banjo => NoteKind::Fretted,
+            Instrument::Piano => NoteKind::Pitched,
+        }
+    }
+
+    /// Open-string pitches, string 1 first. Empty for an instrument without strings.
     pub fn standard_tuning(self) -> &'static [u8] {
         match self {
             Instrument::Guitar | Instrument::ElectricGuitar => &GUITAR_STANDARD,
             Instrument::Bass => &BASS_STANDARD,
             Instrument::Violin => &VIOLIN_STANDARD,
             Instrument::Banjo => &BANJO_STANDARD,
+            Instrument::Piano => &[],
         }
     }
 
@@ -337,6 +445,9 @@ mod tests {
     #[test]
     fn standard_tunings_are_listed_highest_full_length_string_first() {
         for instrument in Instrument::ALL {
+            if instrument.note_kind() == NoteKind::Pitched {
+                continue;
+            }
             let tuning = instrument.standard_tuning();
             let full_length: Vec<u8> = (1..=tuning.len() as u8)
                 .filter(|&s| instrument.first_fret(s, tuning.len()) == 0)
@@ -359,6 +470,8 @@ mod tests {
             Instrument::ElectricGuitar
         );
         assert_eq!(Instrument::from_midi_program(Some(105)), Instrument::Banjo);
+        assert_eq!(Instrument::from_midi_program(Some(0)), Instrument::Piano);
+        assert_eq!(Instrument::from_midi_program(Some(73)), Instrument::Piano);
     }
 
     fn banjo() -> Track {
@@ -372,12 +485,7 @@ mod tests {
     }
 
     fn at(string: u8, fret: u8) -> Note {
-        Note {
-            string,
-            fret,
-            technique: None,
-            tied: false,
-        }
+        Note::fretted(string, fret)
     }
 
     #[test]
@@ -504,38 +612,12 @@ mod tests {
     #[test]
     fn pitch_from_string_and_fret() {
         let t = guitar();
-        let open_e = Note {
-            string: 6,
-            fret: 0,
-            technique: None,
-            tied: false,
-        };
-        let a_string_5th = Note {
-            string: 5,
-            fret: 5,
-            technique: None,
-            tied: false,
-        };
+        let open_e = Note::fretted(6, 0);
+        let a_string_5th = Note::fretted(5, 5);
         assert_eq!(t.pitch(&open_e), Some(40));
         assert_eq!(t.pitch(&a_string_5th), Some(50));
-        assert_eq!(
-            t.pitch(&Note {
-                string: 7,
-                fret: 0,
-                technique: None,
-                tied: false,
-            }),
-            None
-        );
-        assert_eq!(
-            t.pitch(&Note {
-                string: 0,
-                fret: 0,
-                technique: None,
-                tied: false,
-            }),
-            None
-        );
+        assert_eq!(t.pitch(&Note::fretted(7, 0)), None);
+        assert_eq!(t.pitch(&Note::fretted(0, 0)), None);
     }
 
     #[test]
@@ -562,6 +644,59 @@ mod tests {
     fn note_without_tied_field_still_deserializes() {
         let note: Note = serde_json::from_str(r#"{"string":1,"fret":3,"technique":null}"#).unwrap();
         assert!(!note.tied);
+        assert_eq!(note.place, Place::Fretted { string: 1, fret: 3 });
+    }
+
+    #[test]
+    fn a_fretted_note_is_written_as_it_always_was() {
+        let json = serde_json::to_string(&Note::fretted(2, 5)).unwrap();
+        assert_eq!(
+            json,
+            r#"{"string":2,"fret":5,"technique":null,"tied":false}"#
+        );
+    }
+
+    #[test]
+    fn a_pitched_note_is_written_with_its_pitch_and_read_back() {
+        let mut note = Note::pitched(61);
+        note.tied = true;
+        let json = serde_json::to_string(&note).unwrap();
+        assert_eq!(json, r#"{"pitch":61,"technique":null,"tied":true}"#);
+        assert_eq!(serde_json::from_str::<Note>(&json).unwrap(), note);
+    }
+
+    #[test]
+    fn a_note_with_neither_a_string_nor_a_pitch_is_refused() {
+        assert!(serde_json::from_str::<Note>(r#"{"fret":3,"technique":null}"#).is_err());
+    }
+
+    #[test]
+    fn a_pitched_note_sounds_at_its_pitch_on_any_track() {
+        let piano = Track {
+            name: "Piano".into(),
+            instrument: Instrument::Piano,
+            sound: Sound::Piano,
+            tuning: vec![],
+            measures: vec![],
+        };
+        assert_eq!(piano.pitch(&Note::pitched(60)), Some(60));
+        assert_eq!(piano.pitch(&Note::pitched(128)), None);
+        assert_eq!(Note::pitched(60).key(), 60);
+        assert_eq!(Note::fretted(3, 5).key(), 3);
+        assert_eq!(Note::pitched(60).string(), None);
+    }
+
+    #[test]
+    fn only_the_piano_stores_pitches() {
+        for instrument in Instrument::ALL {
+            let has_strings = !instrument.standard_tuning().is_empty();
+            assert_eq!(
+                instrument.note_kind() == NoteKind::Fretted,
+                has_strings,
+                "{instrument:?}"
+            );
+        }
+        assert_eq!(Instrument::Piano.note_kind(), NoteKind::Pitched);
     }
 
     #[test]

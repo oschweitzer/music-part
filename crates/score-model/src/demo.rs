@@ -8,12 +8,7 @@ use crate::{
 };
 
 fn note(string: u8, fret: u8) -> Note {
-    Note {
-        string,
-        fret,
-        technique: None,
-        tied: false,
-    }
+    Note::fretted(string, fret)
 }
 
 fn beat(value: NoteValue, dots: u8, notes: Vec<Note>) -> Beat {
@@ -191,13 +186,7 @@ mod tests {
                 .flat_map(|m| &m.voices[0].beats)
                 .flat_map(|b| &b.notes);
             for n in notes {
-                assert!(
-                    track.pitch(n).is_some(),
-                    "{}: string {} fret {}",
-                    track.name,
-                    n.string,
-                    n.fret
-                );
+                assert!(track.pitch(n).is_some(), "{}: {:?}", track.name, n.place);
             }
         }
     }

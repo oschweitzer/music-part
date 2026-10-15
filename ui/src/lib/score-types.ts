@@ -4,7 +4,7 @@ export type NoteValue = 'Whole' | 'Half' | 'Quarter' | 'Eighth' | 'Sixteenth' | 
 
 export type Technique = 'HammerOn' | 'PullOff' | 'Slide' | 'Bend' | 'PalmMute' | 'Harmonic'
 
-export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo'
+export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo' | 'Piano'
 
 /** The id of a sound of an instrument, `"<instrument>/<sound>"` (see `SOUNDS` in `instruments.ts`). */
 export type SoundId =
@@ -19,6 +19,7 @@ export type SoundId =
   | 'bass/slap'
   | 'violin/standard'
   | 'banjo/standard'
+  | 'piano/grand'
 
 export type Note = {
   /** String number, 1 is the highest string. */

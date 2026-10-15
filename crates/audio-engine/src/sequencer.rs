@@ -140,7 +140,7 @@ pub fn schedule(score: &Score) -> Vec<Event> {
                         continue;
                     }
 
-                    let is_soft = slid_onto.contains(&note.string);
+                    let is_soft = note.string().is_some_and(|s| slid_onto.contains(&s));
                     let velocity = velocity_of(note, is_soft);
                     let length = match note.technique {
                         Some(Technique::PalmMute) => beat.duration.ticks() / 2,
@@ -175,7 +175,7 @@ pub fn schedule(score: &Score) -> Vec<Event> {
                             if let Some(delta) = slide_target(track, note, beats.get(i + 1)) {
                                 let half = beat.duration.ticks() / 2;
                                 bends = ramp(start + half, half, delta);
-                                next_slid_onto.push(note.string);
+                                next_slid_onto.extend(note.string());
                             }
                         }
                         _ => {}
@@ -213,12 +213,13 @@ pub fn schedule(score: &Score) -> Vec<Event> {
 /// The pitch a note sounds at, or `None` if it has no playable pitch.
 fn sounding_pitch(track: &Track, note: &Note) -> Option<u8> {
     let pitch = track.pitch(note)?;
-    if note.technique != Some(Technique::Harmonic) {
+    // A natural harmonic sounds at fixed intervals above the open string; a note without a
+    // string has none.
+    let (Some(Technique::Harmonic), Some(fret)) = (note.technique, note.fret()) else {
         return Some(pitch);
-    }
-    // A natural harmonic sounds at fixed intervals above the open string.
-    let open = pitch - note.fret;
-    let above_open = match note.fret {
+    };
+    let open = pitch - fret;
+    let above_open = match fret {
         4 => 28,
         5 => 24,
         7 | 19 => 19,
@@ -254,7 +255,8 @@ fn velocity_of(note: &Note, is_soft: bool) -> u8 {
 /// Semitones from this note to the same string of the next beat, if a slide can reach it.
 fn slide_target(track: &Track, note: &Note, next: Option<&(u32, &Beat)>) -> Option<i32> {
     let (_, beat) = next?;
-    let target = beat.notes.iter().find(|n| n.string == note.string)?;
+    let string = note.string()?;
+    let target = beat.notes.iter().find(|n| n.string() == Some(string))?;
     let delta = i32::from(track.pitch(target)?) - i32::from(track.pitch(note)?);
     (delta != 0 && delta.abs() <= MAX_SLIDE_SEMITONES).then_some(delta)
 }
@@ -297,12 +299,7 @@ mod tests {
                 value: NoteValue::Quarter,
                 dots: 0,
             },
-            notes: vec![Note {
-                string,
-                fret,
-                technique: None,
-                tied: false,
-            }],
+            notes: vec![Note::fretted(string, fret)],
         }
     }
 
@@ -380,6 +377,40 @@ mod tests {
     }
 
     #[test]
+    fn a_pitched_track_plays_its_pitches_and_holds_its_ties() {
+        let mut score = score_with(vec![]);
+        let track = &mut score.tracks[0];
+        (track.instrument, track.sound) = (Instrument::Piano, Sound::Piano);
+        track.tuning.clear();
+        let half = |notes| Beat {
+            duration: Duration {
+                value: NoteValue::Half,
+                dots: 0,
+            },
+            notes,
+        };
+        let held = Note {
+            tied: true,
+            ..Note::pitched(48)
+        };
+        track.measures[0].voices[0].beats = vec![
+            half(vec![Note::pitched(48), Note::pitched(64)]),
+            half(vec![held, Note::pitched(67)]),
+        ];
+        assert_eq!(
+            note_events(&schedule(&score)),
+            vec![
+                (0, true, 48),
+                (0, true, 64),
+                (64, false, 64),
+                (64, true, 67),
+                (128, false, 48),
+                (128, false, 67)
+            ]
+        );
+    }
+
+    #[test]
     fn rests_produce_no_events() {
         let rest = Beat {
             duration: Duration {
@@ -401,10 +432,9 @@ mod tests {
                 dots: 0,
             },
             notes: vec![Note {
-                string: 1,
-                fret: 0,
                 technique: None,
                 tied,
+                ..Note::fretted(1, 0)
             }],
         };
         let measure = |beat| Measure {
@@ -432,10 +462,9 @@ mod tests {
                 dots: 0,
             },
             notes: vec![Note {
-                string: 1,
-                fret,
                 technique: None,
                 tied,
+                ..Note::fretted(1, fret)
             }],
         };
         let events = schedule(&score_with(vec![beat(0, false), beat(2, true)]));

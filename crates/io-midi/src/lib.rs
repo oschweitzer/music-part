@@ -3,7 +3,12 @@
 //! Each (MIDI track, channel) that plays notes becomes a track of the score, so a format 0 file
 //! with several channels is split. The percussion channel (10) is not imported. The sound, and
 //! with it the instrument, is the closest to the General MIDI program (see
-//! `Sound::from_midi_program`): a nylon guitar when the program is not a string instrument.
+//! `Sound::from_midi_program`): the piano for a program that is not a string instrument here, the
+//! nylon guitar when the channel names no program.
+//!
+//! A string instrument gets its notes placed on the strings, a chord being cut where the next one
+//! starts. A pitched instrument (piano) keeps every note whole: notes that overlap are written as
+//! tied chords (`pitched_segments`).
 //!
 //! A note whose duration cannot be written as a single value, or that crosses a barline, is
 //! split into tied notes (`Note::tied`). Timing is quantized to a 32nd note, so triplets and
@@ -20,8 +25,8 @@ use std::fmt;
 
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use score_model::{
-    decompose_ticks, place_chord, Beat, Duration, Measure, Note, Score, Sound, TimeSignature,
-    Track, Voice,
+    decompose_ticks, pitched_segments, place_chord, Beat, Duration, Measure, Note, NoteKind, Score,
+    Sound, Span, TimeSignature, Track, Voice,
 };
 
 /// Smallest unit: 1/128 of a whole note. Notes are quantized to a 32nd note (4).
@@ -68,7 +73,7 @@ impl From<midly::Error> for MidiImportError {
 pub struct MidiImport {
     pub score: Score,
     /// Notes left out because no string of the instrument could play them: out of range, or more
-    /// notes in a chord than the instrument has strings.
+    /// notes in a chord than the instrument has strings. Pitched tracks leave none out.
     pub skipped_notes: usize,
 }
 
@@ -268,6 +273,44 @@ fn build_track(
     let tuning = instrument.standard_tuning().to_vec();
     let mut skipped_notes = 0;
 
+    let segments = match instrument.note_kind() {
+        NoteKind::Pitched => {
+            let spans: Vec<Span> = channel
+                .notes
+                .iter()
+                .map(|&(start, end, pitch)| Span {
+                    start,
+                    end,
+                    pitch,
+                    is_tie_end: false,
+                })
+                .collect();
+            pitched_segments(&spans)
+        }
+        NoteKind::Fretted => {
+            let (segments, skipped) = fretted_segments(channel, instrument, &tuning);
+            skipped_notes += skipped;
+            segments
+        }
+    };
+    let track = Track {
+        name,
+        instrument,
+        sound,
+        tuning,
+        measures: split_into_measures(segments, ts)?,
+    };
+    Ok((track, skipped_notes))
+}
+
+/// The chords of a channel placed on the strings, each one cut where the next starts, with rests
+/// in the gaps, as (start, length, notes); and how many notes no string could play.
+fn fretted_segments(
+    channel: &ChannelNotes,
+    instrument: score_model::Instrument,
+    tuning: &[u8],
+) -> (Vec<(u32, u32, Vec<Note>)>, usize) {
+    let mut skipped_notes = 0;
     // Group by start time: chords.
     let mut by_start: BTreeMap<u32, Vec<(u32, u8)>> = BTreeMap::new();
     for &(s, e, p) in &channel.notes {
@@ -286,7 +329,7 @@ fn build_track(
         let max_end = group.iter().map(|&(e, _)| e).max().unwrap_or(start + GRID);
         let end = starts.get(i + 1).map_or(max_end, |&next| max_end.min(next));
         let pitches: Vec<u8> = group.iter().map(|&(_, p)| p).collect();
-        let (chord, skipped) = place_chord(instrument, &tuning, &pitches, &[]);
+        let (chord, skipped) = place_chord(instrument, tuning, &pitches, &[]);
         skipped_notes += skipped;
         segments.push((start, end - start, chord));
         cursor = end;
@@ -298,7 +341,15 @@ fn build_track(
         }
     }
 
-    // Split into measures.
+    (segments, skipped_notes)
+}
+
+/// Cuts (start, length, notes) segments at the barlines into measures of `ts`, the part after a
+/// barline being tied on, and fills the last measure with rests.
+fn split_into_measures(
+    segments: Vec<(u32, u32, Vec<Note>)>,
+    ts: TimeSignature,
+) -> Result<Vec<Measure>, MidiImportError> {
     let measure_len = ts.ticks();
     let total = segments.last().map_or(0, |&(s, l, _)| s + l);
     let measure_count = total.div_ceil(measure_len).max(1);
@@ -318,7 +369,7 @@ fn build_track(
                 let notes = chord
                     .iter()
                     .map(|n| Note {
-                        tied: is_continuation,
+                        tied: n.tied || is_continuation,
                         ..n.clone()
                     })
                     .collect();
@@ -345,20 +396,13 @@ fn build_track(
         }
     }
 
-    let track = Track {
-        name,
-        instrument,
-        sound,
-        tuning,
-        measures: measures
-            .into_iter()
-            .map(|beats| Measure {
-                time_signature: ts,
-                voices: vec![Voice { beats }],
-            })
-            .collect(),
-    };
-    Ok((track, skipped_notes))
+    Ok(measures
+        .into_iter()
+        .map(|beats| Measure {
+            time_signature: ts,
+            voices: vec![Voice { beats }],
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -435,24 +479,8 @@ mod tests {
         assert!(track.measures[0].is_complete());
         let beats = &track.measures[0].voices[0].beats;
         // 64 = open high E (string 1), 40 = open low E (string 6).
-        assert_eq!(
-            beats[0].notes,
-            vec![Note {
-                string: 1,
-                fret: 0,
-                technique: None,
-                tied: false,
-            }]
-        );
-        assert_eq!(
-            beats[3].notes,
-            vec![Note {
-                string: 6,
-                fret: 0,
-                technique: None,
-                tied: false,
-            }]
-        );
+        assert_eq!(beats[0].notes, vec![Note::fretted(1, 0)]);
+        assert_eq!(beats[3].notes, vec![Note::fretted(6, 0)]);
     }
 
     #[test]
@@ -613,6 +641,31 @@ mod tests {
     }
 
     #[test]
+    fn a_program_without_strings_gives_a_piano_that_keeps_held_notes_whole() {
+        // A half note C3 under two quarter notes E4 and G4.
+        let events = vec![
+            program(0, 0),
+            on_channel(0, 0, 48, true),
+            on_channel(0, 0, 64, true),
+            on_channel(0, 480, 64, false),
+            on_channel(0, 0, 67, true),
+            on_channel(0, 480, 67, false),
+            on_channel(0, 0, 48, false),
+        ];
+        let imported = import_midi(&write(480, vec![events])).unwrap();
+        assert_eq!(imported.skipped_notes, 0);
+        let piano = &imported.score.tracks[0];
+        assert_eq!(piano.instrument, Instrument::Piano);
+        assert!(piano.tuning.is_empty());
+        let beats = &piano.measures[0].voices[0].beats;
+        let notes = |i: usize| -> Vec<(u8, bool)> {
+            beats[i].notes.iter().map(|n| (n.key(), n.tied)).collect()
+        };
+        assert_eq!(notes(0), vec![(48, false), (64, false)]);
+        assert_eq!(notes(1), vec![(48, true), (67, false)]);
+    }
+
+    #[test]
     fn program_30_gives_a_distorted_electric_guitar() {
         let events = vec![
             program(0, 30),
@@ -653,7 +706,7 @@ mod tests {
         let score = import(&write(PPQ, vec![events])).unwrap();
         let chord = &score.tracks[0].measures[0].voices[0].beats[0].notes;
         assert_eq!(chord.len(), 2);
-        assert_ne!(chord[0].string, chord[1].string);
+        assert_ne!(chord[0].string(), chord[1].string());
         for n in chord {
             assert!(score.tracks[0].pitch(n).is_some());
         }
@@ -826,7 +879,7 @@ mod tests {
                 for measure in &track.measures {
                     assert!(measure.is_complete(), "seed {seed}: incomplete measure");
                     for beat in &measure.voices[0].beats {
-                        let mut strings: Vec<u8> = beat.notes.iter().map(|n| n.string).collect();
+                        let mut strings: Vec<u8> = beat.notes.iter().map(Note::key).collect();
                         strings.sort_unstable();
                         strings.dedup();
                         assert_eq!(
