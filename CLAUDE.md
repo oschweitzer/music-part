@@ -30,7 +30,7 @@ root/
 ```
 
 The roadmap is in the approved plan: foundations, playback, tab rendering, editing, realistic
-samples, then Guitar Pro import and more instruments.
+samples and technique sounds, then more instruments. Guitar Pro import is not planned.
 
 ### Dependency rules
 
