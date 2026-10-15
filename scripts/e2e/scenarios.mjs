@@ -768,6 +768,35 @@ export const scenarios = [
   ],
 
   [
+    'the theme button goes round system, light and dark, and the choice is kept',
+    async (context) => {
+      const { page } = context
+      const state = () =>
+        page.eval(`({
+          attribute: document.documentElement.getAttribute('data-theme'),
+          background: getComputedStyle(document.body).backgroundColor,
+          saved: localStorage.getItem('music-part-theme'),
+        })`)
+      const click = () => page.eval(`document.querySelector('.theme-button').click()`)
+
+      assert.equal((await state()).attribute, null, 'it follows the system at first')
+
+      await click()
+      await settle()
+      assert.deepEqual(await state(), { attribute: 'light', background: 'rgb(244, 244, 246)', saved: 'light' })
+
+      await click()
+      await settle()
+      assert.deepEqual(await state(), { attribute: 'dark', background: 'rgb(19, 19, 24)', saved: 'dark' })
+
+      await click()
+      await settle()
+      assert.equal((await state()).attribute, null)
+      assert.equal((await state()).saved, 'system')
+    },
+  ],
+
+  [
     'a MusicXML file opens with its title, tempo, tuning and tied notes',
     async (context) => {
       const { page, out } = context

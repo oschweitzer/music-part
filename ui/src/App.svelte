@@ -13,10 +13,19 @@
   import { Playback } from './lib/playback.svelte'
   import { formatClock, ticksToSeconds, totalTicks } from './lib/score-time'
   import { layoutTab, locateTick } from './lib/tab-layout'
+  import { applyTheme, nextTheme, readTheme, saveTheme, themeLabel, type Theme } from './lib/theme'
   import { createTransport } from './lib/transport'
 
   const playback = new Playback(createTransport())
   const editor = new Editor({ api: createDocumentApi(), playback, prompts: createFilePrompts() })
+
+  let theme = $state<Theme>(readTheme())
+
+  function cycleTheme() {
+    theme = nextTheme(theme)
+    applyTheme({ theme, root: document.documentElement })
+    saveTheme(theme)
+  }
 
   let loadError = $state<string | null>(null)
   let paperWidth = $state(0)
@@ -222,20 +231,46 @@
         </button>
         <span class="clock" aria-label="Position">{formatClock(elapsed)} / {formatClock(duration)}</span>
       </div>
-
-      <label class="tempo" title="Tempo (beats per minute)">
-        <span class="tempo-note" aria-hidden="true">♩</span> =
-        <input
-          type="number"
-          min="1"
-          max="999"
-          value={score.tempo_bpm}
-          disabled={!editor.canEdit}
-          aria-label="Tempo in beats per minute"
-          onchange={changeTempo}
-        />
-      </label>
     {/if}
+
+    <div class="right">
+      {#if score}
+        <label class="tempo" title="Tempo (beats per minute)">
+          <span class="tempo-note" aria-hidden="true">♩</span> =
+          <input
+            type="number"
+            min="1"
+            max="999"
+            value={score.tempo_bpm}
+            disabled={!editor.canEdit}
+            aria-label="Tempo in beats per minute"
+            onchange={changeTempo}
+          />
+        </label>
+      {/if}
+      <button
+        type="button"
+        class="icon-button small theme-button"
+        aria-label="Theme: {themeLabel[theme]}"
+        title="Theme: {themeLabel[theme]}. Click for {themeLabel[nextTheme(theme)]}"
+        onmousedown={keepFocus}
+        onclick={cycleTheme}
+      >
+        {#if theme === 'light'}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8" />
+          </svg>
+        {:else if theme === 'dark'}
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.2A8.6 8.6 0 0 1 9.8 3.5a8.6 8.6 0 1 0 10.7 10.7Z" /></svg>
+        {:else}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.2" fill="none" />
+            <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4Z" fill="currentColor" />
+          </svg>
+        {/if}
+      </button>
+    </div>
   </header>
 
   {#if banner}
@@ -402,6 +437,29 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .right {
+    grid-column: 3;
+    justify-self: end;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .icon-button.small {
+    width: 30px;
+    height: 30px;
+  }
+
+  .theme-button svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .transport {
@@ -703,7 +761,11 @@
 
   @media (max-width: 760px) {
     .toolbar {
-      grid-template-columns: 1fr auto;
+      grid-template-columns: 1fr auto auto;
+    }
+
+    .right {
+      grid-column: auto;
     }
 
     .tempo {

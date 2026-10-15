@@ -79,6 +79,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Playback is louder: the synthesizer gain went from 0.2 to 0.6.
+- A theme button in the toolbar goes round the system theme, the light theme and the dark theme;
+  the choice is remembered.
 - Editing: drag the mouse to select a rectangle of notes, beats by strings, so part of a chord can
   be selected, deleted, copied or cut. `score-model`: `ClearNotes` edit.
 - Editing: `Delete` on a rest (or on a selection of rests) takes it out of the timeline in every
