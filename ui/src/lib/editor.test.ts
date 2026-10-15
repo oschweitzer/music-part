@@ -422,7 +422,7 @@ describe('Editor', () => {
       expect(editor.message?.text).toMatch(/copy some beats/i)
     })
 
-    it('should cut by copying and replacing the range with rests of the same lengths', async () => {
+    it('should cut by copying and emptying the range, keeping its rhythm', async () => {
       const { api, edits } = fakeApi()
       const { editor } = setup({ api })
       await editor.start()
@@ -430,11 +430,9 @@ describe('Editor', () => {
       await editor.run({ type: 'extend', direction: 'right' })
       await editor.run({ type: 'cut' })
 
-      const edit = edits[0]
-      expect(edit).toMatchObject({ type: 'paste', measure: 0, beat: 0 })
-      const beats = edit?.type === 'paste' ? edit.beats : []
-      expect(beats).toHaveLength(2)
-      expect(beats.every((b) => b.notes.length === 0)).toBe(true)
+      expect(edits).toEqual([
+        { type: 'clearNotes', track: 0, from: { measure: 0, beat: 0 }, to: { measure: 0, beat: 1 }, strings: null },
+      ])
       expect(editor.clipboard).toHaveLength(2)
       expect(editor.clipboard?.[0]?.notes.length).toBeGreaterThan(0)
     })
@@ -447,7 +445,86 @@ describe('Editor', () => {
       await editor.run({ type: 'extend', direction: 'right' })
       await editor.run({ type: 'remove' })
 
-      expect(edits.map((e) => e.type)).toEqual(['paste'])
+      expect(edits.map((e) => e.type)).toEqual(['clearNotes'])
+    })
+
+    it('should select a rectangle by dragging, and clear only the notes inside it', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.dragSelect({ from: { measure: 2, beat: 0, string: 5 }, to: { measure: 2, beat: 0, string: 2 } })
+      await editor.run({ type: 'remove' })
+
+      expect(edits).toEqual([
+        { type: 'clearNotes', track: 0, from: { measure: 2, beat: 0 }, to: { measure: 2, beat: 0 }, strings: { first: 2, last: 5 } },
+      ])
+    })
+
+    it('should copy only the strings of a rectangle', async () => {
+      const { api } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.dragSelect({ from: { measure: 2, beat: 0, string: 2 }, to: { measure: 2, beat: 1, string: 4 } })
+      await editor.run({ type: 'copy' })
+
+      const strings = editor.clipboard?.[0]?.notes.map((n) => n.string)
+      expect(strings).toEqual([4, 3, 2])
+    })
+
+    it('should keep the strings of a rectangle when Shift+arrow extends it', async () => {
+      const { api } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.dragSelect({ from: { measure: 0, beat: 0, string: 2 }, to: { measure: 0, beat: 1, string: 3 } })
+      await editor.run({ type: 'extend', direction: 'right' })
+
+      expect(editor.selection).toMatchObject({ measure: 0, beat: 2, anchor: { measure: 0, beat: 0 }, anchorString: 2, string: 3 })
+    })
+
+    describe('deleting rests', () => {
+      /** The demo with its second measure's first two beats emptied. */
+      const withRests = (): Score => {
+        const copy = structuredClone(score)
+        const beats = copy.tracks[0]!.measures[1]!.voices[0]!.beats
+        beats[0]!.notes = []
+        beats[1]!.notes = []
+        return copy
+      }
+      const restApi = () => fakeApi({ startup: async () => opened({ document: state({ score: withRests() }) }) })
+
+      it('should take a rest out of the timeline when Delete is pressed on it', async () => {
+        const { api, edits } = restApi()
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: 1, beat: 0, string: 3 })
+        await editor.run({ type: 'remove' })
+
+        expect(edits).toEqual([{ type: 'removeRests', track: 0, from: { measure: 1, beat: 0 }, to: { measure: 1, beat: 0 } }])
+        expect(editor.selection).toEqual({ measure: 1, beat: 0, string: 3 })
+      })
+
+      it('should take out a whole range of rests at once', async () => {
+        const { api, edits } = restApi()
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: 1, beat: 0, string: 1 })
+        await editor.run({ type: 'extend', direction: 'right' })
+        await editor.run({ type: 'remove' })
+
+        expect(edits).toEqual([{ type: 'removeRests', track: 0, from: { measure: 1, beat: 0 }, to: { measure: 1, beat: 1 } }])
+        expect(editor.selection).toEqual({ measure: 1, beat: 0, string: 1 })
+      })
+
+      it('should clear the notes of a mixed range and leave the rests for the next Delete', async () => {
+        const { api, edits } = restApi()
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: 1, beat: 1, string: 1 })
+        await editor.run({ type: 'extend', direction: 'right' })
+        await editor.run({ type: 'remove' })
+
+        expect(edits.map((e) => e.type)).toEqual(['clearNotes'])
+      })
     })
 
     it('should still remove one note with Delete when a single beat is selected', async () => {

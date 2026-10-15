@@ -13,6 +13,20 @@ use crate::{
     Track, Voice, MAX_FRET,
 };
 
+/// A beat of the first voice of a track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BeatAddress {
+    pub measure: usize,
+    pub beat: usize,
+}
+
+/// The strings from `first` to `last`, both included (1 is the highest).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StringSpan {
+    pub first: u8,
+    pub last: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -110,6 +124,23 @@ pub enum Edit {
         track: usize,
         tuning: Vec<u8>,
     },
+    /// Removes the notes of the beats from `from` to `to` (across barlines), only those on
+    /// `strings` when given. The rhythm stays: a beat left without notes is a rest.
+    ClearNotes {
+        track: usize,
+        from: BeatAddress,
+        to: BeatAddress,
+        strings: Option<StringSpan>,
+    },
+    /// Takes the rests from `from` to `to` out of the timeline of every track: what follows moves
+    /// earlier and the measure gets shorter (its time signature follows), or disappears when it
+    /// has no time left. Refused unless every track has only rests over that time, so no note is
+    /// ever lost.
+    RemoveRests {
+        track: usize,
+        from: BeatAddress,
+        to: BeatAddress,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +163,10 @@ pub enum EditError {
     InvalidTimeSignature,
     /// The name is empty or longer than `MAX_NAME_CHARS`.
     InvalidName,
+    /// Only rests can be removed from the timeline.
+    NotARest,
+    /// Another track has a note, or a beat that cannot be cut, in the time to remove.
+    RestInUse,
 }
 
 impl fmt::Display for EditError {
@@ -155,6 +190,11 @@ impl fmt::Display for EditError {
                 "this time signature is not supported: the denominator must be 1, 2, 4, 8, 16 or 32 and a measure must be a whole number of 32nd notes"
             ),
             Self::InvalidName => write!(f, "the name must be 1 to {MAX_NAME_CHARS} characters"),
+            Self::NotARest => write!(f, "only a rest can be removed: clear its notes first"),
+            Self::RestInUse => write!(
+                f,
+                "another track has notes at this place, so the rest cannot be removed"
+            ),
             Self::TooManyTracks => write!(f, "a score cannot have more than {MAX_TRACKS} tracks"),
         }
     }
@@ -231,6 +271,13 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             let beats = beats_mut(score, track, measure)?;
             set_duration(beats, beat, duration)
         }
+        Edit::ClearNotes {
+            track,
+            from,
+            to,
+            strings,
+        } => clear_notes(score, track, from, to, strings),
+        Edit::RemoveRests { track, from, to } => remove_rests(score, track, from, to),
         Edit::InsertMeasure { at } => insert_measure(score, at),
         Edit::DeleteMeasure { index, count } => delete_measures(score, index, count),
         Edit::SetTempo { bpm } => {
@@ -761,6 +808,198 @@ fn one() -> usize {
     1
 }
 
+/// The (measure, beat) of every beat from `from` to `to` in the first voice, in order.
+fn beats_between(
+    track: &Track,
+    from: BeatAddress,
+    to: BeatAddress,
+) -> Result<Vec<(usize, usize)>, EditError> {
+    let count = |measure: usize| {
+        track
+            .measures
+            .get(measure)
+            .and_then(|m| m.voices.first())
+            .map(|v| v.beats.len())
+    };
+    for address in [from, to] {
+        let beats = count(address.measure).ok_or(EditError::OutOfRange("measure"))?;
+        if address.beat >= beats {
+            return Err(EditError::OutOfRange("beat"));
+        }
+    }
+    if (from.measure, from.beat) > (to.measure, to.beat) {
+        return Err(EditError::OutOfRange("beat"));
+    }
+
+    let mut out = Vec::new();
+    for measure in from.measure..=to.measure {
+        let beats = count(measure).ok_or(EditError::OutOfRange("measure"))?;
+        let first = if measure == from.measure {
+            from.beat
+        } else {
+            0
+        };
+        let last = if measure == to.measure {
+            to.beat
+        } else {
+            beats - 1
+        };
+        out.extend((first..=last).map(|beat| (measure, beat)));
+    }
+    Ok(out)
+}
+
+fn clear_notes(
+    score: &mut Score,
+    track: usize,
+    from: BeatAddress,
+    to: BeatAddress,
+    strings: Option<StringSpan>,
+) -> Result<(), EditError> {
+    let target = score
+        .tracks
+        .get_mut(track)
+        .ok_or(EditError::OutOfRange("track"))?;
+    if let Some(span) = strings {
+        if span.first == 0 || span.first > span.last || usize::from(span.last) > target.tuning.len()
+        {
+            return Err(EditError::OutOfRange("string"));
+        }
+    }
+    let beats = beats_between(target, from, to)?;
+    for (measure, beat) in beats {
+        target.measures[measure].voices[0].beats[beat]
+            .notes
+            .retain(|n| strings.is_some_and(|s| n.string < s.first || n.string > s.last));
+    }
+    Ok(())
+}
+
+/// The time signature for a measure of `ticks`: the largest note value that divides it, so a
+/// 4/4 measure that loses a quarter becomes 3/4 and one that loses an eighth becomes 7/8.
+fn time_signature_for(ticks: u32) -> Option<TimeSignature> {
+    [1u32, 2, 4, 8, 16, 32].into_iter().find_map(|denominator| {
+        let whole = ticks * denominator;
+        let signature = TimeSignature {
+            numerator: u8::try_from(whole / 128).ok()?,
+            denominator: u8::try_from(denominator).ok()?,
+        };
+        (whole.is_multiple_of(128) && signature.is_valid()).then_some(signature)
+    })
+}
+
+/// Takes the time `from..to` (ticks from the start of the measure) out of a voice made of rests
+/// over that time. A beat the span cuts into keeps what is left of it, as rests.
+fn cut_span(beats: &[Beat], from: u32, to: u32) -> Result<Vec<Beat>, EditError> {
+    let (mut before, mut after) = (Vec::new(), Vec::new());
+    let mut touched: Option<(u32, u32)> = None;
+    let mut at = 0;
+    for beat in beats {
+        let (start, end) = (at, at + beat.duration.ticks());
+        at = end;
+        if end <= from {
+            before.push(beat.clone());
+        } else if start >= to {
+            after.push(beat.clone());
+        } else if beat.notes.is_empty() {
+            let (first, _) = touched.unwrap_or((start, end));
+            touched = Some((first, end));
+        } else {
+            return Err(EditError::RestInUse);
+        }
+    }
+    let (first, last) = touched.ok_or(EditError::RestInUse)?;
+    let left = (last - first) - (to - from);
+    let rests = decompose_ticks(left).ok_or(EditError::RestInUse)?;
+    before.extend(rests.into_iter().map(|duration| Beat {
+        duration,
+        notes: Vec::new(),
+    }));
+    before.extend(after);
+    Ok(before)
+}
+
+fn remove_rests(
+    score: &mut Score,
+    track: usize,
+    from: BeatAddress,
+    to: BeatAddress,
+) -> Result<(), EditError> {
+    let source = score
+        .tracks
+        .get(track)
+        .ok_or(EditError::OutOfRange("track"))?;
+    let beats = beats_between(source, from, to)?;
+
+    // For each measure, the time of the chosen beats: ticks from its start.
+    let mut spans: Vec<(usize, u32, u32)> = Vec::new();
+    for measure in from.measure..=to.measure {
+        let chosen: Vec<usize> = beats
+            .iter()
+            .filter(|(m, _)| *m == measure)
+            .map(|(_, b)| *b)
+            .collect();
+        let voice = &source.measures[measure].voices[0];
+        if chosen.iter().any(|&b| !voice.beats[b].notes.is_empty()) {
+            return Err(EditError::NotARest);
+        }
+        let ticks = |range: &[Beat]| range.iter().map(|b| b.duration.ticks()).sum::<u32>();
+        let start = ticks(&voice.beats[..chosen[0]]);
+        let end = start + ticks(&voice.beats[chosen[0]..=chosen[chosen.len() - 1]]);
+        spans.push((measure, start, end));
+    }
+
+    let mut edited = score.clone();
+    let mut emptied = Vec::new();
+    for (measure, start, end) in spans {
+        let old = source.measures[measure].time_signature;
+        let remaining = old.ticks() - (end - start);
+        let signature = time_signature_for(remaining);
+        if remaining > 0 && signature.is_none() {
+            return Err(EditError::RestInUse);
+        }
+        for other in &mut edited.tracks {
+            let current = other
+                .measures
+                .get_mut(measure)
+                .ok_or(EditError::RestInUse)?;
+            // Tracks are kept the same length; one that is not cannot be cut in step.
+            if current.time_signature != old {
+                return Err(EditError::RestInUse);
+            }
+            for voice in &mut current.voices {
+                voice.beats = if remaining == 0 {
+                    // Checked below: the whole measure has to be rests in every voice.
+                    cut_span(&voice.beats, start, end)?;
+                    Vec::new()
+                } else {
+                    cut_span(&voice.beats, start, end)?
+                };
+            }
+            if let Some(signature) = signature {
+                current.time_signature = signature;
+            }
+        }
+        if remaining == 0 {
+            emptied.push(measure);
+        }
+    }
+
+    if !emptied.is_empty() {
+        let measures = edited.tracks.first().map_or(0, |t| t.measures.len());
+        if emptied.len() >= measures {
+            return Err(EditError::LastMeasure);
+        }
+        for track in &mut edited.tracks {
+            for &measure in emptied.iter().rev() {
+                track.measures.remove(measure);
+            }
+        }
+    }
+    *score = edited;
+    Ok(())
+}
+
 fn delete_measures(score: &mut Score, index: usize, count: usize) -> Result<(), EditError> {
     let longest = score
         .tracks
@@ -1105,6 +1344,214 @@ mod tests {
     fn a_measure_deletion_without_a_count_deletes_one_measure() {
         let edit: Edit = serde_json::from_str(r#"{"type":"deleteMeasure","index":3}"#).unwrap();
         assert_eq!(edit, Edit::DeleteMeasure { index: 3, count: 1 });
+    }
+
+    fn at(measure: usize, beat: usize) -> BeatAddress {
+        BeatAddress { measure, beat }
+    }
+
+    fn clear(from: BeatAddress, to: BeatAddress, strings: Option<(u8, u8)>) -> Edit {
+        Edit::ClearNotes {
+            track: 0,
+            from,
+            to,
+            strings: strings.map(|(first, last)| StringSpan { first, last }),
+        }
+    }
+
+    /// A first measure of four quarters: a note, a rest, a note, a rest.
+    fn note_rest_note_rest() -> Score {
+        let mut score = blank_score("t");
+        let clip = vec![
+            note_beat(NoteValue::Quarter, &[(1, 3)]),
+            note_beat(NoteValue::Quarter, &[]),
+            note_beat(NoteValue::Quarter, &[(2, 5)]),
+            note_beat(NoteValue::Quarter, &[]),
+        ];
+        apply_edit(&mut score, &paste_edit(0, 0, 0, clip)).unwrap();
+        score
+    }
+
+    #[test]
+    fn clearing_notes_keeps_the_strings_outside_the_span() {
+        let mut score = blank_score("t");
+        let chord = note_beat(NoteValue::Whole, &[(1, 0), (2, 1), (3, 2), (4, 3)]);
+        apply_edit(&mut score, &paste_edit(0, 0, 0, vec![chord])).unwrap();
+
+        apply_edit(&mut score, &clear(at(0, 0), at(0, 0), Some((2, 3)))).unwrap();
+
+        assert_eq!(frets_of(&score, 0), vec![vec![(1, 0), (4, 3)]]);
+        assert_eq!(lengths(&score, 0), vec![128]);
+    }
+
+    #[test]
+    fn clearing_without_a_span_empties_the_beats_across_a_barline() {
+        let mut score = blank_score("t");
+        apply_edit(&mut score, &set_fret(0, 0, 1, 5)).unwrap();
+        apply_edit(&mut score, &set_fret(1, 0, 2, 7)).unwrap();
+
+        apply_edit(&mut score, &clear(at(0, 0), at(1, 0), None)).unwrap();
+
+        assert!(beats(&score, 0)[0].notes.is_empty() && beats(&score, 1)[0].notes.is_empty());
+    }
+
+    #[test]
+    fn clearing_refuses_a_bad_address_or_span_and_changes_nothing() {
+        let mut score = note_rest_note_rest();
+        let before = score.clone();
+        for edit in [
+            clear(at(0, 3), at(0, 0), None),
+            clear(at(0, 0), at(0, 9), None),
+            clear(at(9, 0), at(9, 0), None),
+            clear(at(0, 0), at(0, 1), Some((0, 2))),
+            clear(at(0, 0), at(0, 1), Some((3, 2))),
+            clear(at(0, 0), at(0, 1), Some((1, 7))),
+        ] {
+            assert!(apply_edit(&mut score, &edit).is_err(), "{edit:?}");
+            assert_eq!(score, before);
+        }
+    }
+
+    fn remove_rest(from: BeatAddress, to: BeatAddress) -> Edit {
+        Edit::RemoveRests { track: 0, from, to }
+    }
+
+    #[test]
+    fn removing_a_rest_closes_the_gap_and_shortens_the_measure() {
+        let mut score = note_rest_note_rest();
+        apply_edit(&mut score, &remove_rest(at(0, 1), at(0, 1))).unwrap();
+
+        assert_eq!(frets_of(&score, 0)[..2], [vec![(1, 3)], vec![(2, 5)]]);
+        assert_eq!(lengths(&score, 0), vec![32, 32, 32]);
+        let signature = score.tracks[0].measures[0].time_signature;
+        assert_eq!((signature.numerator, signature.denominator), (3, 4));
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_rest_shorter_than_a_beat_leaves_a_measure_in_eighths() {
+        let mut score = blank_score("t");
+        let clip = vec![
+            note_beat(NoteValue::Half, &[(1, 0)]),
+            note_beat(NoteValue::Quarter, &[]),
+            note_beat(NoteValue::Eighth, &[(1, 2)]),
+            note_beat(NoteValue::Eighth, &[]),
+        ];
+        apply_edit(&mut score, &paste_edit(0, 0, 0, clip)).unwrap();
+        apply_edit(&mut score, &remove_rest(at(0, 3), at(0, 3))).unwrap();
+
+        let signature = score.tracks[0].measures[0].time_signature;
+        assert_eq!((signature.numerator, signature.denominator), (7, 8));
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn removing_the_only_rest_of_a_measure_deletes_the_measure_in_every_track() {
+        let mut score = blank_score("t");
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Bass,
+            },
+        )
+        .unwrap();
+        let measures = score.tracks[0].measures.len();
+
+        apply_edit(&mut score, &remove_rest(at(1, 0), at(1, 0))).unwrap();
+
+        assert!(score
+            .tracks
+            .iter()
+            .all(|t| t.measures.len() == measures - 1));
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn removing_a_rest_is_refused_while_another_track_plays_there() {
+        let mut score = blank_score("t");
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Bass,
+            },
+        )
+        .unwrap();
+        apply_edit(
+            &mut score,
+            &Edit::SetFret {
+                track: 1,
+                measure: 1,
+                beat: 0,
+                string: 1,
+                fret: 3,
+            },
+        )
+        .unwrap();
+        let before = score.clone();
+
+        assert_eq!(
+            apply_edit(&mut score, &remove_rest(at(1, 0), at(1, 0))),
+            Err(EditError::RestInUse)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn removing_a_rest_works_when_another_track_has_a_longer_rest_there() {
+        let mut score = note_rest_note_rest();
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Bass,
+            },
+        )
+        .unwrap();
+
+        // The bass has a whole rest; the guitar's second quarter goes out of it.
+        apply_edit(&mut score, &remove_rest(at(0, 1), at(0, 1))).unwrap();
+
+        let bass: u32 = score.tracks[1].measures[0].voices[0]
+            .beats
+            .iter()
+            .map(|b| b.duration.ticks())
+            .sum();
+        assert_eq!(bass, 96);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn removing_a_beat_with_notes_is_refused() {
+        let mut score = note_rest_note_rest();
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &remove_rest(at(0, 0), at(0, 1))),
+            Err(EditError::NotARest)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn the_last_measure_of_the_score_cannot_be_removed_as_a_rest() {
+        let mut score = blank_score("t");
+        let count = score.tracks[0].measures.len();
+        apply_edit(&mut score, &remove_rest(at(0, 0), at(count - 2, 0))).unwrap();
+        assert_eq!(score.tracks[0].measures.len(), 1);
+
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &remove_rest(at(0, 0), at(0, 0))),
+            Err(EditError::LastMeasure)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn rests_of_several_measures_are_removed_in_one_edit() {
+        let mut score = blank_score("t");
+        let count = score.tracks[0].measures.len();
+        apply_edit(&mut score, &remove_rest(at(1, 0), at(2, 0))).unwrap();
+        assert_eq!(score.tracks[0].measures.len(), count - 2);
+        assert_eq!(score.validate(), Ok(()));
     }
 
     #[test]
@@ -1703,7 +2150,7 @@ mod tests {
                     (measure, beat)
                 };
 
-                let edit = match next(16) {
+                let edit = match next(18) {
                     0 | 1 => Edit::SetFret {
                         track,
                         measure,
@@ -1755,6 +2202,29 @@ mod tests {
                         measure,
                         numerator: next(8) as u8,
                         denominator: [1, 2, 4, 8, 16, 32, 3][next(7)],
+                    },
+                    16 => Edit::ClearNotes {
+                        track,
+                        from: BeatAddress { measure, beat },
+                        to: BeatAddress {
+                            measure: measure + next(2),
+                            beat: next(4),
+                        },
+                        strings: [
+                            None,
+                            Some(StringSpan {
+                                first: 1,
+                                last: string,
+                            }),
+                        ][next(2)],
+                    },
+                    17 => Edit::RemoveRests {
+                        track,
+                        from: BeatAddress { measure, beat },
+                        to: BeatAddress {
+                            measure: measure + next(2),
+                            beat: next(4),
+                        },
                     },
                     12 => Edit::RenameTrack {
                         track,

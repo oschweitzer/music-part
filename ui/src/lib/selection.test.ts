@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
 import type { Score } from './score-types'
-import { clampSelection, extendSelection, FIRST_NOTE, isBeatSelected, moveSelection, nextFret, selectedRange } from './selection'
+import { clampSelection, extendSelection, FIRST_NOTE, isBeatSelected, moveSelection, nextFret, selectedRange, selectedStrings } from './selection'
 
 const score = demo as Score
 const beatsIn = (measure: number) => score.tracks[0]!.measures[measure]!.voices[0]!.beats.length
@@ -98,6 +98,25 @@ describe('extending a selection', () => {
     expect(selected(1, 2)).toBe(false)
     expect(isBeatSelected({ selection: { measure: 0, beat: 0, string: 1 }, measure: 0, beat: 0 })).toBe(true)
     expect(isBeatSelected({ selection: null, measure: 0, beat: 0 })).toBe(false)
+  })
+
+  it('should take several strings of one beat as a range, and one string as a lone spot', () => {
+    const chord = { measure: 2, beat: 0, string: 5, anchor: { measure: 2, beat: 0 }, anchorString: 2 }
+    expect(selectedRange(chord)).toEqual({ from: { measure: 2, beat: 0 }, to: { measure: 2, beat: 0 } })
+    expect(selectedStrings(chord)).toEqual({ first: 2, last: 5 })
+    expect(selectedRange({ ...chord, string: 2 })).toBeNull()
+  })
+
+  it('should take every string unless the selection was dragged as a rectangle', () => {
+    expect(selectedStrings({ measure: 0, beat: 3, string: 4, anchor: { measure: 0, beat: 1 } })).toBeNull()
+    expect(selectedStrings({ measure: 0, beat: 3, string: 4 })).toBeNull()
+    expect(selectedStrings(null)).toBeNull()
+  })
+
+  it('should keep the strings of a rectangle when extending it, and drop them on a move', () => {
+    const rectangle = { measure: 0, beat: 2, string: 4, anchor: { measure: 0, beat: 1 }, anchorString: 2 }
+    expect(extendSelection({ score, track: 0, selection: rectangle, direction: 'right' })).toMatchObject({ beat: 3, anchorString: 2 })
+    expect(moveSelection({ score, track: 0, selection: rectangle, direction: 'right' })).not.toHaveProperty('anchorString')
   })
 
   it('should keep a valid anchor and pull a stale one back', () => {

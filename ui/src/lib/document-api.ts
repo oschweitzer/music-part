@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from './score-source'
 import type { Beat, Duration, Instrument, Score, Technique } from './score-types'
 
+export type BeatAddress = { measure: number; beat: number }
+
 /** Same shapes as the `Edit` enum of `crates/score-model`, in camelCase. */
 export type Edit =
   | { type: 'setFret'; track: number; measure: number; beat: number; string: number; fret: number }
@@ -19,6 +21,8 @@ export type Edit =
   | { type: 'setTimeSignature'; measure: number; numerator: number; denominator: number }
   | { type: 'renameTrack'; track: number; name: string }
   | { type: 'setInstrument'; track: number; instrument: Instrument }
+  | { type: 'clearNotes'; track: number; from: BeatAddress; to: BeatAddress; strings: { first: number; last: number } | null }
+  | { type: 'removeRests'; track: number; from: BeatAddress; to: BeatAddress }
 
 /** A format a score can be exported to, besides the native one. */
 export type ExportFormat = 'midi' | 'musicXml'

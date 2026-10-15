@@ -79,6 +79,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Playback is louder: the synthesizer gain went from 0.2 to 0.6.
+- Editing: drag the mouse to select a rectangle of notes, beats by strings, so part of a chord can
+  be selected, deleted, copied or cut. `score-model`: `ClearNotes` edit.
+- Editing: `Delete` on a rest (or on a selection of rests) takes it out of the timeline in every
+  track, shortening the measure, and removes the measure when its last rest goes. Refused, with a
+  message, while another track has a note there. `score-model`: `RemoveRests` edit.
 - Editing: right-click the tablature for a menu (cut, copy, paste, insert a measure before or
   after, delete measures), and `Ctrl+Delete` to delete measures. A range of beats deletes every
   measure it touches, in one undo step. `score-model`: `DeleteMeasure` takes a `count`.

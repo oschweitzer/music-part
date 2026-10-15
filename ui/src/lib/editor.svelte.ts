@@ -11,6 +11,8 @@ import {
   moveSelection,
   nextFret,
   selectedRange,
+  selectedStrings,
+  type BeatPosition,
   type Selection,
 } from './selection'
 import { parseTuning } from './tuning'
@@ -90,8 +92,18 @@ export class Editor {
     const current = this.selection
     this.selection =
       extend && current
-        ? { ...selection, anchor: current.anchor ?? { measure: current.measure, beat: current.beat } }
+        ? {
+            ...selection,
+            anchor: current.anchor ?? { measure: current.measure, beat: current.beat },
+            ...(current.anchorString === undefined ? {} : { anchorString: current.anchorString }),
+          }
         : selection
+    this.#typed = null
+  }
+
+  /** Selects the rectangle dragged from one spot to another: the beats between, and the strings between. */
+  dragSelect({ from, to }: { from: Selection; to: Selection }): void {
+    this.selection = { ...to, anchor: { measure: from.measure, beat: from.beat }, anchorString: from.string }
     this.#typed = null
   }
 
@@ -120,7 +132,7 @@ export class Editor {
       case 'paste':
         return this.paste()
       case 'remove':
-        return selectedRange(this.selection) ? this.#clearRange() : this.#withTarget((at) => ({ type: 'removeNote', ...at }))
+        return this.#remove()
       case 'duration':
         return this.#setDuration(() => ({ value: command.value, dots: 0 }))
       case 'dot':
@@ -338,34 +350,76 @@ export class Editor {
     return range ? range.from : { measure: this.selection?.measure ?? 0, beat: this.selection?.beat ?? 0 }
   }
 
-  /** The beats of the selection, from the first voice of this track, with the first one untied. */
-  #selectedBeats(): Beat[] | null {
-    const measures = this.document?.score.tracks[this.track]?.measures
-    if (!measures || !this.selection) return null
-    const range = selectedRange(this.selection)
-    const from = range?.from ?? { measure: this.selection.measure, beat: this.selection.beat }
-    const to = range?.to ?? from
-
+  /** The beats of this track from one spot to another, first voice, across barlines. */
+  #beatsBetween(from: BeatPosition, to: BeatPosition): Beat[] {
+    const measures = this.document?.score.tracks[this.track]?.measures ?? []
     const beats: Beat[] = []
     for (let m = from.measure; m <= to.measure; m++) {
       const inMeasure = measures[m]?.voices[0]?.beats ?? []
       const first = m === from.measure ? from.beat : 0
       const last = m === to.measure ? to.beat : inMeasure.length - 1
-      beats.push(...structuredClone($state.snapshot(inMeasure.slice(first, last + 1))))
+      beats.push(...inMeasure.slice(first, last + 1))
+    }
+    return beats
+  }
+
+  /** The selected beats as a copy, with the first one untied; only the selected strings of a rectangle. */
+  #selectedBeats(): Beat[] | null {
+    if (!this.selection) return null
+    const range = selectedRange(this.selection)
+    const from = range?.from ?? { measure: this.selection.measure, beat: this.selection.beat }
+    const strings = selectedStrings(this.selection)
+
+    const beats: Beat[] = structuredClone($state.snapshot(this.#beatsBetween(from, range?.to ?? from)))
+    if (strings) {
+      for (const beat of beats) beat.notes = beat.notes.filter((n) => n.string >= strings.first && n.string <= strings.last)
     }
     // A tie on the first beat points at a note that is not part of the copy.
     beats[0]?.notes.forEach((note) => (note.tied = false))
     return beats
   }
 
-  /** Replaces the selected beats with rests of the same lengths. */
+  /** Empties the selected beats, or only the selected strings of them; the rhythm stays. */
   #clearRange(): Promise<void> {
-    const at = this.#where()
-    const beats = this.#selectedBeats()
-    if (!at || !beats) return Promise.resolve()
-    const start = this.#rangeStart()
-    const rests = beats.map((beat) => ({ duration: beat.duration, notes: [] }))
-    return this.#send({ type: 'paste', track: at.track, ...start, beats: rests }, () => (this.selection = { ...start, string: at.string }))
+    const selection = this.selection
+    if (!selection) return Promise.resolve()
+    const spot = { measure: selection.measure, beat: selection.beat }
+    const range = selectedRange(selection) ?? { from: spot, to: spot }
+    return this.#send({ type: 'clearNotes', track: this.track, from: range.from, to: range.to, strings: selectedStrings(selection) })
+  }
+
+  /**
+   * Delete. It empties notes first; on rests it takes them out of the timeline, like deleting
+   * a character of text (see `Edit::RemoveRests`). Decided when its turn comes, so a note typed
+   * just before is seen.
+   */
+  #remove(): Promise<void> {
+    if (!this.#api.canEdit) {
+      this.message = { tone: 'error', text: 'Editing needs the desktop app.' }
+      return Promise.resolve()
+    }
+    return this.#enqueue(async () => {
+      const selection = this.selection
+      if (!selection) return
+      const spot = { measure: selection.measure, beat: selection.beat }
+      const range = selectedRange(selection)
+      const from = range?.from ?? spot
+      const to = range?.to ?? spot
+      const beats = this.#beatsBetween(from, to)
+      const isAllRests = beats.length > 0 && beats.every((beat) => beat.notes.length === 0)
+
+      if (isAllRests) {
+        const state = await this.#api.edit({ type: 'removeRests', track: this.track, from, to })
+        // What followed the rests now sits where they were.
+        this.selection = { ...from, string: selection.string }
+        await this.#apply(state)
+      } else if (range) {
+        const strings = selectedStrings(selection)
+        await this.#apply(await this.#api.edit({ type: 'clearNotes', track: this.track, from, to, strings }))
+      } else {
+        await this.#apply(await this.#api.edit({ type: 'removeNote', track: this.track, ...from, string: selection.string }))
+      }
+    })
   }
 
   #extend(direction: 'left' | 'right'): Promise<void> {

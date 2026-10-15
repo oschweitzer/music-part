@@ -348,6 +348,7 @@
             {cursor}
             selection={editor.selection}
             onselect={editor.canEdit ? (target, options) => editor.select(target, options) : undefined}
+            ondrag={editor.canEdit ? (area) => editor.dragSelect(area) : undefined}
             onseek={(tick) => playback.seek(tick)}
             onmenu={editor.canEdit ? openMenu : undefined}
           />

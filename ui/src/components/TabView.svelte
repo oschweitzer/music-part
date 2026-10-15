@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { isBeatSelected, type Selection } from '../lib/selection'
+  import { isBeatSelected, selectedStrings, type Selection } from '../lib/selection'
   import { hitTest, METRICS } from '../lib/tab-layout'
   import type { BeatLayout, CursorPosition, TabLayout } from '../lib/tab-layout'
 
@@ -9,6 +9,7 @@
     cursor = null,
     selection = null,
     onselect,
+    ondrag,
     onseek,
     onmenu,
   }: {
@@ -17,6 +18,8 @@
     cursor?: CursorPosition | null
     selection?: Selection | null
     onselect?: (target: Selection, options: { extend: boolean }) => void
+    /** Asked to select the rectangle dragged from one spot to another. */
+    ondrag?: (area: { from: Selection; to: Selection }) => void
     /** Asked to move playback to a position in 1/128 of a whole note. */
     onseek?: (tick: number) => void
     /** Asked to open the menu of a spot, at a position of the window. */
@@ -30,35 +33,35 @@
     return hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
   }
 
-  // Dragging over several beats selects them all: the press picks the first, the beat under the
-  // mouse is the last. A drag ends in a click, which must not select the single beat again.
+  // Dragging draws a rectangle, like selecting text: the beats from the press to the mouse, and
+  // the strings between them. A drag ends in a click, which must not select the single spot again.
   let dragFrom: Selection | null = null
-  let dragTo: { measure: number; beat: number } | null = null
+  let dragTo: Selection | null = null
   let isDragging = false
 
   function handlePointerDown(event: PointerEvent) {
     isDragging = false
     dragTo = null
     dragFrom = null
-    if (!onselect || event.button !== 0 || event.shiftKey) return
+    if (!ondrag || event.button !== 0 || event.shiftKey) return
     const target = targetAt(event)
     if (target) dragFrom = { measure: target.measure, beat: target.beat, string: target.string }
   }
 
   function handlePointerMove(event: PointerEvent) {
-    if (!onselect || !dragFrom || event.buttons !== 1) return
+    if (!ondrag || !dragFrom || event.buttons !== 1) return
     const target = targetAt(event)
     if (!target) return
+    const to = { measure: target.measure, beat: target.beat, string: target.string }
     if (!isDragging) {
-      if (target.measure === dragFrom.measure && target.beat === dragFrom.beat) return
+      if (to.measure === dragFrom.measure && to.beat === dragFrom.beat && to.string === dragFrom.string) return
       isDragging = true
       // Keep receiving the moves when the mouse leaves the drawing.
       ;(event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId)
-      onselect(dragFrom, { extend: false })
     }
-    if (dragTo?.measure === target.measure && dragTo.beat === target.beat) return
-    dragTo = { measure: target.measure, beat: target.beat }
-    onselect({ measure: target.measure, beat: target.beat, string: dragFrom.string }, { extend: true })
+    if (dragTo?.measure === to.measure && dragTo.beat === to.beat && dragTo.string === to.string) return
+    dragTo = to
+    ondrag({ from: dragFrom, to })
   }
 
   function handleClick(event: MouseEvent) {
@@ -196,14 +199,11 @@
           {/if}
 
           {#if isBeatSelected({ selection, measure: measure.index, beat: beatIndex })}
-            <rect
-              class="beat-highlight"
-              x={beat.x - 13}
-              y={system.staffTop - 4}
-              width="26"
-              height={system.staffBottom - system.staffTop + 8}
-              rx="6"
-            />
+            <!-- A rectangle selection covers only the rows of its strings. -->
+            {@const rows = selectedStrings(selection)}
+            {@const top = rows ? (system.stringYs[rows.first - 1] ?? system.staffTop) - 9 : system.staffTop - 4}
+            {@const bottom = rows ? (system.stringYs[rows.last - 1] ?? system.staffBottom) + 9 : system.staffBottom + 4}
+            <rect class="beat-highlight" x={beat.x - 13} y={top} width="26" height={bottom - top} rx="6" />
           {/if}
           {#if selection && selection.measure === measure.index && selection.beat === beatIndex}
             {@const selectedY = system.stringYs[selection.string - 1] ?? system.stringYs[0] ?? 0}

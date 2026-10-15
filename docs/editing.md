@@ -15,7 +15,7 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | --------------------------- | ----------------------------------------------------------------------------- |
 | `0`-`9`                     | Sets the fret on the selected string. Two digits typed quickly make one fret  |
 | `Delete` / `Backspace`      | Removes the note on the selected string (a beat left empty becomes a rest).   |
-|                             | With several beats selected, empties all of them                              |
+|                             | With a selection, empties its notes. On a rest, takes the rest out (below)    |
 | `Shift+Left` / `Shift+Right`| Selects several beats                                                         |
 | `Ctrl+C` `Ctrl+X` `Ctrl+V`  | Copy, cut and paste the selected beats                                        |
 | `W` `H` `Q` `E` `S` `T`     | Whole, half, quarter, eighth, sixteenth and thirty-second note                |
@@ -32,6 +32,25 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | `Esc`                       | Clears the selection                                                          |
 
 On macOS, `Cmd` replaces `Ctrl`. The same actions are in the toolbars.
+
+## Selecting with the mouse
+
+Drag over the tablature to select, like text: a rectangle from where you pressed to where you
+release, covering the beats between and the strings between. Drag across a whole chord to take all
+its notes, or across part of it to take only those strings. `Delete`, cut and copy act on the
+rectangle only (copy keeps just its strings). Shift+arrows and Shift+click select whole beats.
+
+## Deleting rests
+
+`Delete` first empties notes, so a beat left without notes is a rest. `Delete` on a rest (or on a
+selection of rests only) takes it out of the timeline, the way deleting a character closes the gap
+in text: what follows moves earlier and the measure gets shorter, and its time signature follows
+(a 4/4 measure that loses a quarter becomes 3/4, one that loses an eighth becomes 7/8). A measure
+with no time left disappears, so deleting its last rest deletes the measure.
+
+The measures are the same length in every track, so the time is taken out of every track at once,
+and only when all of them have rests there. If another track has a note in that time, `Delete`
+does nothing and says so: no note is ever lost. Ctrl+Z undoes it.
 
 ## Copy and paste
 

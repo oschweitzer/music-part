@@ -697,6 +697,77 @@ export const scenarios = [
   ],
 
   [
+    'dragging over part of a chord selects those strings, and Delete clears only them',
+    async (context) => {
+      const { page } = context
+      // The six notes of the chord in the third measure, from the highest string to the lowest.
+      const chord = await page.eval(`(() => {
+        const frets = [...document.querySelectorAll('svg.tab text.fret')]
+        const byX = new Map()
+        for (const f of frets) byX.set(f.getAttribute('x'), [...(byX.get(f.getAttribute('x')) ?? []), f])
+        const column = [...byX.values()].find((c) => c.length === 6)
+        const points = column.map((f) => { const r = f.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })
+        return points.sort((a, b) => a.y - b.y)
+      })()`)
+      assert.equal(beatsOf(await document_(context), 2)[0].notes.length, 6)
+
+      await page.mouseDrag(chord[1], chord[3]) // strings 2 to 4
+      const heights = await page.eval(`[...document.querySelectorAll('svg.tab .beat-highlight')].map((r) => Number(r.getAttribute('height')))`)
+      assert.equal(heights.length, 1, 'one beat is highlighted')
+      assert.ok(heights[0] < 60, `the highlight covers only three strings (${heights[0]})`)
+
+      await page.press('Delete')
+      await settle()
+      assert.deepEqual(
+        beatsOf(await document_(context), 2)[0].notes.map((n) => n.string),
+        [6, 5, 1],
+        'only strings 2, 3 and 4 were cleared',
+      )
+    },
+  ],
+
+  [
+    'Delete on a rest takes it out of the timeline, and removes the measure when it is the last rest',
+    async (context) => {
+      const { page } = context
+      await clickButton(page, 'New')
+      await settle()
+      const measures = async () => (await document_(context)).score.tracks[0].measures.length
+      const before = await measures()
+
+      // The new score is a row of whole-measure rests: Delete on one removes that measure.
+      await page.press('Delete')
+      await settle()
+      assert.equal(await measures(), before - 1)
+
+      // A quarter rest in a 4/4 measure: the measure becomes 3/4.
+      await page.press('q')
+      await settle()
+      await page.press('Delete')
+      await settle()
+      const first = (await document_(context)).score.tracks[0].measures[0]
+      assert.deepEqual(first.time_signature, { numerator: 3, denominator: 4 })
+      assert.deepEqual(first.voices[0].beats.map((b) => b.duration), [{ value: 'Half', dots: 1 }], 'what is left is a dotted half')
+    },
+  ],
+
+  [
+    'Delete on a rest is refused while another track plays there, and says why',
+    async (context) => {
+      const { page } = context
+      const before = (await document_(context)).score.tracks.map((t) => t.measures.length)
+      await clickFret(page, 0)
+      await page.press('Delete') // the note goes, leaving a rest
+      await settle()
+      await page.press('Delete') // the rest cannot go: the bass plays on that beat
+      await settle()
+      assert.match(await text(page, '.notice span'), /another track/)
+      assert.deepEqual((await document_(context)).score.tracks.map((t) => t.measures.length), before)
+      assert.equal(beatsOf(await document_(context), 0).length, 8, 'the rest is still there')
+    },
+  ],
+
+  [
     'a MusicXML file opens with its title, tempo, tuning and tied notes',
     async (context) => {
       const { page, out } = context
