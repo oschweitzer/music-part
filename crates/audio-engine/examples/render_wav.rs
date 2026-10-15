@@ -29,7 +29,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     if use_packs {
         let (packs, mut errors) = pack::discover(&[assets.join("packs")]);
-        errors.extend(pack::add_packs(&mut player, &packs));
+        let (pack_errors, notes) = pack::add_packs_with_notes(&mut player, &packs);
+        errors.extend(pack_errors);
+        for note in notes {
+            println!("{note}");
+        }
         if let Some(error) = errors.first() {
             return Err(error.clone().into());
         }

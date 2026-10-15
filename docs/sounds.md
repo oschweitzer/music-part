@@ -122,10 +122,9 @@ Not done in Phase A, recorded here so they are picked up later:
   table, and a track whose pack is missing falls back to the General MIDI program of the closest
   built-in sound), listing the packs and their licences in the UI, and loading only the packs a
   score uses.
-- **SFZ.** Many free realistic libraries are SFZ, not SoundFont. Evaluate the sfizz library
-  (C++, reported BSD-2-Clause; to be confirmed) behind the same `Player` interface, against the
-  rules of `CLAUDE.md`: no allocation in the audio callback, replaceable library, licence
-  compatible with PolyForm Noncommercial.
+- **SFZ: done** as a subset played by our own Rust code, after evaluating sfizz; see
+  [`sfz.md`](sfz.md). Still to do: key switches for technique-specific samples, release
+  samples, FLAC and Ogg samples.
 - **Realistic sample downloads.** More CC0 or permissive banks (steel guitar, distorted guitar,
   slap bass, violin, banjo) fetched by `pnpm fetch:soundfont` with pinned checksums. Hosts such as
   freepats could not be reached from the environment this was written in, so no new bank was

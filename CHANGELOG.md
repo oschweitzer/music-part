@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Sound packs can give a sound an SFZ instrument (`.sfz` and WAV samples) instead of a SoundFont,
+  played by a small SFZ player in `audio-engine`: key and velocity ranges, round-robin, loops,
+  amplitude envelope, volume, pan and tuning. Unsupported opcodes are ignored and reported on
+  the console, sample paths must stay inside the pack, and a pack's samples are capped at
+  256 MiB. Notes the instrument does not cover play the General MIDI sound. See `docs/sfz.md`.
 - UI: a rows view of the tracks, one under the other on the same time axis like a DAW, switched
   with the new `Tabs` / `Rows` toggle in the toolbar (the choice is remembered). Each row has a
   header with mute, solo, remove and fold, rows share their barlines and one playback cursor, and

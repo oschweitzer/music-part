@@ -5,6 +5,7 @@ use oxisynth::{MidiEvent, SoundFont, Synth, SynthDescriptor};
 use score_model::{Score, Sound};
 
 use crate::sequencer::{self, Action, Event, Timbre, BEND_CENTER, BEND_RANGE_SEMITONES};
+use crate::sfz::{self, SfzInstrument, SfzSound};
 
 /// Silence kept after the last event so the notes can ring out.
 const RELEASE_TAIL_SECS: u64 = 2;
@@ -242,6 +243,9 @@ pub struct Player {
     audible: Vec<bool>,
     /// Sample banks: the bank number the SoundFont of each sound answers to.
     banks: Vec<Bank>,
+    /// SFZ instruments, at most one per sound, and the voices that play them (see `docs/sfz.md`).
+    sfz: Vec<SfzSound>,
+    sfz_voices: sfz::Voices,
 }
 
 impl Player {
@@ -264,6 +268,8 @@ impl Player {
             playing: false,
             audible: Vec::new(),
             banks: Vec::new(),
+            sfz: Vec::new(),
+            sfz_voices: sfz::Voices::new(),
         })
     }
 
@@ -291,12 +297,30 @@ impl Player {
             .ok_or_else(|| PlayerError::SoundFont("too many sample banks".into()))?;
         let id = self.synth.add_font(font, false);
         self.synth.set_bank_offset(id, u32::from(number));
+        // The latest bank of a sound is heard, SoundFont or SFZ.
+        self.sfz.retain(|s| s.sound != sound);
         self.banks.push(Bank {
             sound,
             number,
             keys,
         });
         Ok(())
+    }
+
+    /// Plays the tracks with `sound` with an SFZ instrument, instead of the General MIDI program.
+    /// `keys` are the MIDI keys it covers, as for `add_bank`; a note inside them that no region
+    /// answers is also played by the General MIDI program. Call before loading a score. It
+    /// replaces any earlier SoundFont or SFZ bank of the same sound.
+    pub fn add_sfz(&mut self, sound: Sound, instrument: SfzInstrument, keys: RangeInclusive<u8>) {
+        // Voices point into the list by index: none may sound while it changes.
+        self.sfz_voices.cut_all();
+        self.banks.retain(|b| b.sound != sound);
+        self.sfz.retain(|s| s.sound != sound);
+        self.sfz.push(SfzSound {
+            sound,
+            keys,
+            instrument,
+        });
     }
 
     fn bank_of(&self, sound: Sound) -> Option<&Bank> {
@@ -310,6 +334,7 @@ impl Player {
     /// Replaces the score being played. Stops and rewinds.
     pub fn load(&mut self, program: Program) {
         self.stop();
+        self.sfz_voices.cut_all();
         for voice in &program.voices {
             // A sample bank for the sound sits at its own bank number, with the sound at
             // program 0; the fallback channel and sounds without a bank use the General MIDI
@@ -409,6 +434,7 @@ impl Player {
                 let _ = self.synth.send_event(MidiEvent::AllSoundOff { channel });
             }
         }
+        self.sfz_voices.cut_all();
         self.silence();
         let ticks = if ticks.is_finite() {
             ticks.max(0.0)
@@ -437,6 +463,7 @@ impl Player {
                 for channel in voice.channels() {
                     let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
                 }
+                self.sfz_voices.release_track(track);
             }
         }
     }
@@ -460,6 +487,7 @@ impl Player {
     }
 
     fn silence(&mut self) {
+        self.sfz_voices.release_all();
         for voice in &self.program.voices {
             for channel in voice.channels() {
                 let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
@@ -487,12 +515,47 @@ impl Player {
                 self.next += 1;
             }
             let (l, r) = self.synth.read_next();
-            frame[0] = l;
-            frame[1] = r;
+            let (sfz_l, sfz_r) = self.sfz_voices.next_frame(&self.sfz);
+            frame[0] = l + sfz_l;
+            frame[1] = r + sfz_r;
             self.position += 1;
             if self.position >= self.program.end_sample {
                 self.stop();
             }
+        }
+    }
+
+    /// Plays an event with the SFZ instrument of `sound`, if it has one. True when nothing is
+    /// left for the synthesizer to do: a note-on that a region answered. A note-off still goes
+    /// to the synthesizer too, in case the note-on fell back to the General MIDI program.
+    fn dispatch_sfz(&mut self, e: Event, sound: Sound) -> bool {
+        let Some(index) = self.sfz.iter().position(|s| s.sound == sound) else {
+            return false;
+        };
+        match e.action {
+            Action::NoteOn {
+                pitch,
+                velocity,
+                timbre,
+            } => {
+                self.sfz[index].keys.contains(&pitch)
+                    && self.sfz_voices.note_on(
+                        &mut self.sfz,
+                        index,
+                        sfz::NoteOn {
+                            track: e.track,
+                            key: pitch,
+                            velocity,
+                            timbre,
+                            sample_rate: self.program.sample_rate,
+                        },
+                    )
+            }
+            Action::NoteOff { pitch, .. } => {
+                self.sfz_voices.note_off(e.track, pitch);
+                false
+            }
+            Action::PitchBend(_) => false,
         }
     }
 
@@ -507,6 +570,9 @@ impl Player {
         let Some(sound) = self.program.voices.get(e.track).map(|v| v.sound) else {
             return;
         };
+        if self.dispatch_sfz(e, sound) {
+            return;
+        }
         let keys = self.bank_of(sound).map(|b| b.keys.clone());
         let Some(voice) = self.program.voices.get(e.track) else {
             return;
@@ -537,6 +603,7 @@ impl Player {
             }
             // The wheel moves the notes of every channel of the track together.
             Action::PitchBend(value) => {
+                self.sfz_voices.set_bend(e.track, value);
                 for channel in voice.channels() {
                     let _ = self
                         .synth

@@ -144,7 +144,8 @@ fn open_output(soundfont: &Path, pack_roots: &[PathBuf]) -> Result<(AudioOutput,
 /// to stop the app.
 fn add_packs(player: &mut Player, roots: &[PathBuf]) {
     let (packs, mut errors) = pack::discover(roots);
-    errors.extend(pack::add_packs(player, &packs));
+    let (pack_errors, notes) = pack::add_packs_with_notes(player, &packs);
+    errors.extend(pack_errors);
     for pack in &packs {
         let manifest = &pack.manifest;
         eprintln!(
@@ -154,6 +155,9 @@ fn add_packs(player: &mut Player, roots: &[PathBuf]) {
             manifest.licence,
             pack.dir.display()
         );
+    }
+    for note in notes {
+        eprintln!("{note}");
     }
     for error in errors {
         eprintln!("{error}");

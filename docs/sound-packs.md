@@ -38,11 +38,12 @@ freepats-nylon-guitar/
 | `licence`           | SPDX identifier of the samples' licence (`CC0-1.0`, `CC-BY-4.0`...).            |
 | `source`            | Optional: where the samples come from.                                          |
 | `sounds[].sound`    | A sound id of the built-in table, such as `"bass/slap"`. Each one at most once. |
-| `sounds[].file`     | A SoundFont (`.sf2`) in the pack folder, by its plain file name.                |
+| `sounds[].file`     | A SoundFont (`.sf2`) or SFZ (`.sfz`) file in the pack folder, by its file name. |
 | `sounds[].firstKey` | First MIDI key the recordings cover.                                            |
 | `sounds[].lastKey`  | Last MIDI key the recordings cover.                                             |
 
-The SoundFont's first preset is played. Notes outside `firstKey` to `lastKey` are played with the
+The SoundFont's first preset is played. An `.sfz` file is played by the app's own SFZ player,
+which reads a subset of the format and samples in WAV: see [`sfz.md`](sfz.md). Notes outside `firstKey` to `lastKey` are played with the
 General MIDI program of the sound rather than left silent: the bass recording stops at A2, the
 higher notes come from the base SoundFont. A manifest with an unknown field, a file outside its
 folder or a key range that is not one is refused as a whole.
@@ -92,9 +93,8 @@ offered as a folder users add themselves.
 - A pack can only give samples to the sounds of the built-in table; a new sound (a twelve-string
   guitar) is still a change of `score-model`. Letting packs declare new sounds means a string
   `Sound` checked against the loaded table, and a fallback for a score whose pack is missing.
-- Only SoundFont 2 files. SFZ (round-robin, key switches for articulations) would be a second
-  value of the file type, played by another engine behind the same `Player` interface; see the
-  follow-ups in [`sounds.md`](sounds.md).
+- SFZ files play their regions, round-robin, loops and envelope, but not yet key switches for
+  articulations nor release samples; see [`sfz.md`](sfz.md).
 - Every pack found is loaded at start, used by the score or not. With three small packs this
   costs little; with many, load a pack only when a track of the score uses one of its sounds.
 - The UI does not list the packs or their licences yet; the console does.
