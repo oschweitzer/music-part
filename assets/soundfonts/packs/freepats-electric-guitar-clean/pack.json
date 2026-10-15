@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "freepats-electric-guitar-clean",
+  "name": "FSBS electric guitar, clean",
+  "author": "FreePats",
+  "licence": "CC0-1.0",
+  "source": "https://github.com/freepats/electric-guitar-FSBS-clean",
+  "sounds": [
+    {
+      "sound": "electric-guitar/clean",
+      "file": "electric-guitar.sf2",
+      "firstKey": 35,
+      "lastKey": 86
+    }
+  ]
+}

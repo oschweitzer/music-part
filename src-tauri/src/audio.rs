@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use audio_engine::{AudioOutput, Player, Program, SharedState, SAMPLE_BANKS};
+use audio_engine::{pack, AudioOutput, Player, Program, SharedState};
 use score_model::Score;
 
 enum Command {
@@ -28,7 +28,8 @@ pub struct AudioController {
 impl AudioController {
     /// Starts the audio thread without waiting for it: loading the SoundFont takes a moment and
     /// the window should not wait for it. A failure is reported by the first command instead.
-    pub fn start(soundfont: PathBuf, banks: Option<PathBuf>) -> Self {
+    /// `pack_roots` are the folders holding sound packs, lowest priority first.
+    pub fn start(soundfont: PathBuf, pack_roots: Vec<PathBuf>) -> Self {
         let (tx, rx) = mpsc::channel::<Command>();
         let state = Arc::new(OnceLock::new());
         let failure = Arc::new(Mutex::new(None));
@@ -36,7 +37,7 @@ impl AudioController {
         let thread_state = Arc::clone(&state);
         let thread_failure = Arc::clone(&failure);
         let spawned = thread::Builder::new().name("audio".into()).spawn(move || {
-            let (output, sample_rate) = match open_output(&soundfont, banks.as_deref()) {
+            let (output, sample_rate) = match open_output(&soundfont, &pack_roots) {
                 Ok(opened) => opened,
                 Err(message) => {
                     eprintln!("Audio unavailable: {message}");
@@ -126,35 +127,36 @@ impl AudioController {
     }
 }
 
-fn open_output(soundfont: &Path, banks: Option<&Path>) -> Result<(AudioOutput, u32), String> {
+fn open_output(soundfont: &Path, pack_roots: &[PathBuf]) -> Result<(AudioOutput, u32), String> {
     let sample_rate =
         AudioOutput::default_sample_rate().map_err(|e| format!("no audio output: {e}"))?;
     let mut file = File::open(soundfont)
         .map_err(|e| format!("cannot open the SoundFont {}: {e}", soundfont.display()))?;
     let mut player = Player::new(&mut file, sample_rate).map_err(|e| e.to_string())?;
-    if let Some(dir) = banks {
-        add_banks(&mut player, dir);
-    }
+    add_packs(&mut player, pack_roots);
     let output =
         AudioOutput::start(player).map_err(|e| format!("cannot open the audio output: {e}"))?;
     Ok((output, sample_rate))
 }
 
-/// Adds the sample banks found in `dir`. A missing or broken one is reported and skipped: the
-/// instrument then plays with the General MIDI sound, which is no reason to stop the app.
-fn add_banks(player: &mut Player, dir: &Path) {
-    for bank in &SAMPLE_BANKS {
-        let path = dir.join(bank.file);
-        let loaded = File::open(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|mut file| {
-                player
-                    .add_bank(bank.sound, &mut file, bank.keys())
-                    .map_err(|e| e.to_string())
-            });
-        if let Err(message) = loaded {
-            eprintln!("Sample bank {} not used: {message}", path.display());
-        }
+/// Adds the sound packs found in `roots`. A pack or a sample file that is missing or broken is
+/// reported and skipped: that sound then plays with its General MIDI program, which is no reason
+/// to stop the app.
+fn add_packs(player: &mut Player, roots: &[PathBuf]) {
+    let (packs, mut errors) = pack::discover(roots);
+    errors.extend(pack::add_packs(player, &packs));
+    for pack in &packs {
+        let manifest = &pack.manifest;
+        eprintln!(
+            "Sound pack {} ({}, {}) from {}",
+            manifest.id,
+            manifest.name,
+            manifest.licence,
+            pack.dir.display()
+        );
+    }
+    for error in errors {
+        eprintln!("{error}");
     }
 }
 
@@ -175,7 +177,7 @@ mod tests {
 
     #[test]
     fn missing_soundfont_is_reported_by_commands() {
-        let audio = AudioController::start(PathBuf::from("/nonexistent/font.sf2"), None);
+        let audio = AudioController::start(PathBuf::from("/nonexistent/font.sf2"), Vec::new());
 
         // The thread fails shortly after start: no output device, or no such file.
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -201,7 +203,7 @@ mod tests {
             return;
         }
 
-        let audio = AudioController::start(soundfont, None);
+        let audio = AudioController::start(soundfont, Vec::new());
         let deadline = Instant::now() + Duration::from_secs(10);
         let state = loop {
             if let Some(state) = audio.state() {

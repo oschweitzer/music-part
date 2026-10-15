@@ -1,5 +1,5 @@
 // Downloads the sounds used for playback into assets/soundfonts/ and verifies their checksums:
-// the General MIDI SoundFont, and the sample banks (recordings of one instrument each).
+// the General MIDI SoundFont, and the samples of the sound packs in assets/soundfonts/packs/.
 // Usage: pnpm fetch:soundfont [--force]
 // To change a sound, update its entry below and docs/soundfonts.md together.
 
@@ -23,7 +23,7 @@ const ASSETS = [
     sha256: '9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe',
   },
   {
-    name: 'banks/nylon-guitar.sf2',
+    name: 'packs/freepats-nylon-guitar/nylon-guitar.sf2',
     archive: {
       url: 'https://freepats.zenvoid.org/Guitar/SpanishClassicalGuitar/SpanishClassicalGuitar-SF2-20190618.7z',
       sha256: '8c192f1fc640a553199a4a43a17ae12354a6a05e3d6aad79bd43b5d29314ff51',
@@ -32,7 +32,7 @@ const ASSETS = [
     sha256: '0d4c08ea8c1c8924b3829084b0c8778f6d6b906f331e44fde51bc159f76b03b9',
   },
   {
-    name: 'banks/electric-guitar.sf2',
+    name: 'packs/freepats-electric-guitar-clean/electric-guitar.sf2',
     archive: {
       url: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-bridge-small-SF2-20260807.7z',
       sha256: 'bcea7d4c92a1cc6a26e545a218b34e59037d4bab6cf0fce24396428e6934d69c',
@@ -41,7 +41,7 @@ const ASSETS = [
     sha256: 'a58803acd8640a06a0a1a277a16ff4cd2610d9eab5fd6793741db4730c12f594',
   },
   {
-    name: 'banks/electric-bass.sf2',
+    name: 'packs/freepats-electric-bass-finger/electric-bass.sf2',
     archive: {
       url: 'https://github.com/freepats/electric-bass-YR/releases/download/2019-09-30/FingerBassYR-SF2-20190930.7z',
       sha256: 'f5b5cfe04435a9e9037d1f97d515dc596535acf26637db9579d724cd757f179e',

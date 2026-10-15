@@ -22,9 +22,11 @@ use service::{OpenedDocument, Startup};
 /// Overrides the bundled SoundFont, for development.
 const SOUNDFONT_ENV: &str = "MUSIC_PART_SOUNDFONT";
 const SOUNDFONT_RESOURCE: &str = "soundfont/GeneralUser-GS.sf2";
-/// Overrides the folder of sample banks, for development.
-const BANKS_ENV: &str = "MUSIC_PART_BANKS";
-const BANKS_RESOURCE: &str = "soundfont/banks";
+/// Overrides the folder of bundled sound packs, for development.
+const PACKS_ENV: &str = "MUSIC_PART_PACKS";
+const PACKS_RESOURCE: &str = "soundfont/packs";
+/// Folder of the user's own sound packs, in the app data directory.
+const USER_PACKS_DIR: &str = "packs";
 const POSITION_EVENT: &str = "playback-position";
 const POSITION_INTERVAL: Duration = Duration::from_millis(33);
 
@@ -170,14 +172,22 @@ fn spawn_position_emitter(app: AppHandle) {
     });
 }
 
-/// The folder of sample banks. Banks missing from it are skipped one by one.
-fn banks_path(app: &tauri::App) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(BANKS_ENV) {
-        return Some(path.into());
-    }
-    app.path()
-        .resolve(BANKS_RESOURCE, BaseDirectory::Resource)
+/// The folders of sound packs, lowest priority first: the bundled packs, then the user's, so a
+/// user's pack replaces a bundled one with the same id. A folder that does not exist is skipped.
+fn pack_roots(app: &tauri::App) -> Vec<PathBuf> {
+    let bundled = match std::env::var_os(PACKS_ENV) {
+        Some(path) => Some(path.into()),
+        None => app
+            .path()
+            .resolve(PACKS_RESOURCE, BaseDirectory::Resource)
+            .ok(),
+    };
+    let user = app
+        .path()
+        .app_data_dir()
         .ok()
+        .map(|dir| dir.join(USER_PACKS_DIR));
+    bundled.into_iter().chain(user).collect()
 }
 
 fn soundfont_path(app: &tauri::App) -> Result<PathBuf, String> {
@@ -216,7 +226,7 @@ pub fn run() {
             let audio = match soundfont_path(app) {
                 Ok(path) => {
                     eprintln!("SoundFont: {}", path.display());
-                    AudioController::start(path, banks_path(app))
+                    AudioController::start(path, pack_roots(app))
                 }
                 Err(reason) => {
                     eprintln!("Audio unavailable: {reason}");

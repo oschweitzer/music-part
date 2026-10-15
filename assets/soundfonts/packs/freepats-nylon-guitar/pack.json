@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "freepats-nylon-guitar",
+  "name": "Spanish classical guitar",
+  "author": "roberto@zenvoid.org for FreePats",
+  "licence": "CC0-1.0",
+  "source": "https://freepats.zenvoid.org/Guitar/SpanishClassicalGuitar/SpanishClassicalGuitar-SF2-20190618.7z",
+  "sounds": [
+    {
+      "sound": "guitar/nylon",
+      "file": "nylon-guitar.sf2",
+      "firstKey": 29,
+      "lastKey": 88
+    }
+  ]
+}

@@ -34,7 +34,7 @@ without changing the file format.
 
 ### The sounds
 
-| Id                           | Name          | GM program | Instrument      | Sample bank           |
+| Id                           | Name          | GM program | Instrument      | Sound pack file       |
 | ---------------------------- | ------------- | ---------- | --------------- | --------------------- |
 | `guitar/nylon`               | Nylon strings | 24         | Acoustic guitar | `nylon-guitar.sf2`    |
 | `guitar/steel`               | Steel strings | 25         | Acoustic guitar |                       |
@@ -102,8 +102,8 @@ Both importers map a General MIDI program to the closest sound (`Sound::from_mid
 
 ## Playback
 
-The sound's General MIDI program plays the track. A sample bank (see
-[`soundfonts.md`](soundfonts.md)) now replaces the program of one sound, not of a whole
+The sound's General MIDI program plays the track. A sound pack (see
+[`sound-packs.md`](sound-packs.md)) replaces the program of the sounds it lists, not of a whole
 instrument: the clean electric guitar plays the recorded Fender, the distorted one the General MIDI
 program.
 
@@ -117,11 +117,11 @@ for drums the percussion channel. That is a change of the score model, planned s
 
 Not done in Phase A, recorded here so they are picked up later:
 
-- **Sound pack manifest.** A JSON file per pack listing its sounds: id (the same
-  `"<instrument>/<sound>"` scheme), name, instrument, file, key range, licence, source URL and
-  checksum. Sounds from packs would extend the built-in table; `Sound` then becomes a string id
-  checked against the loaded table, and a track whose pack is missing falls back to the General
-  MIDI program of the closest built-in sound.
+- **Sound packs: done** for the built-in sounds, see [`sound-packs.md`](sound-packs.md). Still to
+  do: packs that declare new sounds (`Sound` then becomes a string id checked against the loaded
+  table, and a track whose pack is missing falls back to the General MIDI program of the closest
+  built-in sound), listing the packs and their licences in the UI, and loading only the packs a
+  score uses.
 - **SFZ.** Many free realistic libraries are SFZ, not SoundFont. Evaluate the sfizz library
   (C++, reported BSD-2-Clause; to be confirmed) behind the same `Player` interface, against the
   rules of `CLAUDE.md`: no allocation in the audio callback, replaceable library, licence

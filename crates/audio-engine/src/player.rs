@@ -548,12 +548,12 @@ impl Player {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use score_model::*;
     use std::fs::File;
 
-    fn one_note_score() -> Score {
+    pub(crate) fn one_note_score() -> Score {
         Score {
             title: "t".into(),
             tempo_bpm: 120,
@@ -597,7 +597,7 @@ mod tests {
 
     /// Path of the SoundFont used by audible-path tests: `$SOUNDFONT`, or the one fetched by
     /// `pnpm fetch:soundfont`. `None` skips those tests.
-    fn test_soundfont() -> Option<std::path::PathBuf> {
+    pub(crate) fn test_soundfont() -> Option<std::path::PathBuf> {
         // An empty variable counts as unset.
         if let Some(path) = std::env::var_os("SOUNDFONT").filter(|p| !p.is_empty()) {
             return Some(path.into());
@@ -982,12 +982,29 @@ mod tests {
         assert!(buf.iter().any(|s| s.abs() > 0.01));
     }
 
-    /// A sample bank fetched by `pnpm fetch:soundfont`, or `None` to skip the test.
-    fn test_bank(file: &str) -> Option<std::path::PathBuf> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/soundfonts/banks")
-            .join(file);
-        path.exists().then_some(path)
+    /// The sounds of the packs committed in `assets/soundfonts/packs`, with the path of their
+    /// sample file. The files are fetched by `pnpm fetch:soundfont`; callers skip missing ones.
+    fn committed_banks() -> Vec<(crate::pack::PackSound, std::path::PathBuf)> {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/soundfonts/packs");
+        let (packs, errors) = crate::pack::discover(&[root]);
+        assert!(errors.is_empty(), "{errors:?}");
+        packs
+            .iter()
+            .flat_map(|pack| {
+                pack.manifest
+                    .sounds
+                    .iter()
+                    .map(|sound| (sound.clone(), pack.file(sound)))
+            })
+            .collect()
+    }
+
+    /// The fetched sample file of the committed pack that plays `sound`, or `None` to skip.
+    fn test_bank(sound: Sound) -> Option<(crate::pack::PackSound, std::path::PathBuf)> {
+        committed_banks()
+            .into_iter()
+            .find(|(bank, path)| bank.sound == sound && path.exists())
     }
 
     fn render_with_bank(
@@ -1010,7 +1027,8 @@ mod tests {
 
     #[test]
     fn a_palm_muted_note_of_a_sample_bank_is_duller_than_the_bank_open() {
-        let (Some(base), Some(nylon)) = (test_soundfont(), test_bank("nylon-guitar.sf2")) else {
+        let (Some(base), Some((_, nylon))) = (test_soundfont(), test_bank(Sound::GuitarNylon))
+        else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
         };
@@ -1050,11 +1068,8 @@ mod tests {
             eprintln!("no SoundFont available, test skipped");
             return;
         };
-        let banks: Vec<_> = crate::SAMPLE_BANKS
-            .iter()
-            .filter_map(|bank| Some((bank, test_bank(bank.file)?)))
-            .collect();
-        if banks.len() < crate::SAMPLE_BANKS.len() {
+        let banks = committed_banks();
+        if banks.iter().any(|(_, path)| !path.exists()) {
             eprintln!("sample banks missing, test skipped");
             return;
         }
@@ -1104,7 +1119,8 @@ mod tests {
 
     #[test]
     fn a_sample_bank_plays_only_the_sound_it_recorded() {
-        let (Some(base), Some(electric)) = (test_soundfont(), test_bank("electric-guitar.sf2"))
+        let (Some(base), Some((_, electric))) =
+            (test_soundfont(), test_bank(Sound::ElectricGuitarClean))
         else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
@@ -1122,7 +1138,8 @@ mod tests {
 
     #[test]
     fn a_sample_bank_changes_the_sound_of_its_instrument_and_nothing_else() {
-        let (Some(base), Some(nylon)) = (test_soundfont(), test_bank("nylon-guitar.sf2")) else {
+        let (Some(base), Some((_, nylon))) = (test_soundfont(), test_bank(Sound::GuitarNylon))
+        else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
         };
@@ -1151,11 +1168,11 @@ mod tests {
             eprintln!("no SoundFont available, test skipped");
             return;
         };
-        for bank in &crate::SAMPLE_BANKS {
-            let Some(path) = test_bank(bank.file) else {
+        for (bank, path) in &committed_banks() {
+            if !path.exists() {
                 eprintln!("{} not fetched, skipped", bank.file);
                 continue;
-            };
+            }
             let mut score = one_note_score();
             score.tracks[0].instrument = bank.sound.instrument();
             score.tracks[0].sound = bank.sound;
@@ -1167,7 +1184,7 @@ mod tests {
                     let note = &mut score.tracks[0].measures[0].voices[0].beats[0].notes[0];
                     (note.string, note.fret) = (string, fret);
                     let buf =
-                        render_with_bank(&base, Some((bank.sound, &path, bank.keys())), &score);
+                        render_with_bank(&base, Some((bank.sound, path, bank.keys())), &score);
                     let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
                     assert!(
                         peak > 0.005,
@@ -1182,15 +1199,12 @@ mod tests {
 
     #[test]
     fn a_note_the_bank_did_not_record_is_played_with_the_base_sound() {
-        let (Some(base), Some(bass_bank)) = (test_soundfont(), test_bank("electric-bass.sf2"))
+        let (Some(base), Some((bank, bass_bank))) =
+            (test_soundfont(), test_bank(Sound::BassFinger))
         else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
         };
-        let bank = crate::SAMPLE_BANKS
-            .iter()
-            .find(|b| b.sound == Sound::BassFinger)
-            .unwrap();
         let mut score = one_note_score();
         score.tracks[0].instrument = Instrument::Bass;
         score.tracks[0].sound = Sound::BassFinger;
@@ -1218,11 +1232,11 @@ mod tests {
 
     #[test]
     fn the_declared_key_ranges_match_the_recordings() {
-        for bank in &crate::SAMPLE_BANKS {
-            let Some(path) = test_bank(bank.file) else {
+        for (bank, path) in &committed_banks() {
+            if !path.exists() {
                 eprintln!("{} not fetched, skipped", bank.file);
                 continue;
-            };
+            }
             let font = SoundFont::load(&mut File::open(path).unwrap()).unwrap();
             let mut synth = Synth::new(SynthDescriptor {
                 sample_rate: 44_100.0,

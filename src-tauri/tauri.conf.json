@@ -36,10 +36,15 @@
     "resources": {
       "../assets/soundfonts/GeneralUser-GS.sf2": "soundfont/GeneralUser-GS.sf2",
       "../assets/soundfonts/GeneralUser-GS-LICENSE.txt": "soundfont/GeneralUser-GS-LICENSE.txt",
-      "../assets/soundfonts/banks/nylon-guitar.sf2": "soundfont/banks/nylon-guitar.sf2",
-      "../assets/soundfonts/banks/electric-guitar.sf2": "soundfont/banks/electric-guitar.sf2",
-      "../assets/soundfonts/banks/electric-bass.sf2": "soundfont/banks/electric-bass.sf2",
-      "../assets/soundfonts/banks-LICENSE.txt": "soundfont/banks-LICENSE.txt"
+      "../assets/soundfonts/packs/freepats-nylon-guitar/pack.json": "soundfont/packs/freepats-nylon-guitar/pack.json",
+      "../assets/soundfonts/packs/freepats-nylon-guitar/LICENSE.txt": "soundfont/packs/freepats-nylon-guitar/LICENSE.txt",
+      "../assets/soundfonts/packs/freepats-nylon-guitar/nylon-guitar.sf2": "soundfont/packs/freepats-nylon-guitar/nylon-guitar.sf2",
+      "../assets/soundfonts/packs/freepats-electric-guitar-clean/pack.json": "soundfont/packs/freepats-electric-guitar-clean/pack.json",
+      "../assets/soundfonts/packs/freepats-electric-guitar-clean/LICENSE.txt": "soundfont/packs/freepats-electric-guitar-clean/LICENSE.txt",
+      "../assets/soundfonts/packs/freepats-electric-guitar-clean/electric-guitar.sf2": "soundfont/packs/freepats-electric-guitar-clean/electric-guitar.sf2",
+      "../assets/soundfonts/packs/freepats-electric-bass-finger/pack.json": "soundfont/packs/freepats-electric-bass-finger/pack.json",
+      "../assets/soundfonts/packs/freepats-electric-bass-finger/LICENSE.txt": "soundfont/packs/freepats-electric-bass-finger/LICENSE.txt",
+      "../assets/soundfonts/packs/freepats-electric-bass-finger/electric-bass.sf2": "soundfont/packs/freepats-electric-bass-finger/electric-bass.sf2"
     }
   }
 }
