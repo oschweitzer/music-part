@@ -9,6 +9,7 @@ import {
   FIRST_NOTE,
   isBeatSelected,
   moveSelection,
+  moveToTrack,
   nextFret,
   selectedRange,
   selectedStrings,
@@ -28,6 +29,10 @@ type Where = { track: number; measure: number; beat: number; string: number }
  */
 export class Editor {
   document = $state<DocumentState | null>(null)
+  /**
+   * The track the selection is in: where keys, paste and the track fields act. With several tracks
+   * on screen, selecting in another one moves it there.
+   */
   track = $state(0)
   selection = $state<Selection | null>(null)
   message = $state<Message | null>(null)
@@ -87,9 +92,13 @@ export class Editor {
     this.message = null
   }
 
-  /** Selects a spot; with `extend`, selects the beats from the current spot to it instead. */
-  select(selection: Selection, { extend = false }: { extend?: boolean } = {}): void {
-    const current = this.selection
+  /**
+   * Selects a spot, in `track` when given; with `extend`, selects the beats from the current spot to
+   * it instead. A range stays in one track, so extending into another track selects the spot alone.
+   */
+  select(selection: Selection, { extend = false, track = this.track }: { extend?: boolean; track?: number } = {}): void {
+    const current = track === this.track ? this.selection : null
+    this.track = track
     this.selection =
       extend && current
         ? {
@@ -101,8 +110,12 @@ export class Editor {
     this.#typed = null
   }
 
-  /** Selects the rectangle dragged from one spot to another: the beats between, and the strings between. */
-  dragSelect({ from, to }: { from: Selection; to: Selection }): void {
+  /**
+   * Selects the rectangle dragged from one spot to another: the beats between, and the strings
+   * between. A drag stays in the track it started in.
+   */
+  dragSelect({ from, to, track = this.track }: { from: Selection; to: Selection; track?: number }): void {
+    this.track = track
     this.selection = { ...to, anchor: { measure: from.measure, beat: from.beat }, anchorString: from.string }
     this.#typed = null
   }
@@ -125,6 +138,8 @@ export class Editor {
         return this.#move(command.direction)
       case 'extend':
         return this.#extend(command.direction)
+      case 'switchTrack':
+        return this.#switchTrack(command.step)
       case 'copy':
         return this.copy()
       case 'cut':
@@ -205,8 +220,9 @@ export class Editor {
   }
 
   /** Right-clicking inside the selection keeps it (the menu acts on all of it); elsewhere it selects the spot. */
-  selectForMenu(target: Selection): void {
-    if (!isBeatSelected({ selection: this.selection, measure: target.measure, beat: target.beat })) this.select(target)
+  selectForMenu(target: Selection, { track = this.track }: { track?: number } = {}): void {
+    const isInside = track === this.track && isBeatSelected({ selection: this.selection, measure: target.measure, beat: target.beat })
+    if (!isInside) this.select(target, { track })
   }
 
   /** The time signature of the selected measure (the first one when nothing is selected). */
@@ -430,6 +446,16 @@ export class Editor {
         selection: this.selection ?? FIRST_NOTE,
         direction,
       })
+    }
+    this.#typed = null
+    return Promise.resolve()
+  }
+
+  #switchTrack(step: -1 | 1): Promise<void> {
+    if (this.document) {
+      const moved = moveToTrack({ score: this.document.score, track: this.track, selection: this.selection ?? FIRST_NOTE, step })
+      this.track = moved.track
+      this.selection = moved.selection
     }
     this.#typed = null
     return Promise.resolve()

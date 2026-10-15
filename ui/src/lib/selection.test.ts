@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
 import type { Score } from './score-types'
-import { clampSelection, extendSelection, FIRST_NOTE, isBeatSelected, moveSelection, nextFret, selectedRange, selectedStrings } from './selection'
+import { clampSelection, extendSelection, FIRST_NOTE, isBeatSelected, moveSelection, moveToTrack, nextFret, selectedRange, selectedStrings } from './selection'
+import type { Selection } from './selection'
+import { durationTicks } from './tab-layout'
 
 const score = demo as Score
 const beatsIn = (measure: number) => score.tracks[0]!.measures[measure]!.voices[0]!.beats.length
@@ -146,5 +148,37 @@ describe('nextFret', () => {
 
   it('should not make "05" out of a zero followed by a digit', () => {
     expect(nextFret({ previous: { fret: 0, at: 1000 }, digit: 5, now: 1200 })).toBe(5)
+  })
+})
+
+describe('moveToTrack', () => {
+  const move = (track: number, selection: Selection, step: -1 | 1) => moveToTrack({ score, track, selection, step })
+  const startOf = (track: number, beat: number) =>
+    score.tracks[track]!.measures[0]!.voices[0]!.beats.slice(0, beat).reduce((sum, b) => sum + durationTicks(b.duration), 0)
+
+  it('should land on the beat of the other track that sounds at the same moment', () => {
+    const { track, selection } = move(0, { measure: 0, beat: 5, string: 2 }, 1)
+    expect(track).toBe(1)
+    expect(selection.measure).toBe(0)
+    // Guitar beat 5 is the sixth eighth note; it sounds during the third bass quarter.
+    expect(startOf(0, 5)).toBe(80)
+    expect(selection.beat).toBe(2)
+    expect(startOf(1, 2)).toBe(64)
+  })
+
+  it('should keep the string when the other track has it, else take its lowest', () => {
+    expect(move(0, { measure: 0, beat: 0, string: 2 }, 1).selection.string).toBe(2)
+    expect(move(0, { measure: 0, beat: 0, string: 6 }, 1).selection.string).toBe(4)
+  })
+
+  it('should leave a range behind', () => {
+    const { selection } = move(0, { measure: 0, beat: 2, string: 1, anchor: { measure: 0, beat: 0 } }, 1)
+    expect(selection.anchor).toBeUndefined()
+  })
+
+  it('should stay put at the first and the last track', () => {
+    const spot = { measure: 1, beat: 0, string: 1 }
+    expect(move(0, spot, -1)).toEqual({ track: 0, selection: spot })
+    expect(move(1, spot, 1)).toEqual({ track: 1, selection: spot })
   })
 })

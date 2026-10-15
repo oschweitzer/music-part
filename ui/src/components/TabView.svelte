@@ -1,6 +1,6 @@
 <script lang="ts">
   import { isBeatSelected, selectedStrings, type Selection } from '../lib/selection'
-  import { hitTest, METRICS } from '../lib/tab-layout'
+  import { clipLayout, hitTest, METRICS } from '../lib/tab-layout'
   import type { BeatLayout, CursorPosition, TabLayout } from '../lib/tab-layout'
 
   let {
@@ -12,6 +12,7 @@
     ondrag,
     onseek,
     onmenu,
+    visibleX = null,
   }: {
     layout: TabLayout
     label: string
@@ -24,7 +25,11 @@
     onseek?: (tick: number) => void
     /** Asked to open the menu of a spot, at a position of the window. */
     onmenu?: (target: Selection, at: { x: number; y: number }) => void
+    /** Only the measures across this band of x are drawn, for a line much wider than the screen. */
+    visibleX?: { left: number; right: number } | null
   } = $props()
+
+  const drawn = $derived(visibleX ? clipLayout({ layout, left: visibleX.left, right: visibleX.right }) : layout)
 
   /** What is under the mouse. The drawing is scaled if the page squeezes it, so map back to drawing units. */
   function targetAt(event: MouseEvent) {
@@ -135,7 +140,7 @@
   role="img"
   aria-label="Tablature of {label}"
 >
-  {#each layout.systems as system, systemIndex (system.y)}
+  {#each drawn.systems as system, systemIndex (system.y)}
     {@const staffMid = (system.staffTop + system.staffBottom) / 2}
     {@const letterGap = Math.min(14, (system.staffBottom - system.staffTop) / 3)}
     <g class="system">

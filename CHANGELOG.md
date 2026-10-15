@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- UI: a rows view of the tracks, one under the other on the same time axis like a DAW, switched
+  with the new `Tabs` / `Rows` toggle in the toolbar (the choice is remembered). Each row has a
+  header with mute, solo, remove and fold, rows share their barlines and one playback cursor, and
+  only what is on screen is drawn, so scores with many tracks stay readable.
+- UI: `Alt+Up` and `Alt+Down` move the selection to the previous or next track.
+- UI: a track menu next to the track fields picks the track to edit, and the track tabs scroll
+  sideways when there are too many to fit.
 - Playback: palm mutes, harmonics, hammer-ons, pull-offs and slide landings now have their own
   tone, not only a different volume: palm mutes are dull and stop short, harmonics are pure,
   legato notes swell in without the pick attack. It works with the recordings too.

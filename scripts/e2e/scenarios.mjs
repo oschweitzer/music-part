@@ -61,6 +61,29 @@ const pressTimes = async (page, key, times) => {
 /** Waits for the UI to have caught up with what the backend holds. */
 const settle = () => sleep(150)
 
+/** Shows the tracks as rows, runs `steps`, and goes back to tabs so the next scenarios start as usual. */
+async function inRows(page, steps) {
+  try {
+    await clickButton(page, 'Rows')
+    await page.waitFor(`document.querySelectorAll('section.row').length > 0`, { what: 'the rows' })
+    await steps()
+  } finally {
+    await page.eval(`localStorage.removeItem('music-part-view')`)
+  }
+}
+
+/** Clicks in the middle of the first element matching `selector`. */
+async function clickOn(page, selector) {
+  const point = await page.eval(`(() => {
+    const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`)
+  await page.mouseClick(point.x, point.y)
+}
+
+const rowLabels = (page) => page.eval(`[...document.querySelectorAll('section.row')].map(r => r.getAttribute('aria-label'))`)
+const selectedRow = (page) => page.eval(`document.querySelector('section.row.selected')?.getAttribute('aria-label') ?? null`)
+
 // ---- scenarios -----------------------------------------------------------------------------
 
 export const scenarios = [
@@ -850,6 +873,179 @@ export const scenarios = [
 
       assert.equal(await isDirty(page), false, 'exporting is not saving')
       assert.equal((await document_(context)).path, null)
+    },
+  ],
+
+  [
+    'the view switch shows every track in a row, and the choice is kept',
+    async (context) => {
+      const { page } = context
+      await inRows(page, async () => {
+        assert.deepEqual(await rowLabels(page), ['Track 1: Guitar', 'Track 2: Bass'])
+        assert.equal(await exists(page, '.track-tab'), false, 'the row headers replace the tabs')
+        assert.equal(await page.eval(`document.querySelectorAll('section.row svg.tab').length`), 2)
+        assert.equal(await page.eval(`localStorage.getItem('music-part-view')`), 'rows')
+
+        // Measure 3 starts at the same x in both rows: they share their barlines.
+        const thirdMeasureStarts = await page.eval(`[...document.querySelectorAll('section.row svg.tab')].map(svg => {
+          const bars = [...svg.querySelectorAll('line.bar')]
+          return Math.round(bars[2].getBoundingClientRect().x)
+        })`)
+        assert.equal(thirdMeasureStarts[0], thirdMeasureStarts[1])
+
+        // Moving playback to measure 3 shows one cursor across both rows, on its first beat.
+        const strip = await page.eval(`(() => {
+          const r = document.querySelectorAll('section.row:nth-of-type(2) svg.tab .seek-strip')[2].getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        })()`)
+        await page.mouseClick(strip.x, strip.y)
+        await page.waitFor(`document.querySelector('.playhead .line')`, { what: 'the playback cursor' })
+        const cursor = await page.eval(`(() => {
+          const line = document.querySelector('.playhead .line').getBoundingClientRect()
+          const rows = [...document.querySelectorAll('section.row')].map(r => r.getBoundingClientRect())
+          return { x: line.x + line.width / 2, top: line.top, bottom: line.bottom, rowsTop: rows[0].top, rowsBottom: rows.at(-1).bottom }
+        })()`)
+        assert.ok(cursor.top <= cursor.rowsTop + 1 && cursor.bottom >= cursor.rowsBottom - 1, 'the cursor crosses every row')
+        const offset = cursor.x - thirdMeasureStarts[0]
+        assert.ok(offset > 0 && offset < 40, `the cursor is on the first beat of measure 3 (${offset} px after its barline)`)
+
+        await page.screenshot(join(context.out, 'rows-mode.png'))
+
+        await context.fresh()
+        assert.equal(await page.eval(`document.querySelectorAll('section.row').length`), 2, 'still rows after a restart')
+        assert.equal(await page.eval(`document.querySelector('.view-switch [aria-pressed=true]').textContent.trim()`), 'Rows')
+
+        await clickButton(page, 'Tabs')
+        assert.equal(await exists(page, 'section.row'), false)
+        assert.equal(await page.eval(`document.querySelectorAll('.track-tab').length`), 2)
+      })
+    },
+  ],
+
+  [
+    'clicking in the second row selects there, and typing writes in that track',
+    async (context) => {
+      const { page } = context
+      await inRows(page, async () => {
+        assert.equal(await selectedRow(page), 'Track 1: Guitar')
+        await clickOn(page, 'section.row:nth-of-type(2) svg.tab text.fret')
+        assert.equal(await selectedRow(page), 'Track 2: Bass')
+        assert.equal(await page.eval(`document.querySelectorAll('svg.tab .selection').length`), 1, 'one selection, in the clicked row')
+
+        await page.press('9')
+        await settle()
+        const doc = await document_(context)
+        assert.deepEqual(doc.score.tracks[1].measures[0].voices[0].beats[0].notes.map((n) => n.fret), [9])
+        assert.equal(doc.score.tracks[0].measures[0].voices[0].beats[0].notes[0].fret, 0, 'the guitar is untouched')
+
+        // Alt+Up and Alt+Down move the selection to the track above and below.
+        await page.press('ArrowUp', ['alt'])
+        assert.equal(await selectedRow(page), 'Track 1: Guitar')
+        await page.press('ArrowDown', ['alt'])
+        assert.equal(await selectedRow(page), 'Track 2: Bass')
+      })
+    },
+  ],
+
+  [
+    'a drag in a row selects in that row only, and paste writes into the selected track',
+    async (context) => {
+      const { page } = context
+      await inRows(page, async () => {
+        const points = await page.eval(`(() => {
+          const frets = [...document.querySelectorAll('section.row:nth-of-type(1) svg.tab text.fret')]
+          const center = (t) => { const r = t.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } }
+          const bass = document.querySelector('section.row:nth-of-type(2) svg.tab').getBoundingClientRect()
+          return { from: center(frets[0]), next: center(frets[1]), bassY: bass.y + bass.height / 2 }
+        })()`)
+        // Drag along the guitar to the next beat, then down into the bass row, and let go there.
+        const mouse = (type, { x, y }, buttons) =>
+          page.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 })
+        const { from, next, bassY } = points
+        await mouse('mouseMoved', from, 0)
+        await mouse('mousePressed', from, 1)
+        await mouse('mouseMoved', { x: next.x, y: from.y }, 1)
+        await mouse('mouseMoved', { x: next.x, y: bassY }, 1)
+        await mouse('mouseReleased', { x: next.x, y: bassY }, 0)
+        await settle()
+        assert.equal(await selectedRow(page), 'Track 1: Guitar', 'the drag stays in the row it started in')
+        assert.equal(await page.eval(`document.querySelectorAll('section.row:nth-of-type(1) .beat-highlight').length`), 2)
+        assert.equal(await page.eval(`document.querySelectorAll('section.row:nth-of-type(2) .beat-highlight').length`), 0)
+
+        // Two guitar eighths pasted on the first bass quarter.
+        await page.press('c', ['ctrl'])
+        await clickOn(page, 'section.row:nth-of-type(2) svg.tab text.fret')
+        await page.press('v', ['ctrl'])
+        await settle()
+        const doc = await document_(context)
+        const bass = doc.score.tracks[1].measures[0].voices[0].beats
+        assert.deepEqual(bass.slice(0, 2).map((b) => b.duration.value), ['Eighth', 'Eighth'])
+        assert.equal(beatsOf(doc, 0).length, 8, 'the guitar is untouched')
+      })
+    },
+  ],
+
+  [
+    'mute, solo and fold from a row header',
+    async ({ page }) => {
+      await inRows(page, async () => {
+        const lastMix = () => page.eval(`window.__e2e.audio.filter(c => c.command === 'set_audible').at(-1)?.args.audible`)
+        await clickButton(page, 'Mute Bass')
+        assert.deepEqual(await lastMix(), [true, false])
+        await clickButton(page, 'Solo Bass')
+        assert.deepEqual(await lastMix(), [false, true], 'a soloed track plays alone, muted or not')
+        await clickButton(page, 'Solo Bass')
+        await clickButton(page, 'Mute Bass')
+        assert.deepEqual(await lastMix(), [true, true])
+
+        await clickButton(page, 'Fold Guitar')
+        assert.equal(await page.eval(`document.querySelectorAll('section.row svg.tab').length`), 1, 'a folded row is only its header')
+        await clickButton(page, 'Unfold Guitar')
+        assert.equal(await page.eval(`document.querySelectorAll('section.row svg.tab').length`), 2)
+      })
+    },
+  ],
+
+  [
+    'the track menu picks the track to edit, in tabs and in rows',
+    async ({ page }) => {
+      const pick = (index) =>
+        page.eval(`(() => { const s = document.querySelector('select[aria-label="Track to edit"]'); s.value = '${index}'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await pick(1)
+      await settle()
+      assert.match(await text(page, '.track-tab.active .name'), /^Bass/)
+      assert.equal(await page.eval(`document.querySelector('input[aria-label="Name of this track"]').value`), 'Bass')
+
+      await inRows(page, async () => {
+        await pick(0)
+        await settle()
+        assert.equal(await selectedRow(page), 'Track 1: Guitar')
+      })
+    },
+  ],
+
+  [
+    'with many tracks only the rows on screen are drawn, and Alt+Down scrolls to the next track',
+    async (context) => {
+      const { page, backend } = context
+      for (let i = 0; i < 22; i++) await backend.request('edit_score', { edit: { type: 'addTrack', instrument: 'Guitar' } })
+      await page.eval(`location.reload()`)
+      await page.waitFor(`document.querySelector('svg.tab line.string')`, { what: 'the score to appear' })
+
+      await inRows(page, async () => {
+        const drawn = await page.eval(`document.querySelectorAll('section.row').length`)
+        assert.ok(drawn > 0 && drawn < 24, `${drawn} of 24 rows are drawn`)
+
+        for (let i = 0; i < 23; i++) await page.press('ArrowDown', ['alt'])
+        await settle()
+        assert.match(await selectedRow(page), /^Track 24: /)
+        const isInView = await page.eval(`(() => {
+          const row = document.querySelector('section.row.selected').getBoundingClientRect()
+          const view = document.querySelector('.scroller').getBoundingClientRect()
+          return row.top >= view.top - 1 && row.bottom <= view.bottom + 1
+        })()`)
+        assert.ok(isInView, 'the selected row was scrolled into view')
+      })
     },
   ],
 ]
