@@ -10,6 +10,7 @@
     selection = null,
     onselect,
     onseek,
+    onmenu,
   }: {
     layout: TabLayout
     label: string
@@ -18,6 +19,8 @@
     onselect?: (target: Selection, options: { extend: boolean }) => void
     /** Asked to move playback to a position in 1/128 of a whole note. */
     onseek?: (tick: number) => void
+    /** Asked to open the menu of a spot, at a position of the window. */
+    onmenu?: (target: Selection, at: { x: number; y: number }) => void
   } = $props()
 
   /** What is under the mouse. The drawing is scaled if the page squeezes it, so map back to drawing units. */
@@ -68,6 +71,14 @@
     if (target) onselect({ measure: target.measure, beat: target.beat, string: target.string }, { extend: event.shiftKey })
   }
 
+  function handleContextMenu(event: MouseEvent) {
+    if (!onmenu) return
+    const target = targetAt(event)
+    if (!target) return
+    event.preventDefault()
+    onmenu({ measure: target.measure, beat: target.beat, string: target.string }, { x: event.clientX, y: event.clientY })
+  }
+
   /** Double-clicking a beat moves playback there. */
   function handleDoubleClick(event: MouseEvent) {
     if (!onseek) return
@@ -112,6 +123,7 @@
   class:editable={onselect !== undefined}
   onpointerdown={handlePointerDown}
   onpointermove={handlePointerMove}
+  oncontextmenu={handleContextMenu}
   onclick={handleClick}
   ondblclick={handleDoubleClick}
   width={layout.width}

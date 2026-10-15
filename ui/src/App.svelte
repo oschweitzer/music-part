@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte'
   import EditBar from './components/EditBar.svelte'
   import TabView from './components/TabView.svelte'
   import { createDocumentApi, type ExportFormat } from './lib/document-api'
@@ -7,6 +8,7 @@
   import { INSTRUMENTS, instrumentLabel } from './lib/instruments'
   import { interpretKey } from './lib/keymap'
   import type { Instrument } from './lib/score-types'
+  import type { Selection } from './lib/selection'
   import { formatTuning } from './lib/tuning'
   import { Playback } from './lib/playback.svelte'
   import { formatClock, ticksToSeconds, totalTicks } from './lib/score-time'
@@ -77,6 +79,14 @@
   })
 
   function handleKeydown(event: KeyboardEvent) {
+    if (menu) {
+      menu = null
+      // Escape only closes the menu; it must not also clear the selection.
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        return
+      }
+    }
     const target = event.target as HTMLElement
     // Typing in a field (the tempo) is not editing the score.
     if (target.closest('input, textarea, select, [contenteditable]')) return
@@ -128,6 +138,33 @@
   }
 
   // Keep focus where it was, so that typing a fret still works after clicking a toolbar button.
+  // The menu of a right-click on the tablature acts on the selection.
+  let menu: { x: number; y: number } | null = $state(null)
+
+  function openMenu(target: Selection, at: { x: number; y: number }) {
+    editor.selectForMenu(target)
+    menu = at
+  }
+
+  const menuItems = $derived.by((): MenuItem[] => {
+    const measures = editor.selectedMeasures
+    const count = measures?.count ?? 1
+    return [
+      { label: 'Cut', onselect: () => void editor.run({ type: 'cut' }) },
+      { label: 'Copy', onselect: () => void editor.run({ type: 'copy' }) },
+      { label: 'Paste', disabled: !editor.clipboard, onselect: () => void editor.run({ type: 'paste' }) },
+      'separator',
+      { label: 'Insert measure before', onselect: () => void editor.insertMeasure({ before: true }) },
+      { label: 'Insert measure after', onselect: () => void editor.insertMeasure() },
+      {
+        label: count === 1 ? `Delete measure ${(measures?.from ?? 0) + 1}` : `Delete ${count} measures`,
+        danger: true,
+        disabled: !editor.canDeleteMeasures,
+        onselect: () => void editor.deleteMeasure(),
+      },
+    ]
+  })
+
   function keepFocus(event: MouseEvent) {
     event.preventDefault()
   }
@@ -312,11 +349,16 @@
             selection={editor.selection}
             onselect={editor.canEdit ? (target, options) => editor.select(target, options) : undefined}
             onseek={(tick) => playback.seek(tick)}
+            onmenu={editor.canEdit ? openMenu : undefined}
           />
         {/if}
       </div>
     {/if}
   </main>
+
+  {#if menu}
+    <ContextMenu items={menuItems} x={menu.x} y={menu.y} onclose={() => (menu = null)} />
+  {/if}
 </div>
 
 <style>

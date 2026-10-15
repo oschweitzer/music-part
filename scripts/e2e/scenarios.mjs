@@ -634,6 +634,69 @@ export const scenarios = [
   ],
 
   [
+    'a right-click menu deletes the measures of the selected beats, and undo brings them back',
+    async (context) => {
+      const { page } = context
+      const measureCounts = async () => (await document_(context)).score.tracks.map((t) => t.measures.length)
+      const before = await measureCounts()
+      const firstMeasureBeats = beatsOf(await document_(context), 0).length
+
+      // From the first beat to the first beat of the next measure: two measures.
+      await clickFret(page, 0)
+      for (let i = 0; i < firstMeasureBeats; i++) await page.press('ArrowRight', ['shift'])
+
+      const point = await page.eval(`(() => {
+        const r = document.querySelector('svg.tab .beat-highlight').getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })()`)
+      await page.mouseRightClick(point.x, point.y)
+      await page.waitFor(`document.querySelector('.context-menu')`, { what: 'the menu opens' })
+      assert.equal(await page.eval(`document.querySelectorAll('.context-menu hr').length`), 1)
+
+      // Escape closes the menu and keeps the selection.
+      await page.press('Escape')
+      assert.equal(await page.eval(`Boolean(document.querySelector('.context-menu'))`), false)
+      assert.ok((await page.eval(`document.querySelectorAll('svg.tab .beat-highlight').length`)) >= 2, 'the range is still selected')
+
+      await page.mouseRightClick(point.x, point.y)
+      await page.waitFor(`document.querySelector('.context-menu')`)
+      await clickButton(page, 'Delete 2 measures')
+      await settle()
+      assert.deepEqual(await measureCounts(), before.map((n) => n - 2))
+      assert.equal(await page.eval(`Boolean(document.querySelector('.context-menu'))`), false, 'choosing an item closes the menu')
+
+      await page.press('z', ['ctrl'])
+      await settle()
+      assert.deepEqual(await measureCounts(), before)
+    },
+  ],
+
+  [
+    'Ctrl+Delete deletes the selected measure, and the menu inserts one before it',
+    async (context) => {
+      const { page } = context
+      const count = async () => (await document_(context)).score.tracks[0].measures.length
+      const before = await count()
+
+      await clickFret(page, 0)
+      await page.press('Delete', ['ctrl'])
+      await settle()
+      assert.equal(await count(), before - 1)
+
+      await clickFret(page, 0)
+      const point = await page.eval(`(() => {
+        const r = document.querySelector('svg.tab text.fret').getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })()`)
+      await page.mouseRightClick(point.x, point.y)
+      await page.waitFor(`document.querySelector('.context-menu')`)
+      await clickButton(page, 'Insert measure before')
+      await settle()
+      assert.equal(await count(), before)
+    },
+  ],
+
+  [
     'a MusicXML file opens with its title, tempo, tuning and tied notes',
     async (context) => {
       const { page, out } = context

@@ -45,8 +45,11 @@ pub enum Edit {
     InsertMeasure {
         at: usize,
     },
+    /// Deletes `count` measures from `index` on, in every track. The last measure stays.
     DeleteMeasure {
         index: usize,
+        #[serde(default = "one")]
+        count: usize,
     },
     SetTempo {
         bpm: u16,
@@ -229,7 +232,7 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             set_duration(beats, beat, duration)
         }
         Edit::InsertMeasure { at } => insert_measure(score, at),
-        Edit::DeleteMeasure { index } => delete_measure(score, index),
+        Edit::DeleteMeasure { index, count } => delete_measures(score, index, count),
         Edit::SetTempo { bpm } => {
             if !(1..=999).contains(&bpm) {
                 return Err(EditError::InvalidTempo);
@@ -754,23 +757,27 @@ fn insert_measure(score: &mut Score, at: usize) -> Result<(), EditError> {
     Ok(())
 }
 
-fn delete_measure(score: &mut Score, index: usize) -> Result<(), EditError> {
+fn one() -> usize {
+    1
+}
+
+fn delete_measures(score: &mut Score, index: usize, count: usize) -> Result<(), EditError> {
     let longest = score
         .tracks
         .iter()
         .map(|t| t.measures.len())
         .max()
         .unwrap_or(0);
-    if index >= longest {
+    let end = index.saturating_add(count);
+    if count == 0 || end > longest {
         return Err(EditError::OutOfRange("measure"));
     }
-    if longest == 1 {
+    if count == longest {
         return Err(EditError::LastMeasure);
     }
     for track in &mut score.tracks {
-        if index < track.measures.len() {
-            track.measures.remove(index);
-        }
+        let from = index.min(track.measures.len());
+        track.measures.drain(from..end.min(track.measures.len()));
     }
     Ok(())
 }
@@ -908,7 +915,21 @@ mod tests {
                 EditError::OutOfRange("measure"),
             ),
             (
-                Edit::DeleteMeasure { index: 99 },
+                Edit::DeleteMeasure {
+                    index: 99,
+                    count: 1,
+                },
+                EditError::OutOfRange("measure"),
+            ),
+            (
+                Edit::DeleteMeasure { index: 0, count: 0 },
+                EditError::OutOfRange("measure"),
+            ),
+            (
+                Edit::DeleteMeasure {
+                    index: usize::MAX,
+                    count: 2,
+                },
                 EditError::OutOfRange("measure"),
             ),
         ];
@@ -1037,13 +1058,53 @@ mod tests {
     fn a_measure_is_deleted_from_every_track_but_never_the_last() {
         let mut score = blank_score("t");
         for _ in 0..3 {
-            apply_edit(&mut score, &Edit::DeleteMeasure { index: 0 }).unwrap();
+            apply_edit(&mut score, &Edit::DeleteMeasure { index: 0, count: 1 }).unwrap();
         }
         assert_eq!(score.tracks[0].measures.len(), 1);
         assert_eq!(
-            apply_edit(&mut score, &Edit::DeleteMeasure { index: 0 }),
+            apply_edit(&mut score, &Edit::DeleteMeasure { index: 0, count: 1 }),
             Err(EditError::LastMeasure)
         );
+    }
+
+    #[test]
+    fn several_measures_are_deleted_at_once_from_every_track() {
+        let mut score = demo_score();
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Bass,
+            },
+        )
+        .unwrap();
+        let before: Vec<usize> = score.tracks.iter().map(|t| t.measures.len()).collect();
+        let kept_last = score.tracks[0].measures.last().cloned();
+
+        apply_edit(&mut score, &Edit::DeleteMeasure { index: 1, count: 2 }).unwrap();
+
+        let after: Vec<usize> = score.tracks.iter().map(|t| t.measures.len()).collect();
+        assert_eq!(after, before.iter().map(|n| n - 2).collect::<Vec<_>>());
+        assert_eq!(score.tracks[0].measures.last().cloned(), kept_last);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn deleting_every_measure_is_refused_and_changes_nothing() {
+        let mut score = demo_score();
+        let count = score.tracks[0].measures.len();
+        let before = score.clone();
+
+        assert_eq!(
+            apply_edit(&mut score, &Edit::DeleteMeasure { index: 0, count }),
+            Err(EditError::LastMeasure)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_measure_deletion_without_a_count_deletes_one_measure() {
+        let edit: Edit = serde_json::from_str(r#"{"type":"deleteMeasure","index":3}"#).unwrap();
+        assert_eq!(edit, Edit::DeleteMeasure { index: 3, count: 1 });
     }
 
     #[test]
@@ -1667,6 +1728,7 @@ mod tests {
                     },
                     6 => Edit::DeleteMeasure {
                         index: next(score.tracks[0].measures.len() + if wild { 8 } else { 0 }),
+                        count: 1 + next(if wild { 3 } else { 1 }),
                     },
                     7 => Edit::SetTied {
                         track,

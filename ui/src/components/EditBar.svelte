@@ -148,8 +148,8 @@
     <button
       type="button"
       class="tool text"
-      title="Delete this measure"
-      disabled={!canEdit || !editor.selection}
+      title="Delete this measure, or every measure of the selected beats (Ctrl+Delete)"
+      disabled={!canEdit || !editor.canDeleteMeasures}
       onmousedown={keepFocus}
       onclick={() => editor.deleteMeasure()}
     >

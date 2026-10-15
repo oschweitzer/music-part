@@ -187,8 +187,67 @@ describe('Editor', () => {
       editor.select({ measure: 5, beat: 0, string: 1 })
       await editor.deleteMeasure()
 
-      expect(edits).toEqual([{ type: 'deleteMeasure', index: 5 }])
+      expect(edits).toEqual([{ type: 'deleteMeasure', index: 5, count: 1 }])
       expect(editor.selection).not.toBeNull()
+    })
+
+    it('should delete every measure a range of beats touches and drop the range', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 1, beat: 0, string: 2 })
+      editor.select({ measure: 3, beat: 0, string: 2 }, { extend: true })
+      await editor.deleteMeasure()
+
+      expect(edits).toEqual([{ type: 'deleteMeasure', index: 1, count: 3 }])
+      expect(editor.selection).toEqual({ measure: 1, beat: 0, string: 2 })
+    })
+
+    it('should refuse to delete all the measures', async () => {
+      const { api } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      const last = editor.document!.score.tracks[0]!.measures.length - 1
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      expect(editor.canDeleteMeasures).toBe(true)
+      editor.select({ measure: last, beat: 0, string: 1 }, { extend: true })
+      expect(editor.canDeleteMeasures).toBe(false)
+    })
+
+    it('should insert a measure before the selection', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 2, beat: 1, string: 3 })
+      await editor.insertMeasure({ before: true })
+
+      expect(edits).toEqual([{ type: 'insertMeasure', at: 2 }])
+      expect(editor.selection).toEqual({ measure: 2, beat: 0, string: 3 })
+    })
+
+    it('should insert a measure after the end of a range', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 1, beat: 0, string: 1 })
+      editor.select({ measure: 2, beat: 0, string: 1 }, { extend: true })
+      await editor.insertMeasure()
+
+      expect(edits).toEqual([{ type: 'insertMeasure', at: 3 }])
+    })
+
+    it('should keep a range when the menu opens inside it, and select the spot otherwise', async () => {
+      const { api } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 1, beat: 0, string: 1 })
+      editor.select({ measure: 3, beat: 0, string: 1 }, { extend: true })
+
+      editor.selectForMenu({ measure: 2, beat: 0, string: 4 })
+      expect(editor.selectedMeasures).toEqual({ from: 1, count: 3 })
+
+      editor.selectForMenu({ measure: 5, beat: 0, string: 4 })
+      expect(editor.selectedMeasures).toEqual({ from: 5, count: 1 })
     })
 
     it('should change the tempo', async () => {

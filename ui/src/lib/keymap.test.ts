@@ -43,6 +43,7 @@ describe('interpretKey', () => {
     expect(press('o', { metaKey: true })).toEqual({ type: 'open' })
     expect(press('n', { ctrlKey: true })).toEqual({ type: 'new' })
     expect(press('Enter', { ctrlKey: true })).toEqual({ type: 'insertMeasure' })
+    expect(press('Delete', { ctrlKey: true })).toEqual({ type: 'deleteMeasure' })
   })
 
   it('should not turn a command shortcut into typing', () => {

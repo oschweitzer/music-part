@@ -8,7 +8,7 @@ export type Edit =
   | { type: 'removeNote'; track: number; measure: number; beat: number; string: number }
   | { type: 'setDuration'; track: number; measure: number; beat: number; duration: Duration }
   | { type: 'insertMeasure'; at: number }
-  | { type: 'deleteMeasure'; index: number }
+  | { type: 'deleteMeasure'; index: number; count: number }
   | { type: 'setTempo'; bpm: number }
   | { type: 'setTied'; track: number; measure: number; beat: number; string: number; tied: boolean }
   | { type: 'setTechnique'; track: number; measure: number; beat: number; string: number; technique: Technique | null }

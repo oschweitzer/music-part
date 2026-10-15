@@ -14,6 +14,7 @@ export type Command =
   | { type: 'tie' }
   | { type: 'technique'; technique: Technique }
   | { type: 'insertMeasure' }
+  | { type: 'deleteMeasure' }
   | { type: 'undo' }
   | { type: 'redo' }
   | { type: 'save' }
@@ -71,6 +72,7 @@ export function interpretKey(input: KeyInput): Command | null {
     if (lower === 'o') return { type: 'open' }
     if (lower === 'n') return { type: 'new' }
     if (key === 'Enter') return { type: 'insertMeasure' }
+    if (key === 'Delete' || key === 'Backspace') return { type: 'deleteMeasure' }
     return null
   }
   if (altKey) return null

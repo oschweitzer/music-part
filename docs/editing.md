@@ -23,6 +23,7 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | `L`                         | Ties the note to the one before it on the same string (again: unties)         |
 | `B` `M` `/`                 | Bend, palm mute, slide on the note (again: clears). Others are in the toolbar |
 | `Ctrl+Enter`                | Inserts a measure after the selected one                                      |
+| `Ctrl+Delete`               | Deletes the selected measure, or all the measures a range of beats touches    |
 | `Ctrl+Z`                    | Undo                                                                          |
 | `Ctrl+Shift+Z` / `Ctrl+Y`   | Redo                                                                          |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S`  | New, open, save. `Ctrl+Shift+S` saves under a new name                        |
@@ -71,6 +72,10 @@ A measure is always exactly full. Changing the length of a beat keeps it that wa
 - Ties and techniques apply to a note; on a rest the app asks for a note first.
 - Inserting or deleting a measure applies to every track, so tracks always have the same length. The
   last measure cannot be deleted.
+- Right-click the tablature for a menu: cut, copy, paste, insert a measure before or after, and
+  delete the measure. When a range of beats is selected (Shift+arrows, or dragging the mouse) and
+  the click is inside it, the menu acts on the whole range: "Delete 3 measures" removes every
+  measure the range touches, in one undo step. A right-click outside the range selects that spot first.
 
 ## How techniques sound
 

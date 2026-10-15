@@ -129,6 +129,12 @@ export async function launchBrowser({ width = 1200, height = 800, port = 9444 } 
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
     },
 
+    async mouseRightClick(x, y) {
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'right', buttons: 2, clickCount: 1 })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'right', buttons: 0, clickCount: 1 })
+    },
+
     /** Presses the mouse at one point, moves to the other with the button down, and releases. */
     async mouseDrag(from, to) {
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y })

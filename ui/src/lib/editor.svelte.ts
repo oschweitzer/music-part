@@ -7,6 +7,7 @@ import {
   clampSelection,
   extendSelection,
   FIRST_NOTE,
+  isBeatSelected,
   moveSelection,
   nextFret,
   selectedRange,
@@ -134,6 +135,8 @@ export class Editor {
         }))
       case 'insertMeasure':
         return this.insertMeasure()
+      case 'deleteMeasure':
+        return this.deleteMeasure()
       case 'undo':
         return this.undo()
       case 'redo':
@@ -155,18 +158,43 @@ export class Editor {
     }
   }
 
-  insertMeasure(): Promise<void> {
-    const selection = this.selection
-    const at = (selection?.measure ?? this.#measureCount() - 1) + 1
+  /** The measures the selection touches: a range of beats covers every measure it passes through. */
+  get selectedMeasures(): { from: number; count: number } | null {
+    if (!this.selection) return null
+    const range = selectedRange(this.selection)
+    const from = range?.from.measure ?? this.selection.measure
+    const to = range?.to.measure ?? from
+    return { from, count: to - from + 1 }
+  }
+
+  /** A score keeps at least one measure, so the selection cannot cover all of them. */
+  get canDeleteMeasures(): boolean {
+    const measures = this.selectedMeasures
+    return measures !== null && measures.count < this.#measureCount()
+  }
+
+  /** Inserts an empty measure after the selection (before it with `before`) and moves onto it. */
+  insertMeasure({ before = false }: { before?: boolean } = {}): Promise<void> {
+    const measures = this.selectedMeasures
+    const at = measures ? (before ? measures.from : measures.from + measures.count) : this.#measureCount()
     return this.#send({ type: 'insertMeasure', at }, () => {
-      this.selection = { ...clampSelection({ score: this.document!.score, track: this.track, selection }), measure: at, beat: 0 }
+      this.selection = { measure: at, beat: 0, string: this.selection?.string ?? 1 }
     })
   }
 
+  /** Deletes the selected measure, or every measure a range of beats touches, in every track. */
   deleteMeasure(): Promise<void> {
-    const index = this.selection?.measure
-    if (index === undefined) return Promise.resolve()
-    return this.#send({ type: 'deleteMeasure', index })
+    const measures = this.selectedMeasures
+    if (!measures) return Promise.resolve()
+    return this.#send({ type: 'deleteMeasure', index: measures.from, count: measures.count }, () => {
+      // The range is gone; the selection falls on the measure that took its place (or the last).
+      this.selection = { measure: measures.from, beat: 0, string: this.selection?.string ?? 1 }
+    })
+  }
+
+  /** Right-clicking inside the selection keeps it (the menu acts on all of it); elsewhere it selects the spot. */
+  selectForMenu(target: Selection): void {
+    if (!isBeatSelected({ selection: this.selection, measure: target.measure, beat: target.beat })) this.select(target)
   }
 
   /** The time signature of the selected measure (the first one when nothing is selected). */

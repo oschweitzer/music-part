@@ -79,6 +79,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Playback is louder: the synthesizer gain went from 0.2 to 0.6.
+- Editing: right-click the tablature for a menu (cut, copy, paste, insert a measure before or
+  after, delete measures), and `Ctrl+Delete` to delete measures. A range of beats deletes every
+  measure it touches, in one undo step. `score-model`: `DeleteMeasure` takes a `count`.
 - Editing: drag the mouse over several beats to select them, then Delete, Ctrl+C or Ctrl+X.
 - Each track tab has a cross to remove it, replacing the "Remove track" button at the far end of
   the track bar, which was easy to miss.
