@@ -27,7 +27,8 @@ fn fail<T>(message: String) -> Result<T, ScoreError> {
 
 impl Score {
     /// Verifies the invariants the rest of the program relies on: sizes within limits, valid time
-    /// signatures and durations, notes on existing strings, and every voice filling its measure.
+    /// signatures and durations, a sound of the track's instrument, notes on existing strings and
+    /// frets, and every voice filling its measure.
     pub fn validate(&self) -> Result<(), ScoreError> {
         if !(1..=MAX_TEMPO).contains(&self.tempo_bpm) {
             return fail(format!("the tempo must be between 1 and {MAX_TEMPO} bpm"));
@@ -38,6 +39,12 @@ impl Score {
 
         for track in &self.tracks {
             let name = &track.name;
+            if track.sound.instrument() != track.instrument {
+                return fail(format!(
+                    "track \"{name}\" has the sound \"{}\", which is not a sound of its instrument",
+                    track.sound.id()
+                ));
+            }
             if !(1..=MAX_STRINGS).contains(&track.tuning.len()) {
                 return fail(format!(
                     "track \"{name}\" must have between 1 and {MAX_STRINGS} strings"
@@ -99,7 +106,7 @@ impl Score {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{demo_score, Duration, NoteValue, TimeSignature};
+    use crate::{demo_score, Duration, NoteValue, Sound, TimeSignature};
 
     fn error(score: &Score) -> String {
         score.validate().unwrap_err().to_string()
@@ -141,6 +148,17 @@ mod tests {
         let mut score = demo_score();
         score.tracks[0].measures[0].voices[0].beats[0].notes[0].fret = 40;
         assert!(error(&score).contains("fret 40"));
+    }
+
+    #[test]
+    fn a_track_cannot_play_the_sound_of_another_instrument() {
+        let mut score = demo_score();
+        score.tracks[1].sound = Sound::ElectricGuitarDistortion;
+        let message = error(&score);
+        assert!(
+            message.contains("Bass") && message.contains("electric-guitar/distortion"),
+            "{message}"
+        );
     }
 
     #[test]

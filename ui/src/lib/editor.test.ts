@@ -328,6 +328,15 @@ describe('Editor', () => {
       expect(editor.track).toBe(score.tracks.length)
     })
 
+    it('should add a track with the sound picked in the menu', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      await editor.addTrack('ElectricGuitar', 'electric-guitar/distortion')
+
+      expect(edits).toEqual([{ type: 'addTrack', instrument: 'ElectricGuitar', sound: 'electric-guitar/distortion' }])
+    })
+
     it('should remove the current track', async () => {
       const { api, edits } = fakeApi()
       const { editor, playback } = setup({ api })
@@ -596,6 +605,16 @@ describe('Editor', () => {
         { type: 'renameTrack', track: 1, name: 'Walking bass' },
         { type: 'setInstrument', track: 1, instrument: 'Violin' },
       ])
+    })
+
+    it('should change the sound of the current track', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.selectTrack(1)
+      await editor.setSound('bass/slap')
+
+      expect(edits).toEqual([{ type: 'setSound', track: 1, sound: 'bass/slap' }])
     })
   })
 

@@ -48,19 +48,21 @@ when neither exists. CI fetches the file so those tests run there.
 
 ## Sample banks: recordings of real instruments
 
-On top of the General MIDI bank, three instruments play recordings. Each bank is a small
-SoundFont of one instrument from the [FreePats](https://freepats.zenvoid.org/) project, published
-under **CC0 1.0** (public domain, no credit needed). They are fetched like the base bank, into
+On top of the General MIDI bank, three sounds (see [`sounds.md`](sounds.md)) play recordings.
+Each bank is a small SoundFont of one instrument from the [FreePats](https://freepats.zenvoid.org/)
+project, published under **CC0 1.0** (public domain, no credit needed). They are fetched like the base bank, into
 `assets/soundfonts/banks/` (git-ignored), with a pinned checksum for the download and for the file
 inside it. Licence and sources are in [`banks-LICENSE.txt`](../assets/soundfonts/banks-LICENSE.txt).
 
-| Instrument      | File                  | Recording                                    | Keys covered | Size   |
-| --------------- | --------------------- | -------------------------------------------- | ------------ | ------ |
-| Nylon guitar    | `nylon-guitar.sf2`    | Spanish classical guitar                     | 29 to 88     | 19 MB  |
-| Electric guitar | `electric-guitar.sf2` | Fender, clean amp (small version, bridge)    | 35 to 86     | 10 MB  |
-| Electric bass   | `electric-bass.sf2`   | Yamaha RBX, played with the fingers          | 26 to 45     | 4 MB   |
+| Sound                   | File                  | Recording                                 | Keys covered | Size  |
+| ----------------------- | --------------------- | ----------------------------------------- | ------------ | ----- |
+| `guitar/nylon`          | `nylon-guitar.sf2`    | Spanish classical guitar                  | 29 to 88     | 19 MB |
+| `electric-guitar/clean` | `electric-guitar.sf2` | Fender, clean amp (small version, bridge) | 35 to 86     | 10 MB |
+| `bass/finger`           | `electric-bass.sf2`   | Yamaha RBX, played with the fingers       | 26 to 45     | 4 MB  |
 
-The violin has no free recording yet and keeps the General MIDI sound.
+A bank replaces the General MIDI program of one sound only: the other sounds of the same
+instrument (a steel-string guitar, a distorted electric guitar, a slapped bass) and the violin and
+the banjo, which have no free recording yet, keep their General MIDI program.
 
 How it works (`audio-engine::Player::add_bank`):
 
@@ -74,8 +76,8 @@ How it works (`audio-engine::Player::add_bank`):
   the bass, whose recording stops at A2: higher notes go to a second channel of the same track that
   uses the base bank, instead of staying silent. The covered keys are declared in
   `SAMPLE_BANKS` (`audio-engine/src/lib.rs`) and a test checks them against the files.
-- A bank that is missing or broken is reported on the console and skipped: that instrument plays
-  with the General MIDI sound.
+- A bank that is missing or broken is reported on the console and skipped: that sound plays with
+  its General MIDI program.
 - What is not there yet: round-robin, per-string recordings, and technique-specific samples
   (hammer-on, palm mute...). Techniques are still the pitch wheel and velocity tricks of
   [`editing.md`](editing.md).

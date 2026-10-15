@@ -325,6 +325,31 @@ mod tests {
     }
 
     #[test]
+    fn the_sound_of_a_track_is_sent_and_read_with_the_ids_of_the_ui() {
+        let (_app, window) = app();
+        let opened = invoke(&window, "startup", json!({})).unwrap();
+        assert_eq!(
+            opened["document"]["score"]["tracks"][1]["sound"],
+            "bass/finger"
+        );
+
+        let edit = json!({ "type": "setSound", "track": 1, "sound": "bass/slap" });
+        let state = invoke(&window, "edit_score", json!({ "edit": edit })).unwrap();
+        assert_eq!(state["score"]["tracks"][1]["sound"], "bass/slap");
+
+        let add = json!({ "type": "addTrack", "instrument": "ElectricGuitar", "sound": "electric-guitar/distortion" });
+        let state = invoke(&window, "edit_score", json!({ "edit": add })).unwrap();
+        assert_eq!(
+            state["score"]["tracks"][2]["sound"],
+            "electric-guitar/distortion"
+        );
+
+        let wrong = json!({ "type": "setSound", "track": 1, "sound": "violin/standard" });
+        let error = invoke(&window, "edit_score", json!({ "edit": wrong })).unwrap_err();
+        assert_eq!(error, json!("this sound belongs to another instrument"));
+    }
+
+    #[test]
     fn a_malformed_edit_is_an_error_and_not_a_crash() {
         let (_app, window) = app();
         assert!(invoke(

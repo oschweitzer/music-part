@@ -130,13 +130,46 @@ pub fn write_file(path: &Path, score: &Score) -> Result<(), NativeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use score_model::{blank_score, demo_score};
+    use score_model::{apply_edit, blank_score, demo_score, Edit, Sound};
 
     #[test]
     fn a_score_survives_a_round_trip() {
         for score in [demo_score(), blank_score("Mine")] {
             assert_eq!(from_str(&to_string(&score)).unwrap(), score);
         }
+    }
+
+    #[test]
+    fn every_sound_survives_a_round_trip() {
+        let mut score = blank_score("Sounds");
+        for sound in Sound::ALL {
+            let edit = Edit::AddTrack {
+                instrument: sound.instrument(),
+                sound: Some(sound),
+            };
+            apply_edit(&mut score, &edit).unwrap();
+        }
+        let back = from_str(&to_string(&score)).unwrap();
+        let sounds: Vec<Sound> = back.tracks.iter().skip(1).map(|t| t.sound).collect();
+        assert_eq!(sounds, Sound::ALL);
+        assert_eq!(back, score);
+    }
+
+    #[test]
+    fn a_file_saved_before_sounds_existed_gets_the_sound_it_had() {
+        let mut json: serde_json::Value = serde_json::from_str(&to_string(&demo_score())).unwrap();
+        for track in json["score"]["tracks"].as_array_mut().unwrap() {
+            track.as_object_mut().unwrap().remove("sound");
+        }
+        let score = from_str(&json.to_string()).unwrap();
+        assert_eq!(score.tracks[0].sound, Sound::GuitarNylon);
+        assert_eq!(score.tracks[1].sound, Sound::BassFinger);
+    }
+
+    #[test]
+    fn a_sound_of_another_instrument_is_refused() {
+        let text = to_string(&demo_score()).replace("\"bass/finger\"", "\"violin/standard\"");
+        assert!(matches!(from_str(&text), Err(NativeError::Invalid(_))));
     }
 
     #[test]

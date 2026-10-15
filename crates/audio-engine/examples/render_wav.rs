@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if use_banks {
         for bank in &SAMPLE_BANKS {
             let mut file = File::open(assets.join("banks").join(bank.file))?;
-            player.add_bank(bank.instrument, &mut file, bank.keys())?;
+            player.add_bank(bank.sound, &mut file, bank.keys())?;
         }
     }
     player.load_score(&score);

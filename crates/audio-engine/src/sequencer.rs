@@ -351,6 +351,7 @@ mod tests {
             tracks: vec![Track {
                 name: "g".into(),
                 instrument: Instrument::Guitar,
+                sound: Sound::GuitarNylon,
                 tuning: GUITAR_STANDARD.to_vec(),
                 measures: vec![Measure {
                     time_signature: TimeSignature {

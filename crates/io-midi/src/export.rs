@@ -1,6 +1,6 @@
 //! Export a `Score` as a Standard MIDI File (format 1): a first track with the title, tempo and
 //! time signatures, then one track per score track on its own channel, with the General MIDI
-//! program of its instrument. Ties become one long note. Techniques are not written: MIDI has
+//! program of its sound. Ties become one long note. Techniques are not written: MIDI has
 //! no standard way to say them.
 
 use std::collections::HashMap;
@@ -120,7 +120,7 @@ fn instrument_track<'a>(
     } else {
         channel
     });
-    let program = track.instrument.midi_program();
+    let program = track.sound.midi_program();
 
     let mut events: Vec<(u32, TrackEventKind<'_>)> = vec![
         (
@@ -220,7 +220,7 @@ fn instrument_track<'a>(
 mod tests {
     use super::*;
     use crate::import_midi;
-    use score_model::{blank_score, demo_score, Edit, Instrument};
+    use score_model::{blank_score, demo_score, Edit, Instrument, Sound};
 
     /// (start, end, pitch) of every sounding note of a track, ties merged, sorted.
     fn sounding(track: &Track) -> Vec<(u32, u32, u8)> {
@@ -275,6 +275,45 @@ mod tests {
             assert_eq!(sounding(a), sounding(b), "track {}", a.name);
         }
         assert_eq!(imported.title, original.title);
+    }
+
+    #[test]
+    fn every_sound_survives_a_round_trip() {
+        let mut score = blank_score("t");
+        for sound in Sound::ALL {
+            score_model::apply_edit(
+                &mut score,
+                &Edit::AddTrack {
+                    instrument: sound.instrument(),
+                    sound: Some(sound),
+                },
+            )
+            .unwrap();
+            let track = score.tracks.len() - 1;
+            // A note on the last string, so that the banjo plays its short fifth string.
+            let string = score.tracks[track].tuning.len() as u8;
+            score_model::apply_edit(
+                &mut score,
+                &Edit::SetFret {
+                    track,
+                    measure: 0,
+                    beat: 0,
+                    string,
+                    fret: 7,
+                },
+            )
+            .unwrap();
+        }
+        // The blank first track has no notes, which the importer leaves out.
+        score_model::apply_edit(&mut score, &Edit::RemoveTrack { index: 0 }).unwrap();
+        let imported = import_midi(&export_midi(&score).unwrap()).unwrap().score;
+
+        assert_eq!(imported.tracks.len(), score.tracks.len());
+        for (a, b) in score.tracks.iter().zip(&imported.tracks) {
+            assert_eq!(b.sound, a.sound);
+            assert_eq!(b.tuning, a.tuning);
+            assert_eq!(sounding(a), sounding(b), "{:?}", a.sound);
+        }
     }
 
     #[test]
@@ -364,6 +403,7 @@ mod tests {
                 &mut score,
                 &Edit::AddTrack {
                     instrument: Instrument::Bass,
+                    sound: None,
                 },
             )
             .unwrap();
