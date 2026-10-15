@@ -234,6 +234,16 @@
             title="Solo: play only the soloed tracks"
             onmousedown={keepFocus}
             onclick={() => playback.toggleSolo(i)}>S</button>
+          {#if editor.canEdit}
+            <button
+              type="button"
+              class="mix drop"
+              aria-label="Remove {t.name}"
+              title="Remove this track (Ctrl+Z brings it back)"
+              disabled={score.tracks.length < 2}
+              onmousedown={keepFocus}
+              onclick={() => editor.removeTrack(i)}>×</button>
+          {/if}
         </div>
       {/each}
 
@@ -277,16 +287,6 @@
               onchange={changeTuning}
             />
           </label>
-          <button
-            type="button"
-            class="remove-track"
-            title="Remove this track"
-            disabled={(score?.tracks.length ?? 0) < 2}
-            onmousedown={keepFocus}
-            onclick={() => editor.removeTrack()}
-          >
-            Remove track
-          </button>
         {/if}
       {/if}
     </nav>
@@ -601,18 +601,12 @@
     width: 150px;
   }
 
-  .remove-track {
-    padding: 4px 10px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: none;
+  .mix.drop:hover:not(:disabled) {
+    border-color: var(--danger);
     color: var(--danger);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
   }
 
-  .remove-track:disabled {
+  .mix:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
@@ -749,7 +743,7 @@
   }
 
   .tempo input {
-    width: 46px;
+    width: 4.5rem;
     padding: 2px 4px;
     border: 1px solid transparent;
     border-radius: 5px;

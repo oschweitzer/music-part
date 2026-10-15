@@ -280,6 +280,16 @@ describe('Editor', () => {
       expect(playback.dropTrackMix).toHaveBeenCalledWith(1)
     })
 
+    it('should remove a track other than the current one when given its index', async () => {
+      const { api, edits } = fakeApi()
+      const { editor, playback } = setup({ api })
+      await editor.start()
+      await editor.removeTrack(0)
+
+      expect(edits).toEqual([{ type: 'removeTrack', index: 0 }])
+      expect(playback.dropTrackMix).toHaveBeenCalledWith(0)
+    })
+
     it('should retune the current track from note names', async () => {
       const { api, edits } = fakeApi()
       const { editor } = setup({ api })

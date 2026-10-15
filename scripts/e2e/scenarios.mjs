@@ -472,7 +472,9 @@ export const scenarios = [
       assert.match(await text(page, '.notice span'), /note names/)
       assert.equal(await page.eval(`document.querySelector('.tuning input').value`), 'G2 D2 A1 D1')
 
-      await clickButton(page, 'Remove track')
+      // The cross on the tab of the track.
+      await page.eval(`document.querySelector('.track-tab.active .drop').click()`)
+      await settle()
       assert.equal((await document_(context)).score.tracks.length, 2)
       assert.equal(await page.eval(`document.querySelectorAll('.track-tab').length`), 2)
     },

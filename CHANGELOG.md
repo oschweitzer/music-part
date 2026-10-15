@@ -79,6 +79,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Playback is louder: the synthesizer gain went from 0.2 to 0.6.
+- Each track tab has a cross to remove it, replacing the "Remove track" button at the far end of
+  the track bar, which was easy to miss.
+- The tempo field is wider, so a three-digit tempo is fully visible.
 
 ### Fixed
 

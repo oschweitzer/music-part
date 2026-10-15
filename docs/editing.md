@@ -115,7 +115,7 @@ on that track at the same time. A bend always rises a whole tone: the model has 
 ## Tracks and tuning
 
 `+ Track` adds a nylon guitar, electric guitar, electric bass or violin in standard tuning with empty measures matching the first
-track. `Remove track` deletes the current one (the last track cannot be removed). The tuning field
+track. The cross on a track's tab deletes it (the last track cannot be removed; Ctrl+Z brings a track back). The tuning field
 takes note names from the highest string to the lowest, for example `E4 B3 G3 D3 A2 D2` (`#` and `b`
 are accepted, middle C is `C4`); the number of strings follows the number of names, up to 12. A
 tuning that would leave a note without a string, or above MIDI pitch 127, is refused.

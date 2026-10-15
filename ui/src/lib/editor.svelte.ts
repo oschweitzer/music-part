@@ -226,8 +226,8 @@ export class Editor {
     })
   }
 
-  removeTrack(): Promise<void> {
-    const index = this.track
+  /** Removes a track, the current one by default. */
+  removeTrack(index: number = this.track): Promise<void> {
     return this.#send({ type: 'removeTrack', index }, () => this.#playback.dropTrackMix(index))
   }
 
