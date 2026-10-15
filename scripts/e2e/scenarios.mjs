@@ -1071,8 +1071,12 @@ export const scenarios = [
     async (context) => {
       const { page, backend } = context
       for (let i = 0; i < 22; i++) await backend.request('edit_score', { edit: { type: 'addTrack', instrument: 'Guitar' } })
-      await page.eval(`location.reload()`)
-      await page.waitFor(`document.querySelector('svg.tab line.string')`, { what: 'the score to appear' })
+      // Mark the page so the wait below cannot be met by the page that is still there before the
+      // reload takes effect: the next click would then land on a page being torn down.
+      await page.eval(`window.__beforeReload = true; location.reload()`)
+      await page.waitFor(`!window.__beforeReload && document.querySelectorAll('svg.tab line.string').length > 0`, {
+        what: 'the reloaded score to appear',
+      })
 
       await inRows(page, async () => {
         const drawn = await page.eval(`document.querySelectorAll('section.row').length`)

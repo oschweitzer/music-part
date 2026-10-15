@@ -116,11 +116,17 @@ export async function launchBrowser({ width = 1200, height = 800, port = 9444 } 
 
     async waitFor(expression, { timeout = 5000, what = expression } = {}) {
       const deadline = Date.now() + timeout
+      let lastError = null
       while (Date.now() < deadline) {
-        if (await page.eval(`Boolean(${expression})`)) return
+        // While the page reloads its context can vanish under an evaluation: try again.
+        const isMet = await page.eval(`Boolean(${expression})`).catch((error) => {
+          lastError = error
+          return false
+        })
+        if (isMet) return
         await sleep(40)
       }
-      throw new Error(`timed out waiting for: ${what}`)
+      throw new Error(`timed out waiting for: ${what}${lastError ? ` (${lastError.message})` : ''}`)
     },
 
     async mouseClick(x, y) {
