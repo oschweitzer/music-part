@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- UI: a `Sounds` button in the toolbar lists the sound packs in use with their author and
+  licence, the packs that could not be used and why, which pack (or General MIDI) plays the sound
+  of the selected track, and the folder where the user adds packs.
+- Sound packs: a pack's samples are read only when a track of the score uses one of its sounds,
+  and freed when no track uses them any more, so unused packs cost no memory or start-up time.
 - UI: a rows view of the tracks, one under the other on the same time axis like a DAW, switched
   with the new `Tabs` / `Rows` toggle in the toolbar (the choice is remembered). Each row has a
   header with mute, solo, remove and fold, rows share their barlines and one playback cursor, and

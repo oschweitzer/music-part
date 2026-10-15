@@ -1,7 +1,7 @@
 use std::io::{Read, Seek};
 use std::ops::RangeInclusive;
 
-use oxisynth::{MidiEvent, SoundFont, Synth, SynthDescriptor};
+use oxisynth::{MidiEvent, SoundFont, SoundFontId, Synth, SynthDescriptor};
 use score_model::{Score, Sound};
 
 use crate::sequencer::{self, Action, Event, Timbre, BEND_CENTER, BEND_RANGE_SEMITONES};
@@ -94,6 +94,20 @@ struct Bank {
     number: u8,
     /// Keys the recordings cover; notes outside are played with the General MIDI sound.
     keys: RangeInclusive<u8>,
+    /// The SoundFont in the synthesizer, to change its bank number or remove it.
+    font: SoundFontId,
+}
+
+/// A sample bank read from its file and ready to add to a [`Player`]. Reading one takes a while
+/// (the samples are decoded and copied), so it is done away from the real-time audio thread and
+/// the result handed over; see [`Player::add_bank_font`].
+pub struct BankFont(SoundFont);
+
+impl BankFont {
+    /// Reads a SoundFont 2 file. A corrupted file is an error, not a panic.
+    pub fn read<R: Read + Seek>(soundfont: &mut R) -> Result<Self, PlayerError> {
+        read_soundfont(soundfont).map(Self)
+    }
 }
 
 /// Everything the player needs to play one score, precomputed so that handing it to a running
@@ -218,8 +232,9 @@ fn timbre_offsets(timbre: Timbre) -> &'static [(u8, i32)] {
         Timbre::Legato => &[(GEN_VOL_ENV_ATTACK, 4000), (GEN_FILTER_FC, -1200)],
     }
 }
-/// Sample banks a player can hold. Bank numbers stay well under the 128 a controller can carry.
-const MAX_BANKS: u8 = 32;
+/// Sample banks a player can hold at once. Bank numbers stay well under the 128 a controller can
+/// carry.
+pub const MAX_BANKS: u8 = 32;
 /// Bank number of the first sample bank added; see `Player::add_bank`.
 const FIRST_BANK: u8 = 100;
 
@@ -278,7 +293,18 @@ impl Player {
         soundfont: &mut R,
         keys: RangeInclusive<u8>,
     ) -> Result<(), PlayerError> {
-        let font = read_soundfont(soundfont)?;
+        self.add_bank_font(sound, BankFont::read(soundfont)?, keys)
+    }
+
+    /// [`Player::add_bank`] with a file already read, so that the slow part can happen on another
+    /// thread. Takes effect for the next score loaded. Banks can be added and removed in any order
+    /// between two loads.
+    pub fn add_bank_font(
+        &mut self,
+        sound: Sound,
+        BankFont(font): BankFont,
+        keys: RangeInclusive<u8>,
+    ) -> Result<(), PlayerError> {
         // Bank 0 is the base SoundFont. Each bank is shifted to a number counting down from
         // `FIRST_BANK`, so the most recent one, on top of the synthesizer's stack of fonts, has the
         // lowest. The synthesizer subtracts a font's shift from the requested bank and clamps at
@@ -289,14 +315,50 @@ impl Player {
             .filter(|n| *n < MAX_BANKS)
             .map(|n| FIRST_BANK - n)
             .ok_or_else(|| PlayerError::SoundFont("too many sample banks".into()))?;
+        // `number` follows from the count of banks held, so the newest is always the lowest:
+        // `remove_bank` renumbers the banks after the one it removes to keep it so.
         let id = self.synth.add_font(font, false);
         self.synth.set_bank_offset(id, u32::from(number));
         self.banks.push(Bank {
             sound,
             number,
             keys,
+            font: id,
         });
         Ok(())
+    }
+
+    /// Removes the sample bank that plays `sound` (the most recent one, if it was given several),
+    /// so the sound goes back to the one it had before: an older bank or the General MIDI program.
+    /// Takes effect for the next score loaded. Returns the bank's samples, for the caller to free
+    /// away from the real-time audio thread.
+    pub fn remove_bank(&mut self, sound: Sound) -> Option<BankFont> {
+        let index = self.banks.iter().rposition(|b| b.sound == sound)?;
+        let bank = self.banks.remove(index);
+        let font = self.synth.remove_font(bank.font, false);
+        // The banks added after it move up one number, back to `FIRST_BANK` minus their place:
+        // fonts higher on the synthesizer's stack keep lower numbers, which `add_bank_font`
+        // relies on.
+        for (place, later) in self.banks.iter_mut().enumerate().skip(index) {
+            later.number = FIRST_BANK - place as u8;
+            self.synth
+                .set_bank_offset(later.font, u32::from(later.number));
+        }
+        font.map(BankFont)
+    }
+
+    /// The sounds that have a sample bank, oldest bank first.
+    pub fn bank_sounds(&self) -> impl Iterator<Item = Sound> + '_ {
+        self.banks.iter().map(|b| b.sound)
+    }
+
+    /// Name of the preset the open channel of `track` plays: which bank a track got.
+    #[cfg(test)]
+    pub(crate) fn preset_of_track(&self, track: usize) -> Option<String> {
+        let channel = self.program.voices.get(track)?.open.channel;
+        self.synth
+            .channel_preset(channel)
+            .map(|preset| preset.name().to_string())
     }
 
     fn bank_of(&self, sound: Sound) -> Option<&Bank> {

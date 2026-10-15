@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use audio::AudioController;
 use document::{Document, DocumentState};
 use score_model::Edit;
-use service::{OpenedDocument, Startup};
+use service::{FoundPacks, OpenedDocument, SoundPacks, Startup};
 
 /// Overrides the bundled SoundFont, for development.
 const SOUNDFONT_ENV: &str = "MUSIC_PART_SOUNDFONT";
@@ -149,6 +149,13 @@ fn set_audible(audible: Vec<bool>, audio: State<AudioController>) -> Result<(), 
     audio.set_audible(audible)
 }
 
+/// The sound packs found at start, the sample files that could not be used, and where the user
+/// adds packs.
+#[tauri::command]
+fn sound_packs(found: State<FoundPacks>, audio: State<AudioController>) -> SoundPacks {
+    service::sound_packs(&found, &audio.pack_failures())
+}
+
 /// Tells the UI where playback is, about 30 times a second while it moves, and once more when it
 /// stops so the UI never misses the final state.
 fn spawn_position_emitter(app: AppHandle) {
@@ -172,9 +179,10 @@ fn spawn_position_emitter(app: AppHandle) {
     });
 }
 
-/// The folders of sound packs, lowest priority first: the bundled packs, then the user's, so a
-/// user's pack replaces a bundled one with the same id. A folder that does not exist is skipped.
-fn pack_roots(app: &tauri::App) -> Vec<PathBuf> {
+/// Reads the manifests of the sound packs, from the bundled folder then the user's, so a user's
+/// pack replaces a bundled one with the same id. A folder that does not exist is skipped. Lists
+/// them on the console too.
+fn find_packs(app: &tauri::App) -> FoundPacks {
     let bundled = match std::env::var_os(PACKS_ENV) {
         Some(path) => Some(path.into()),
         None => app
@@ -187,7 +195,22 @@ fn pack_roots(app: &tauri::App) -> Vec<PathBuf> {
         .app_data_dir()
         .ok()
         .map(|dir| dir.join(USER_PACKS_DIR));
-    bundled.into_iter().chain(user).collect()
+    let roots: Vec<PathBuf> = bundled.into_iter().chain(user.clone()).collect();
+    let found = FoundPacks::discover(&roots, user);
+    for pack in &found.packs {
+        let manifest = &pack.manifest;
+        eprintln!(
+            "Sound pack {} ({}, {}) from {}",
+            manifest.id,
+            manifest.name,
+            manifest.licence,
+            pack.dir.display()
+        );
+    }
+    for error in &found.refused {
+        eprintln!("{error}");
+    }
+    found
 }
 
 fn soundfont_path(app: &tauri::App) -> Result<PathBuf, String> {
@@ -215,7 +238,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
         pause,
         stop,
         seek,
-        set_audible
+        set_audible,
+        sound_packs
     ])
 }
 
@@ -223,10 +247,11 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            let packs = find_packs(app);
             let audio = match soundfont_path(app) {
                 Ok(path) => {
                     eprintln!("SoundFont: {}", path.display());
-                    AudioController::start(path, pack_roots(app))
+                    AudioController::start(path, packs.packs.clone())
                 }
                 Err(reason) => {
                     eprintln!("Audio unavailable: {reason}");
@@ -237,6 +262,7 @@ pub fn run() {
             let (document, startup) = service::initial_document(std::env::args());
             sync_audio(&document, &audio);
             app.manage(audio);
+            app.manage(packs);
             app.manage(Mutex::new(document));
             app.manage(startup);
             spawn_position_emitter(app.handle().clone());
@@ -266,8 +292,13 @@ mod tests {
     /// An app with the real commands, configuration and permissions, and the demo score, but no
     /// window system and no audio.
     fn app() -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
+        app_with_packs(FoundPacks::default())
+    }
+
+    fn app_with_packs(packs: FoundPacks) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
         let app = with_commands(mock_builder()).build(context()).unwrap();
         app.manage(AudioController::unavailable("no audio in tests".into()));
+        app.manage(packs);
         app.manage(Mutex::new(Document::new(score_model::demo_score(), None)));
         app.manage(Startup {
             skipped_notes: 0,
@@ -431,6 +462,53 @@ mod tests {
         let error =
             invoke(&window, "set_audible", json!({ "audible": [true, false] })).unwrap_err();
         assert_eq!(error, json!("no audio in tests"));
+    }
+
+    #[test]
+    fn the_sound_packs_come_with_the_camel_case_keys_the_ui_reads() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/tauri-tests/ipc-packs");
+        let _ = std::fs::remove_dir_all(&root);
+        for (id, manifest) in [
+            (
+                "nylon",
+                r#"{ "format": 1, "id": "nylon", "name": "Nylon", "author": "Me",
+                    "licence": "CC-BY-4.0", "source": "https://example.org",
+                    "sounds": [{ "sound": "guitar/nylon", "file": "n.sf2", "firstKey": 40, "lastKey": 88 }] }"#,
+            ),
+            ("broken", "{"),
+        ] {
+            std::fs::create_dir_all(root.join(id)).unwrap();
+            std::fs::write(root.join(id).join("pack.json"), manifest).unwrap();
+        }
+        let found = FoundPacks::discover(std::slice::from_ref(&root), Some(root.join("user")));
+        let (_app, window) = app_with_packs(found);
+
+        let packs = invoke(&window, "sound_packs", json!({})).unwrap();
+
+        let nylon = &packs["packs"][0];
+        assert_eq!(nylon["licence"], "CC-BY-4.0");
+        assert_eq!(nylon["source"], "https://example.org");
+        assert_eq!(
+            nylon["sounds"][0],
+            json!({ "sound": "guitar/nylon", "firstKey": 40, "lastKey": 88 })
+        );
+        assert!(packs["refused"][0]["folder"]
+            .as_str()
+            .unwrap()
+            .ends_with("broken"));
+        assert!(!packs["refused"][0]["reason"].as_str().unwrap().is_empty());
+        assert!(packs["userFolder"].as_str().unwrap().ends_with("user"));
+    }
+
+    #[test]
+    fn without_packs_the_list_is_empty() {
+        let (_app, window) = app();
+        let packs = invoke(&window, "sound_packs", json!({})).unwrap();
+        assert_eq!(
+            packs,
+            json!({ "packs": [], "refused": [], "userFolder": null })
+        );
     }
 
     #[test]

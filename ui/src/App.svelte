@@ -1,6 +1,7 @@
 <script lang="ts">
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte'
   import EditBar from './components/EditBar.svelte'
+  import SoundsPanel from './components/SoundsPanel.svelte'
   import TabView from './components/TabView.svelte'
   import TrackRows from './components/TrackRows.svelte'
   import { createDocumentApi, type ExportFormat } from './lib/document-api'
@@ -20,7 +21,8 @@
   import type { TrackView, ViewMode } from './lib/track-view'
 
   const playback = new Playback(createTransport())
-  const editor = new Editor({ api: createDocumentApi(), playback, prompts: createFilePrompts() })
+  const api = createDocumentApi()
+  const editor = new Editor({ api, playback, prompts: createFilePrompts() })
 
   let theme = $state<Theme>(readTheme())
 
@@ -299,6 +301,7 @@
           />
         </label>
       {/if}
+      <SoundsPanel load={() => api.soundPacks()} sound={track?.sound ?? null} />
       <button
         type="button"
         class="icon-button small theme-button"

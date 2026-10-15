@@ -61,11 +61,43 @@ folder or a key range that is not one is refused as a whole.
 Every subfolder holding a `pack.json` is a pack; folders are read in name order. A user's pack
 with the id of a bundled one replaces it, and when two packs play the same sound the one read last
 is heard (user packs after bundled ones). A pack or a file that cannot be used is reported on the
-console and skipped: its sounds keep their General MIDI program, and the app starts anyway. The
-console also lists every pack loaded, with its licence.
+console and skipped: its sounds keep their General MIDI program (or the previous pack with the
+sound), and the app starts anyway.
 
-Code: `audio-engine/src/pack.rs` (manifest, discovery, loading into the `Player`) and
-`src-tauri/src/audio.rs` (which folders, at start).
+The `Sounds` button of the toolbar shows the packs in use with their author and licence, the ones
+refused and why, which pack or General MIDI plays the sound of the selected track, and the user's
+packs folder. The console lists the same.
+
+Code: `audio-engine/src/pack.rs` (manifest, discovery), `audio-engine/src/banks.rs` (loading on
+demand), `src-tauri/src/lib.rs` (which folders, at start) and `src-tauri/src/audio.rs` (the audio
+thread that reads the samples).
+
+## When the samples are loaded
+
+Only the manifests are read at start. A pack's sample file is read when a track of the score uses
+one of its sounds, and its bank is removed from the synthesizer when no track uses it any more:
+
+1. Each time the score changes, the audio thread (not the real-time callback) asks `PackBanks`
+   which banks to add and remove. It reads the new files there, so neither the window nor the
+   sound waits for the disk.
+2. The changes go to the audio callback as messages, before the score that needs them, and only
+   take effect when that score is loaded. The samples of a removed bank are sent back and freed on
+   the audio thread, not in the callback.
+3. A file that cannot be read is reported once and not read again; the sound then plays with the
+   previous pack that has it, or with General MIDI.
+
+`oxisynth` removes a SoundFont cleanly (`Synth::remove_font`): the channels that used it are
+re-pointed, and notes still ringing keep their own reference to the samples until they end.
+
+### Bank numbers
+
+The synthesizer looks for a preset in its fonts from the most recent one down, and subtracts each
+font's bank offset from the requested bank, stopping at zero. A request for a pack's bank would
+land on bank 0 of any font above it with a higher offset, so the fonts must keep their offsets in
+the order of the stack: the most recent the lowest. `Player::add_bank` gives a new bank `100`
+minus the number of banks held, and `Player::remove_bank` renumbers the banks added after the one
+it removes. A player holds at most 32 banks at once; a score needing more plays the rest with
+General MIDI.
 
 ## Adding a pack to the app
 
@@ -95,6 +127,5 @@ offered as a folder users add themselves.
 - Only SoundFont 2 files. SFZ (round-robin, key switches for articulations) would be a second
   value of the file type, played by another engine behind the same `Player` interface; see the
   follow-ups in [`sounds.md`](sounds.md).
-- Every pack found is loaded at start, used by the score or not. With three small packs this
-  costs little; with many, load a pack only when a track of the score uses one of its sounds.
-- The UI does not list the packs or their licences yet; the console does.
+- Packs are found at start only: a pack added while the app runs shows up after a restart. The
+  `Sounds` panel shows the user's packs folder but does not open it.

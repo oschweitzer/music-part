@@ -3,7 +3,9 @@
 //! It reads one JSON request per line on stdin and answers with one JSON line on stdout:
 //! `{"id": 1, "cmd": "edit_score", "args": {...}}` gives `{"id": 1, "ok": ...}` or
 //! `{"id": 1, "err": "message"}`. The commands and their JSON are those of the app, because both
-//! call `service`. An optional first argument opens that file, as the app does.
+//! call `service`. An optional first argument opens that file, as the app does. The sound packs
+//! listed are those of the folder in `MUSIC_PART_PACKS`, as in the app; there is no audio, so no
+//! sample file is read and none fails.
 
 #[path = "../src/document.rs"]
 #[allow(dead_code)]
@@ -18,7 +20,7 @@ use std::io::{BufRead, Write};
 
 use document::Document;
 use serde_json::{json, Value};
-use service::Startup;
+use service::{FoundPacks, Startup};
 
 fn string_arg(args: &Value, name: &str) -> Result<String, String> {
     args.get(name)
@@ -34,6 +36,7 @@ fn to_value<T: serde::Serialize>(value: T) -> Result<Value, String> {
 fn call(
     document: &mut Document,
     startup: &Startup,
+    packs: &FoundPacks,
     cmd: &str,
     args: &Value,
 ) -> Result<Value, String> {
@@ -61,12 +64,18 @@ fn call(
         }
         "undo" => to_value(service::undo(document)),
         "redo" => to_value(service::redo(document)),
+        "sound_packs" => to_value(service::sound_packs(packs, &[])),
         other => Err(format!("unknown command \"{other}\"")),
     }
 }
 
 fn main() {
     let (mut document, startup) = service::initial_document(std::env::args());
+    let roots: Vec<std::path::PathBuf> = std::env::var_os("MUSIC_PART_PACKS")
+        .map(Into::into)
+        .into_iter()
+        .collect();
+    let packs = FoundPacks::discover(&roots, None);
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -79,7 +88,7 @@ fn main() {
         let id = request["id"].clone();
         let cmd = request["cmd"].as_str().unwrap_or_default();
         let args = request.get("args").cloned().unwrap_or(Value::Null);
-        let answer = match call(&mut document, &startup, cmd, &args) {
+        let answer = match call(&mut document, &startup, &packs, cmd, &args) {
             Ok(ok) => json!({ "id": id, "ok": ok }),
             Err(err) => json!({ "id": id, "err": err }),
         };
