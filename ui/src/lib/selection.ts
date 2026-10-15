@@ -1,4 +1,5 @@
 import type { Score } from './score-types'
+import { durationTicks } from './tab-layout'
 
 export type BeatPosition = { measure: number; beat: number }
 
@@ -54,6 +55,43 @@ export function moveSelection({
     case 'down':
       return { ...current, string: Math.min(strings, string + 1) }
   }
+}
+
+/**
+ * Moves the selection to the previous (`step` -1) or next (`step` 1) track, at the same moment: the
+ * same measure, on the beat of that track that sounds when the selected beat starts. The string is
+ * kept when the track has it. A range stays behind, since it belongs to its track. At the first or
+ * last track nothing moves.
+ */
+export function moveToTrack({
+  score,
+  track,
+  selection,
+  step,
+}: {
+  score: Score
+  track: number
+  selection: Selection
+  step: -1 | 1
+}): { track: number; selection: Selection } {
+  const target = track + step
+  if (target < 0 || target >= score.tracks.length) return { track, selection }
+
+  const { measure, beat, string } = clampSelection({ score, track, selection })
+  const startOf = (t: number, upTo: number) =>
+    (score.tracks[t]?.measures[measure]?.voices[0]?.beats ?? [])
+      .slice(0, upTo)
+      .reduce((sum, b) => sum + durationTicks(b.duration), 0)
+  const tick = startOf(track, beat)
+
+  const beats = score.tracks[target]?.measures[measure]?.voices[0]?.beats ?? []
+  let start = 0
+  let found = 0
+  beats.forEach((b, i) => {
+    if (start <= tick) found = i
+    start += durationTicks(b.duration)
+  })
+  return { track: target, selection: clampSelection({ score, track: target, selection: { measure, beat: found, string } }) }
 }
 
 /** Brings a selection back onto something that exists, after the score changed under it. */

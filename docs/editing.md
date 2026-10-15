@@ -24,6 +24,7 @@ outlined, and its beat is lightly highlighted. The arrow keys move it: left and 
 | `B` `M` `/`                 | Bend, palm mute, slide on the note (again: clears). Others are in the toolbar |
 | `Ctrl+Enter`                | Inserts a measure after the selected one                                      |
 | `Ctrl+Delete`               | Deletes the selected measure, or all the measures a range of beats touches    |
+| `Alt+Up` / `Alt+Down`       | Moves the selection to the track above or below, at the same moment           |
 | `Ctrl+Z`                    | Undo                                                                          |
 | `Ctrl+Shift+Z` / `Ctrl+Y`   | Redo                                                                          |
 | `Ctrl+N` `Ctrl+O` `Ctrl+S`  | New, open, save. `Ctrl+Shift+S` saves under a new name                        |
@@ -73,7 +74,7 @@ Click the strip just above a measure (where its number is) to move playback to t
 measure, or double-click a beat to move it there. This works while playing or paused. A note that is
 already sounding at the new position is not started: playback picks up with the next one.
 
-Each track tab has `M` (mute) and `S` (solo) buttons. A track plays unless it is muted, but as soon
+Each track tab, and each row header in the rows view, has `M` (mute) and `S` (solo) buttons. A track plays unless it is muted, but as soon
 as any track is soloed only the soloed ones play. Mute and solo only change what you hear; they are
 not saved in the score, and they are forgotten when the app closes. Editing the score stops
 playback but keeps them.
@@ -136,6 +137,49 @@ more plays the rest with the open timbre. The pitch wheel moves every channel of
 Bends and slides move the pitch wheel of the track's MIDI channel, so they bend every note sounding
 on that track at the same time. A bend always rises a whole tone: the model has no bend amount yet.
 
+## Track views
+
+The `Tabs` / `Rows` switch in the toolbar changes how the tracks are shown. The choice is kept
+between runs, like the theme.
+
+- **Tabs**: one track at a time, picked from its tab. With many tracks the tabs scroll sideways, and
+  the track menu next to the track fields lists them all.
+- **Rows**: every track in a row of its own, one under the other, like the tracks of a DAW. Each
+  row has a header on the left (name, instrument, number of strings, mute, solo, remove, and an
+  arrow that folds the row down to its header) and its tablature on the right.
+
+Selecting is the same in both: a click or a drag in a row selects in that row's track, and the
+keys, paste and the track fields act on the track of the selection. A drag stays in the row it
+started in, even when the mouse moves over another row. `Alt+Up` and `Alt+Down` move the selection
+to the previous or next track, onto the beat that sounds at the same moment.
+
+### Design
+
+The view is described by *which tracks are shown and how* (`TrackView` and `shownTracks` in
+`ui/src/lib/track-view.ts`), not by "the current track": tabs mode shows the track of the selection,
+rows mode shows them all, folded or not. A later view (a few chosen instruments on screen at once)
+is another way to fill that list; the layout and the rows already take any list of tracks. The
+track being edited is where the selection is (`Editor.track`), separate from what is shown.
+
+Rows use **one wide line per track** (DAW-like), not systems that wrap together as on a printed full
+score. The measures are the same length in every track, so the rows share their barlines: measure n
+is at the same x in every row, as wide as the track that needs most room, and notes that start at
+the same moment are at the same x (`layoutRows` in `ui/src/lib/tab-layout.ts`). Reasons for one wide
+line:
+
+- With many tracks (up to 64), wrapped systems would each be taller than the screen, so reading one
+  track across a line break would mean scrolling past all the others. One line per track keeps every
+  track at the same height on screen, and folding rows works as expected.
+- One playback cursor crosses every row; the view scrolls sideways to follow it.
+- Only the rows and the measures on screen are drawn (`visibleRows`, `clipLayout`), so a long piece
+  with many tracks stays light. A piece shorter than the window is stretched to its width.
+
+The price is horizontal scrolling, and a printout of the rows view would not look like a score; the
+tabs view, which wraps lines to the page, stays for that.
+
+Folding a row and the view mode are not part of the score file. Folds are forgotten when the app
+closes; the mode is remembered.
+
 ## Tracks and tuning
 
 `+ Track` adds a nylon guitar, electric guitar, electric bass or violin in standard tuning with empty measures matching the first
@@ -180,5 +224,6 @@ back to the state that was opened or saved clears the unsaved mark.
 
 ## Not there yet
 
-There is no system clipboard, no select-all, and no copy between tracks of different voices (only the
+Rows cannot be reordered by dragging, coloured, or given their own height yet, and there is no
+mixer strip. There is no system clipboard, no select-all, and no copy between tracks of different voices (only the
 first voice of a measure is edited).

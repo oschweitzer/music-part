@@ -3,8 +3,8 @@
 //! browser; the test below keeps that file in sync.
 
 use crate::{
-    Beat, Duration, Instrument, Measure, Note, NoteValue, Score, Technique, TimeSignature, Track,
-    Voice, BASS_STANDARD, GUITAR_STANDARD,
+    Beat, Duration, Instrument, Measure, Note, NoteValue, Score, Sound, Technique, TimeSignature,
+    Track, Voice, BASS_STANDARD, GUITAR_STANDARD,
 };
 
 fn note(string: u8, fret: u8) -> Note {
@@ -60,6 +60,7 @@ pub fn blank_score(title: &str) -> Score {
         tracks: vec![Track {
             name: "Guitar".into(),
             instrument: Instrument::Guitar,
+            sound: Sound::GuitarNylon,
             tuning: GUITAR_STANDARD.to_vec(),
             measures: (0..4).map(|_| measure(rests.clone())).collect(),
         }],
@@ -156,12 +157,14 @@ pub fn demo_score() -> Score {
             Track {
                 name: "Guitar".into(),
                 instrument: Instrument::Guitar,
+                sound: Sound::GuitarNylon,
                 tuning: GUITAR_STANDARD.to_vec(),
                 measures: guitar_measures,
             },
             Track {
                 name: "Bass".into(),
                 instrument: Instrument::Bass,
+                sound: Sound::BassFinger,
                 tuning: BASS_STANDARD.to_vec(),
                 measures: bass_measures,
             },

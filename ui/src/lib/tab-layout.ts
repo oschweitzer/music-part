@@ -127,7 +127,15 @@ export function layoutTab({ track, width }: { track: Track; width: number }): Ta
 
     let cursor = left + METRICS.clefWidth
     const placed = measures.map((m) => {
-      const layout = placeMeasure({ draft: m, x: cursor, scale, stringYs, staffBottom: staffTop + staffHeight })
+      const firstBeatX = cursor + METRICS.measurePadLeft + (m.timeSignature ? METRICS.timeSignatureWidth : 0)
+      const layout = placeMeasure({
+        draft: m,
+        x: cursor,
+        width: m.fixedWidth + m.slotsWidth * scale,
+        xs: beatXs(firstBeatX, m.slotWidths, scale),
+        stringYs,
+        staffBottom: staffTop + staffHeight,
+      })
       cursor += layout.width
       return layout
     })
@@ -141,6 +149,89 @@ export function layoutTab({ track, width }: { track: Track; width: number }): Ta
   const height = METRICS.marginX * 2 + systems.length * systemHeight + Math.max(systems.length - 1, 0) * METRICS.systemGap
   return { width, height, systems }
 }
+
+/** A track as the rows view shows it: its tablature in full, or folded down to its header. */
+export type ShownTrack = { track: number; isCollapsed: boolean }
+
+export const ROW_METRICS = {
+  /** Height of a folded row: its header only. */
+  collapsedHeight: 40,
+  bottomPad: 8,
+  /** Room for the header of an unfolded row, whatever the number of strings. */
+  minHeight: 112,
+} as const
+
+export type TrackRow = {
+  track: number
+  /** Where the row starts in the rows view, and its height. */
+  top: number
+  height: number
+  /** One system as wide as the whole piece, or null when the row is folded. */
+  layout: TabLayout | null
+}
+
+export type RowsLayout = {
+  width: number
+  height: number
+  rows: TrackRow[]
+  /**
+   * The time axis shared by every row: one beat at each moment where any track starts a beat. A
+   * cursor placed on it with `locateTick` is at the same x in every row.
+   */
+  timeline: TabLayout
+}
+
+/**
+ * Lays out several tracks one under the other, each on a single line, on one time axis: measure n
+ * of every track has the same x and width (the widest the tracks need), and notes that start at the
+ * same moment are at the same x. Measure widths are computed from every track of `tracks`, not only
+ * the ones shown, so folding a row does not move the others. A piece shorter than `width` is
+ * stretched to it.
+ */
+export function layoutRows({ tracks, shown, width }: { tracks: Track[]; shown: ShownTrack[]; width: number }): RowsLayout {
+  const drafts = tracks.map(draftMeasures)
+  const axis = layoutColumns({ drafts, width })
+
+  let top = 0
+  const rows = shown.map(({ track, isCollapsed }): TrackRow => {
+    const draft = drafts[track]
+    const stringCount = tracks[track]?.tuning.length ?? 0
+    const layout = isCollapsed || !draft ? null : placeRow({ draft, axis, stringCount })
+    const row = { track, top, height: layout?.height ?? ROW_METRICS.collapsedHeight, layout }
+    top += row.height
+    return row
+  })
+
+  return { width: axis.width, height: top, rows, timeline: timelineOf(axis) }
+}
+
+/** The rows that cross the band from `top` to `bottom`, to draw only what is on screen. */
+export function visibleRows({ layout, top, bottom }: { layout: RowsLayout; top: number; bottom: number }): TrackRow[] {
+  return layout.rows.filter((row) => row.top < bottom && row.top + row.height > top)
+}
+
+/** The same layout with only the measures that cross the band from `left` to `right`. */
+export function clipLayout({ layout, left, right }: { layout: TabLayout; left: number; right: number }): TabLayout {
+  return {
+    ...layout,
+    systems: layout.systems.map((system) => ({
+      ...system,
+      measures: system.measures.filter((m) => m.x < right && m.x + m.width > left),
+    })),
+  }
+}
+
+type Column = {
+  index: number
+  startTick: number
+  ticks: number
+  x: number
+  width: number
+  /** Ticks from the start of the measure at which some track starts a beat, and their x. */
+  onsets: { tick: number; ticks: number; x: number }[]
+}
+
+type Axis = { width: number; columns: Column[] }
 
 type DraftMeasure = {
   index: number
@@ -209,28 +300,28 @@ function breakIntoSystems({ draft, innerWidth }: { draft: DraftMeasure[]; innerW
   return rows
 }
 
+/** Places the beats of a measure at the given positions (`xs`, one per beat) in a measure of `width`. */
 function placeMeasure({
   draft,
   x,
-  scale,
+  width,
+  xs,
   stringYs,
   staffBottom,
 }: {
   draft: DraftMeasure
   x: number
-  scale: number
+  width: number
+  xs: number[]
   stringYs: number[]
   staffBottom: number
 }): MeasureLayout {
-  const { beats, slotWidths, timeSignature } = draft
-  const slotsWidth = draft.slotsWidth * scale
-  const width = draft.fixedWidth + slotsWidth
+  const { beats, timeSignature } = draft
   const firstBeatX = x + METRICS.measurePadLeft + (timeSignature ? METRICS.timeSignatureWidth : 0)
 
   const stemTop = staffBottom + METRICS.stemOffset
   const stemBottom = stemTop + METRICS.stemLength
 
-  const xs = beatXs(firstBeatX, slotWidths, scale)
   let tick = draft.startTick
   const placed: BeatLayout[] = beats.map((beat, i) => {
     const beatX = xs[i] ?? firstBeatX
@@ -292,6 +383,121 @@ function beatXs(firstBeatX: number, slotWidths: number[], scale: number): number
     offset += slot
     return x
   })
+}
+
+/** Measure n of every track in one column, as wide as the track that needs most room. */
+function layoutColumns({ drafts, width }: { drafts: DraftMeasure[][]; width: number }): Axis {
+  const count = Math.max(0, ...drafts.map((d) => d.length))
+  const raw = Array.from({ length: count }, (_, index) => {
+    const inMeasure = drafts.flatMap((d) => d[index] ?? [])
+    const first = inMeasure[0]
+    const ticks = first ? measureTicks(first.measure.time_signature) : TICKS_PER_WHOLE
+    const starts = new Set<number>()
+    for (const draft of inMeasure) {
+      let tick = 0
+      for (const beat of draft.beats) {
+        if (tick < ticks) starts.add(tick)
+        tick += durationTicks(beat.duration)
+      }
+    }
+    const sorted = [...starts].sort((a, b) => a - b)
+    const gaps = sorted.map((tick, i) => (sorted[i + 1] ?? ticks) - tick)
+    const slotWidths = gaps.map(slotWidth)
+    const hasSignature = inMeasure.some((d) => d.timeSignature !== null)
+    return {
+      index,
+      startTick: first?.startTick ?? index * TICKS_PER_WHOLE,
+      ticks,
+      sorted,
+      gaps,
+      slotWidths,
+      slotsWidth: slotWidths.reduce((sum, w) => sum + w, 0),
+      signatureWidth: hasSignature ? METRICS.timeSignatureWidth : 0,
+      fixedWidth: METRICS.measurePadLeft + METRICS.measurePadRight + (hasSignature ? METRICS.timeSignatureWidth : 0),
+    }
+  })
+
+  const margins = 2 * METRICS.marginX + METRICS.clefWidth
+  const fixed = raw.reduce((sum, c) => sum + c.fixedWidth, 0)
+  const slots = raw.reduce((sum, c) => sum + c.slotsWidth, 0)
+  const natural = margins + fixed + slots
+  const scale = natural < width && slots > 0 ? (width - margins - fixed) / slots : 1
+
+  let x = METRICS.marginX + METRICS.clefWidth
+  const columns = raw.map((c): Column => {
+    const xs = beatXs(x + METRICS.measurePadLeft + c.signatureWidth, c.slotWidths, scale)
+    const column = {
+      index: c.index,
+      startTick: c.startTick,
+      ticks: c.ticks,
+      x,
+      width: c.fixedWidth + c.slotsWidth * scale,
+      onsets: c.sorted.map((tick, i) => ({ tick, ticks: c.gaps[i] ?? 0, x: xs[i] ?? x })),
+    }
+    x += column.width
+    return column
+  })
+  return { width: Math.max(width, x + METRICS.marginX), columns }
+}
+
+/** One track on one line, its beats on the shared columns. */
+function placeRow({ draft, axis, stringCount }: { draft: DraftMeasure[]; axis: Axis; stringCount: number }): TabLayout {
+  const staffTop = METRICS.topPad
+  const staffBottom = staffTop + (stringCount - 1) * METRICS.stringGap
+  const stringYs = Array.from({ length: stringCount }, (_, i) => staffTop + i * METRICS.stringGap)
+
+  const measures = draft.flatMap((m) => {
+    const column = axis.columns[m.index]
+    if (!column) return []
+    const xOf = new Map(column.onsets.map((onset) => [onset.tick, onset.x]))
+    let tick = 0
+    const xs = m.beats.map((beat) => {
+      const x = xOf.get(tick) ?? column.x
+      tick += durationTicks(beat.duration)
+      return x
+    })
+    return [placeMeasure({ draft: m, x: column.x, width: column.width, xs, stringYs, staffBottom })]
+  })
+
+  const system: SystemLayout = {
+    y: 0,
+    staffTop,
+    staffBottom,
+    stringYs,
+    left: METRICS.marginX,
+    right: axis.width - METRICS.marginX,
+    measures,
+  }
+  const height = Math.max(staffBottom + METRICS.rhythmHeight + ROW_METRICS.bottomPad, ROW_METRICS.minHeight)
+  return { width: axis.width, height, systems: [system] }
+}
+
+/** The columns as a layout of empty beats, one per onset, for `locateTick`. */
+function timelineOf(axis: Axis): TabLayout {
+  const measures = axis.columns.map(
+    (column): MeasureLayout => ({
+      index: column.index,
+      startTick: column.startTick,
+      ticks: column.ticks,
+      x: column.x,
+      width: column.width,
+      beats: column.onsets.map((onset) => ({
+        x: onset.x,
+        startTick: column.startTick + onset.tick,
+        ticks: onset.ticks,
+        value: 'Quarter',
+        dots: 0,
+        isRest: true,
+        notes: [],
+        stem: null,
+        flags: 0,
+      })),
+      beams: [],
+      timeSignature: null,
+    }),
+  )
+  const system: SystemLayout = { y: 0, staffTop: 0, staffBottom: 0, stringYs: [], left: METRICS.marginX, right: axis.width - METRICS.marginX, measures }
+  return { width: axis.width, height: 0, systems: [system] }
 }
 
 /**

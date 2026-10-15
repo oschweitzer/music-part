@@ -5,6 +5,7 @@
     {
       "name": "Guitar",
       "instrument": "Guitar",
+      "sound": "guitar/nylon",
       "tuning": [
         64,
         59,
@@ -516,6 +517,7 @@
     {
       "name": "Bass",
       "instrument": "Bass",
+      "sound": "bass/finger",
       "tuning": [
         43,
         38,

@@ -1,8 +1,9 @@
 //! Import MIDI -> `Score`.
 //!
 //! Each (MIDI track, channel) that plays notes becomes a track of the score, so a format 0 file
-//! with several channels is split. The percussion channel (10) is not imported. The instrument
-//! comes from the General MIDI program: bass for 32-39, violin for 40, guitar otherwise.
+//! with several channels is split. The percussion channel (10) is not imported. The sound, and
+//! with it the instrument, is the closest to the General MIDI program (see
+//! `Sound::from_midi_program`): a nylon guitar when the program is not a string instrument.
 //!
 //! A note whose duration cannot be written as a single value, or that crosses a barline, is
 //! split into tied notes (`Note::tied`). Timing is quantized to a 32nd note, so triplets and
@@ -19,7 +20,7 @@ use std::fmt;
 
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use score_model::{
-    decompose_ticks, place_chord, Beat, Duration, Instrument, Measure, Note, Score, TimeSignature,
+    decompose_ticks, place_chord, Beat, Duration, Measure, Note, Score, Sound, TimeSignature,
     Track, Voice,
 };
 
@@ -262,7 +263,8 @@ fn build_track(
     channel: &ChannelNotes,
     ts: TimeSignature,
 ) -> Result<(Track, usize), MidiImportError> {
-    let instrument = Instrument::from_midi_program(channel.program);
+    let sound = Sound::from_midi_program(channel.program);
+    let instrument = sound.instrument();
     let tuning = instrument.standard_tuning().to_vec();
     let mut skipped_notes = 0;
 
@@ -284,7 +286,7 @@ fn build_track(
         let max_end = group.iter().map(|&(e, _)| e).max().unwrap_or(start + GRID);
         let end = starts.get(i + 1).map_or(max_end, |&next| max_end.min(next));
         let pitches: Vec<u8> = group.iter().map(|&(_, p)| p).collect();
-        let (chord, skipped) = place_chord(&tuning, &pitches, &[]);
+        let (chord, skipped) = place_chord(instrument, &tuning, &pitches, &[]);
         skipped_notes += skipped;
         segments.push((start, end - start, chord));
         cursor = end;
@@ -346,6 +348,7 @@ fn build_track(
     let track = Track {
         name,
         instrument,
+        sound,
         tuning,
         measures: measures
             .into_iter()
@@ -362,6 +365,7 @@ fn build_track(
 mod tests {
     use super::*;
     use midly::{num::u4, Format, Header, MetaMessage, TrackEvent};
+    use score_model::Instrument;
 
     const PPQ: u16 = 480;
 
@@ -606,6 +610,35 @@ mod tests {
         assert_eq!(bass.instrument, Instrument::Bass);
         assert_eq!(bass.tuning.len(), 4);
         assert_eq!(violin.instrument, Instrument::Violin);
+    }
+
+    #[test]
+    fn program_30_gives_a_distorted_electric_guitar() {
+        let events = vec![
+            program(0, 30),
+            on_channel(0, 0, 52, true),
+            on_channel(0, 480, 52, false),
+        ];
+        let score = import(&write(PPQ, vec![events])).unwrap();
+        assert_eq!(score.tracks[0].instrument, Instrument::ElectricGuitar);
+        assert_eq!(score.tracks[0].sound, Sound::ElectricGuitarDistortion);
+    }
+
+    #[test]
+    fn a_banjo_gets_five_strings_and_its_notes_avoid_the_missing_frets() {
+        // G4 sharp: the fifth string could only play it at its (missing) first fret.
+        let events = vec![
+            program(0, 105),
+            on_channel(0, 0, 68, true),
+            on_channel(0, 480, 68, false),
+        ];
+        let score = import(&write(PPQ, vec![events])).unwrap();
+        let banjo = &score.tracks[0];
+        assert_eq!(banjo.sound, Sound::Banjo);
+        assert_eq!(banjo.tuning.len(), 5);
+        let note = &banjo.measures[0].voices[0].beats[0].notes[0];
+        assert_eq!(banjo.pitch(note), Some(68));
+        assert_eq!(score.validate(), Ok(()));
     }
 
     #[test]

@@ -328,6 +328,15 @@ describe('Editor', () => {
       expect(editor.track).toBe(score.tracks.length)
     })
 
+    it('should add a track with the sound picked in the menu', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      await editor.addTrack('ElectricGuitar', 'electric-guitar/distortion')
+
+      expect(edits).toEqual([{ type: 'addTrack', instrument: 'ElectricGuitar', sound: 'electric-guitar/distortion' }])
+    })
+
     it('should remove the current track', async () => {
       const { api, edits } = fakeApi()
       const { editor, playback } = setup({ api })
@@ -366,6 +375,75 @@ describe('Editor', () => {
 
       expect(edits).toEqual([])
       expect(editor.message?.tone).toBe('error')
+    })
+  })
+
+  describe('selecting in several tracks', () => {
+    it('should move the selection to the track of the row that is clicked', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 1, beat: 0, string: 2 }, { track: 1 })
+      await editor.run({ type: 'digit', digit: 5 })
+
+      expect(editor.track).toBe(1)
+      expect(edits).toEqual([{ type: 'setFret', track: 1, measure: 1, beat: 0, string: 2, fret: 5 }])
+    })
+
+    it('should not extend a range from one track into another', async () => {
+      const { editor } = setup()
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      editor.select({ measure: 0, beat: 2, string: 1 }, { extend: true, track: 1 })
+
+      expect(editor.selection).toEqual({ measure: 0, beat: 2, string: 1 })
+      expect(editor.track).toBe(1)
+    })
+
+    it('should keep a drag in the track it started in', async () => {
+      const { editor } = setup()
+      await editor.start()
+      editor.dragSelect({ from: { measure: 0, beat: 0, string: 1 }, to: { measure: 0, beat: 1, string: 2 }, track: 1 })
+
+      expect(editor.track).toBe(1)
+      expect(editor.selection).toEqual({ measure: 0, beat: 1, string: 2, anchor: { measure: 0, beat: 0 }, anchorString: 1 })
+    })
+
+    it('should paste into the track of the selection', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      await editor.run({ type: 'copy' })
+      editor.select({ measure: 2, beat: 0, string: 1 }, { track: 1 })
+      await editor.run({ type: 'paste' })
+
+      expect(edits[0]).toMatchObject({ type: 'paste', track: 1, measure: 2, beat: 0 })
+    })
+
+    it('should move to the next and previous track with the keyboard, at the same moment', async () => {
+      const { editor } = setup()
+      await editor.start()
+      editor.select({ measure: 2, beat: 0, string: 3 })
+      await editor.run({ type: 'switchTrack', step: 1 })
+      expect(editor.track).toBe(1)
+      expect(editor.selection).toMatchObject({ measure: 2, beat: 0, string: 3 })
+
+      await editor.run({ type: 'switchTrack', step: 1 })
+      expect(editor.track).toBe(1)
+      await editor.run({ type: 'switchTrack', step: -1 })
+      expect(editor.track).toBe(0)
+    })
+
+    it('should select the spot of a right-click in another track, even inside the same beats', async () => {
+      const { editor } = setup()
+      await editor.start()
+      editor.select({ measure: 0, beat: 0, string: 1 })
+      editor.select({ measure: 0, beat: 3, string: 1 }, { extend: true })
+      editor.selectForMenu({ measure: 0, beat: 1, string: 2 }, { track: 1 })
+
+      expect(editor.track).toBe(1)
+      expect(editor.selection).toEqual({ measure: 0, beat: 1, string: 2 })
     })
   })
 
@@ -596,6 +674,16 @@ describe('Editor', () => {
         { type: 'renameTrack', track: 1, name: 'Walking bass' },
         { type: 'setInstrument', track: 1, instrument: 'Violin' },
       ])
+    })
+
+    it('should change the sound of the current track', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.selectTrack(1)
+      await editor.setSound('bass/slap')
+
+      expect(edits).toEqual([{ type: 'setSound', track: 1, sound: 'bass/slap' }])
     })
   })
 

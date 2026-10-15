@@ -15,6 +15,12 @@ describe('interpretKey', () => {
     expect(press('ArrowDown')).toEqual({ type: 'move', direction: 'down' })
   })
 
+  it('should move to the previous or next track with Alt and the up and down arrows', () => {
+    expect(press('ArrowUp', { altKey: true })).toEqual({ type: 'switchTrack', step: -1 })
+    expect(press('ArrowDown', { altKey: true })).toEqual({ type: 'switchTrack', step: 1 })
+    expect(press('ArrowLeft', { altKey: true })).toBeNull()
+  })
+
   it('should read delete and backspace as removing the note', () => {
     expect(press('Delete')).toEqual({ type: 'remove' })
     expect(press('Backspace')).toEqual({ type: 'remove' })

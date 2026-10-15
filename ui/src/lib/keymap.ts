@@ -4,6 +4,8 @@ import type { Direction } from './selection'
 export type Command =
   | { type: 'digit'; digit: number }
   | { type: 'move'; direction: Direction }
+  /** To the previous (-1) or next (1) track, at the same moment. */
+  | { type: 'switchTrack'; step: -1 | 1 }
   | { type: 'extend'; direction: 'left' | 'right' }
   | { type: 'copy' }
   | { type: 'cut' }
@@ -75,7 +77,11 @@ export function interpretKey(input: KeyInput): Command | null {
     if (key === 'Delete' || key === 'Backspace') return { type: 'deleteMeasure' }
     return null
   }
-  if (altKey) return null
+  if (altKey) {
+    if (key === 'ArrowUp' && !shiftKey) return { type: 'switchTrack', step: -1 }
+    if (key === 'ArrowDown' && !shiftKey) return { type: 'switchTrack', step: 1 }
+    return null
+  }
 
   if (key === ' ') return { type: 'togglePlayback' }
   if (key === 'Home') return { type: 'rewind' }

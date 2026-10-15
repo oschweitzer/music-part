@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
 import type { Beat, Measure, Score, Track } from './score-types'
-import { durationTicks, hitTest, layoutTab, locateTick, measureTicks, METRICS } from './tab-layout'
+import {
+  clipLayout,
+  durationTicks,
+  hitTest,
+  layoutRows,
+  layoutTab,
+  locateTick,
+  measureTicks,
+  METRICS,
+  ROW_METRICS,
+  visibleRows,
+} from './tab-layout'
 
 const score = demo as Score
 const guitar = score.tracks[0] as Track
@@ -10,7 +21,7 @@ const bass = score.tracks[1] as Track
 const fourFour = { numerator: 4, denominator: 4 }
 
 function trackWith(measures: Measure[], tuning = guitar.tuning): Track {
-  return { name: 'test', instrument: 'Guitar', tuning, measures }
+  return { name: 'test', instrument: 'Guitar', sound: 'guitar/nylon', tuning, measures }
 }
 
 function measureOf(beats: Beat[]): Measure {
@@ -309,5 +320,112 @@ describe('hitTest', () => {
 
   it('should return null for a layout without systems', () => {
     expect(hitTest({ layout: layoutTab({ track: trackWith([]), width: 900 }), x: 50, y: 50 })).toBeNull()
+  })
+})
+
+describe('layoutRows', () => {
+  const wholes = (count: number): Beat[] =>
+    Array.from({ length: count }, () => ({ duration: { value: 'Whole' as const, dots: 0 }, notes: [{ string: 1, fret: 3, technique: null }] }))
+  const busy = trackWith([measureOf(eighths(8)), measureOf(eighths(8))])
+  const calm = trackWith([measureOf(wholes(1)), measureOf(wholes(1))], bass.tuning)
+  const both = [
+    { track: 0, isCollapsed: false },
+    { track: 1, isCollapsed: false },
+  ]
+  const layout = layoutRows({ tracks: [busy, calm], shown: both, width: 400 })
+  const measuresOf = (row: number) => layout.rows[row]!.layout!.systems[0]!.measures
+
+  it('should give measure n the same x and width in every row', () => {
+    expect(measuresOf(0).map((m) => [m.x, m.width])).toEqual(measuresOf(1).map((m) => [m.x, m.width]))
+  })
+
+  it('should make a measure as wide as the track that needs most room', () => {
+    const alone = layoutRows({ tracks: [calm], shown: [{ track: 0, isCollapsed: false }], width: 0 })
+    const aloneWidth = alone.rows[0]!.layout!.systems[0]!.measures[0]!.width
+    expect(measuresOf(1)[0]!.width).toBeGreaterThan(aloneWidth)
+    const busyAlone = layoutRows({ tracks: [busy], shown: [{ track: 0, isCollapsed: false }], width: 0 })
+    expect(measuresOf(1)[0]!.width).toBeCloseTo(busyAlone.rows[0]!.layout!.systems[0]!.measures[0]!.width, 3)
+  })
+
+  it('should put notes that start together at the same x', () => {
+    expect(measuresOf(1)[1]!.beats[0]!.x).toBe(measuresOf(0)[1]!.beats[0]!.x)
+  })
+
+  it('should keep each row on one line, as long as the piece', () => {
+    for (const row of layout.rows) {
+      expect(row.layout!.systems).toHaveLength(1)
+      expect(row.layout!.width).toBe(layout.width)
+    }
+    expect(layout.width).toBeGreaterThan(400)
+  })
+
+  it('should stretch a short piece to the width it is given', () => {
+    const wide = layoutRows({ tracks: [busy, calm], shown: both, width: 3000 })
+    const last = wide.rows[0]!.layout!.systems[0]!.measures.at(-1)!
+    expect(wide.width).toBe(3000)
+    expect(last.x + last.width).toBeCloseTo(3000 - METRICS.marginX, 3)
+  })
+
+  it('should stack the rows one under the other, a folded one only as tall as its header', () => {
+    const folded = layoutRows({ tracks: [busy, calm], shown: [{ track: 0, isCollapsed: true }, both[1]!], width: 400 })
+    const [first, second] = folded.rows
+    expect(first).toMatchObject({ top: 0, height: ROW_METRICS.collapsedHeight, layout: null })
+    expect(second!.top).toBe(ROW_METRICS.collapsedHeight)
+    expect(folded.height).toBe(second!.top + second!.height)
+  })
+
+  it('should not move the other rows when a row is folded', () => {
+    const folded = layoutRows({ tracks: [busy, calm], shown: [{ track: 0, isCollapsed: true }, both[1]!], width: 400 })
+    expect(folded.rows[1]!.layout!.systems[0]!.measures.map((m) => m.x)).toEqual(measuresOf(1).map((m) => m.x))
+  })
+
+  it('should show only the tracks asked for, in the order asked', () => {
+    const one = layoutRows({ tracks: [busy, calm], shown: [{ track: 1, isCollapsed: false }], width: 400 })
+    expect(one.rows.map((r) => r.track)).toEqual([1])
+    expect(one.rows[0]!.layout!.systems[0]!.stringYs).toHaveLength(4)
+  })
+
+  it('should place a shared cursor on the notes of every row', () => {
+    const tick = 128 + 16
+    const cursor = locateTick({ layout: layout.timeline, tick })!
+    expect(cursor.measureIndex).toBe(1)
+    expect(cursor.x).toBeCloseTo(measuresOf(0)[1]!.beats[1]!.x, 3)
+    expect(locateTick({ layout: layout.timeline, tick: 128 })!.x).toBe(measuresOf(1)[1]!.beats[0]!.x)
+  })
+
+  it('should let a click in a row find its beat and string', () => {
+    const row = layout.rows[0]!.layout!
+    const beat = measuresOf(0)[1]!.beats[3]!
+    expect(hitTest({ layout: row, x: beat.x, y: row.systems[0]!.stringYs[2]! })).toMatchObject({ measure: 1, beat: 3, string: 3 })
+  })
+
+  it('should lay out a score without tracks', () => {
+    expect(layoutRows({ tracks: [], shown: [], width: 500 })).toMatchObject({ height: 0, rows: [] })
+  })
+})
+
+describe('visibleRows', () => {
+  const tracks = Array.from({ length: 64 }, () => guitar)
+  const layout = layoutRows({ tracks, shown: tracks.map((_, track) => ({ track, isCollapsed: false })), width: 900 })
+
+  it('should keep only the rows that cross the band on screen', () => {
+    const height = layout.rows[0]!.height
+    const shown = visibleRows({ layout, top: height * 10 + 1, bottom: height * 12 })
+    expect(shown.map((r) => r.track)).toEqual([10, 11])
+  })
+
+  it('should keep nothing below the last row', () => {
+    expect(visibleRows({ layout, top: layout.height, bottom: layout.height + 500 })).toEqual([])
+  })
+})
+
+describe('clipLayout', () => {
+  it('should keep only the measures that cross the band', () => {
+    const layout = layoutRows({ tracks: [guitar], shown: [{ track: 0, isCollapsed: false }], width: 0 }).rows[0]!.layout!
+    const measures = layout.systems[0]!.measures
+    const second = measures[1]!
+    const clipped = clipLayout({ layout, left: second.x + 1, right: second.x + second.width - 1 })
+    expect(clipped.systems[0]!.measures.map((m) => m.index)).toEqual([1])
+    expect(clipped.width).toBe(layout.width)
   })
 })

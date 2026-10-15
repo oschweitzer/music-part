@@ -10,7 +10,7 @@ the number of nodes and the expansion of entities; compressed files are read up 
 | ----------------------------------- | ------------------------------------------------------------------- |
 | `work-title`, `movement-title`      | Title (the file name when there is none)                            |
 | Each `part` with pitched notes      | A track. Parts with only unpitched notes (drums) are left out       |
-| `part-name`, `midi-program`         | Track name; guitar, bass or violin from the program or the name     |
+| `part-name`, `midi-program`         | Track name; the closest sound to the program, else from the name    |
 | `staff-tuning`                      | Tuning, highest string first. Else the standard tuning              |
 | `divisions`, `time`                 | Positions; time signature of each measure ("3+2" beats are summed)  |
 | `sound tempo`, quarter `metronome`  | Tempo of the score (the first one found), else 120                  |

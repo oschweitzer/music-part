@@ -2,12 +2,13 @@
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte'
   import EditBar from './components/EditBar.svelte'
   import TabView from './components/TabView.svelte'
+  import TrackRows from './components/TrackRows.svelte'
   import { createDocumentApi, type ExportFormat } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
-  import { INSTRUMENTS, instrumentLabel } from './lib/instruments'
+  import { INSTRUMENTS, instrumentLabel, soundsOf } from './lib/instruments'
   import { interpretKey } from './lib/keymap'
-  import type { Instrument } from './lib/score-types'
+  import type { Instrument, SoundId } from './lib/score-types'
   import type { Selection } from './lib/selection'
   import { formatTuning } from './lib/tuning'
   import { Playback } from './lib/playback.svelte'
@@ -15,6 +16,8 @@
   import { layoutTab, locateTick } from './lib/tab-layout'
   import { applyTheme, nextTheme, readTheme, saveTheme, themeLabel, type Theme } from './lib/theme'
   import { createTransport } from './lib/transport'
+  import { dropTrackFromView, readViewMode, saveViewMode, shownTracks, toggleCollapsed, viewModeLabel } from './lib/track-view'
+  import type { TrackView, ViewMode } from './lib/track-view'
 
   const playback = new Playback(createTransport())
   const editor = new Editor({ api: createDocumentApi(), playback, prompts: createFilePrompts() })
@@ -27,6 +30,14 @@
     saveTheme(theme)
   }
 
+  let view = $state<TrackView>({ mode: readViewMode(), collapsed: [] })
+  const viewModes: ViewMode[] = ['tabs', 'rows']
+
+  function changeViewMode(mode: ViewMode) {
+    view = { ...view, mode }
+    saveViewMode(mode)
+  }
+
   let loadError = $state<string | null>(null)
   let paperWidth = $state(0)
   let stage = $state<HTMLElement>()
@@ -35,7 +46,9 @@
 
   const score = $derived(editor.document?.score ?? null)
   const track = $derived(score?.tracks[editor.track] ?? null)
-  const layout = $derived(track && paperWidth > 0 ? layoutTab({ track, width: paperWidth }) : null)
+  const shown = $derived(shownTracks({ view, trackCount: score?.tracks.length ?? 0, current: editor.track }))
+  const isRows = $derived(view.mode === 'rows')
+  const layout = $derived(track && !isRows && paperWidth > 0 ? layoutTab({ track, width: paperWidth }) : null)
 
   const hasStarted = $derived(playback.isPlaying || playback.tick > 0)
   const cursor = $derived(layout && hasStarted ? locateTick({ layout, tick: playback.tick }) : null)
@@ -124,9 +137,32 @@
   }
 
 
-  function addTrack(event: MouseEvent, instrument: Instrument) {
+  /** Removes a track; its row fold goes with it, once the score really lost the track. */
+  async function removeTrack(index: number) {
+    const before = score?.tracks.length ?? 0
+    await editor.removeTrack(index)
+    if ((score?.tracks.length ?? 0) < before) view = dropTrackFromView({ view, track: index })
+  }
+
+  function pickTrack(event: Event) {
+    editor.selectTrack(Number((event.currentTarget as HTMLSelectElement).value))
+  }
+
+  // With many tracks the tabs scroll sideways: keep the tab of the edited track in view.
+  let tabList = $state<HTMLElement>()
+  $effect(() => {
+    const active = editor.track
+    const tab = tabList?.children[active] as HTMLElement | undefined
+    if (!tabList || !tab) return
+    if (tab.offsetLeft < tabList.scrollLeft) tabList.scrollLeft = tab.offsetLeft
+    else if (tab.offsetLeft + tab.offsetWidth > tabList.scrollLeft + tabList.clientWidth) {
+      tabList.scrollLeft = tab.offsetLeft + tab.offsetWidth - tabList.clientWidth
+    }
+  })
+
+  function addTrack(event: MouseEvent, instrument: Instrument, sound: SoundId) {
     ;(event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
-    void editor.addTrack(instrument)
+    void editor.addTrack(instrument, sound)
   }
 
   async function changeName(event: Event) {
@@ -137,6 +173,10 @@
 
   function changeInstrument(event: Event) {
     void editor.setInstrument((event.currentTarget as HTMLSelectElement).value as Instrument)
+  }
+
+  function changeSound(event: Event) {
+    void editor.setSound((event.currentTarget as HTMLSelectElement).value as SoundId)
   }
 
   async function changeTuning(event: Event) {
@@ -150,8 +190,8 @@
   // The menu of a right-click on the tablature acts on the selection.
   let menu: { x: number; y: number } | null = $state(null)
 
-  function openMenu(target: Selection, at: { x: number; y: number }) {
-    editor.selectForMenu(target)
+  function openMenu(target: Selection, at: { x: number; y: number }, track: number = editor.track) {
+    editor.selectForMenu(target, { track })
     menu = at
   }
 
@@ -234,6 +274,17 @@
     {/if}
 
     <div class="right">
+      <div class="view-switch" role="group" aria-label="Track view">
+        {#each viewModes as mode (mode)}
+          <button
+            type="button"
+            aria-pressed={view.mode === mode}
+            title={mode === 'tabs' ? 'One track at a time, chosen from its tab' : 'Every track in a row, one under the other'}
+            onmousedown={keepFocus}
+            onclick={() => changeViewMode(mode)}>{viewModeLabel[mode]}</button
+          >
+        {/each}
+      </div>
       {#if score}
         <label class="tempo" title="Tempo (beats per minute)">
           <span class="tempo-note" aria-hidden="true">♩</span> =
@@ -282,53 +333,75 @@
 
   {#if score}
     <nav class="tracks" aria-label="Tracks">
-      {#each score.tracks as t, i (i)}
-        <div class="track-tab" class:active={i === editor.track}>
-          <button type="button" class="name" onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
-            {t.name}
-            <span class="strings">{t.tuning.length} strings</span>
-          </button>
-          <button
-            type="button"
-            class="mix"
-            class:on={playback.muted[i]}
-            aria-pressed={playback.muted[i] === true}
-            aria-label="Mute {t.name}"
-            title="Mute"
-            onmousedown={keepFocus}
-            onclick={() => playback.toggleMute(i)}>M</button>
-          <button
-            type="button"
-            class="mix"
-            class:on={playback.solo[i]}
-            aria-pressed={playback.solo[i] === true}
-            aria-label="Solo {t.name}"
-            title="Solo: play only the soloed tracks"
-            onmousedown={keepFocus}
-            onclick={() => playback.toggleSolo(i)}>S</button>
-          {#if editor.canEdit}
-            <button
-              type="button"
-              class="mix drop"
-              aria-label="Remove {t.name}"
-              title="Remove this track (Ctrl+Z brings it back)"
-              disabled={score.tracks.length < 2}
-              onmousedown={keepFocus}
-              onclick={() => editor.removeTrack(i)}>×</button>
-          {/if}
+      {#if !isRows}
+        <div class="tab-list" bind:this={tabList}>
+          {#each score.tracks as t, i (i)}
+            <div class="track-tab" class:active={i === editor.track}>
+              <button type="button" class="name" onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
+                {t.name}
+                <span class="strings">{t.tuning.length} strings</span>
+              </button>
+              <button
+                type="button"
+                class="mix"
+                class:on={playback.muted[i]}
+                aria-pressed={playback.muted[i] === true}
+                aria-label="Mute {t.name}"
+                title="Mute"
+                onmousedown={keepFocus}
+                onclick={() => playback.toggleMute(i)}>M</button>
+              <button
+                type="button"
+                class="mix"
+                class:on={playback.solo[i]}
+                aria-pressed={playback.solo[i] === true}
+                aria-label="Solo {t.name}"
+                title="Solo: play only the soloed tracks"
+                onmousedown={keepFocus}
+                onclick={() => playback.toggleSolo(i)}>S</button>
+              {#if editor.canEdit}
+                <button
+                  type="button"
+                  class="mix drop"
+                  aria-label="Remove {t.name}"
+                  title="Remove this track (Ctrl+Z brings it back)"
+                  disabled={score.tracks.length < 2}
+                  onmousedown={keepFocus}
+                  onclick={() => removeTrack(i)}>×</button>
+              {/if}
+            </div>
+          {/each}
         </div>
-      {/each}
+      {/if}
 
       {#if editor.canEdit}
         <details class="add-track">
           <summary title="Add a track">+ Track</summary>
           <div class="menu">
             {#each INSTRUMENTS as instrument (instrument)}
-              <button type="button" onmousedown={keepFocus} onclick={(event) => addTrack(event, instrument)}>{instrumentLabel(instrument)}</button>
+              <div class="family" role="group" aria-label={instrumentLabel(instrument)}>
+                <span>{instrumentLabel(instrument)}</span>
+                {#each soundsOf(instrument) as sound (sound.id)}
+                  <button
+                    type="button"
+                    class="sound"
+                    aria-label="{instrumentLabel(instrument)}: {sound.name}"
+                    onmousedown={keepFocus}
+                    onclick={(event) => addTrack(event, instrument, sound.id)}>{sound.name}</button>
+                {/each}
+              </div>
             {/each}
           </div>
         </details>
+      {/if}
 
+      <select class="track-picker" value={editor.track} aria-label="Track to edit" title="The track to edit" onchange={pickTrack}>
+        {#each score.tracks as t, i (i)}
+          <option value={i}>{i + 1}. {t.name}</option>
+        {/each}
+      </select>
+
+      {#if editor.canEdit}
         {#if track}
           <label class="track-field" title="Name of this track">
             Name
@@ -341,11 +414,19 @@
               onchange={changeName}
             />
           </label>
-          <label class="track-field" title="The sound of this track. The strings stay as they are.">
-            Sound
+          <label class="track-field" title="The instrument of this track. The strings stay as they are.">
+            Instrument
             <select value={track.instrument} aria-label="Instrument of this track" onchange={changeInstrument}>
               {#each INSTRUMENTS as instrument (instrument)}
                 <option value={instrument}>{instrumentLabel(instrument)}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="track-field" title="How this track sounds, among the sounds of its instrument.">
+            Sound
+            <select value={track.sound} aria-label="Sound of this track" onchange={changeSound}>
+              {#each soundsOf(track.instrument) as sound (sound.id)}
+                <option value={sound.id}>{sound.name}</option>
               {/each}
             </select>
           </label>
@@ -366,14 +447,24 @@
     <EditBar {editor} />
   {/if}
 
-  <main class="stage" class:dragging={isDragging} bind:this={stage}>
+  <main class="stage" class:dragging={isDragging} class:rows={isRows && score !== null} bind:this={stage}>
     {#if isDragging}
       <div class="drop-hint" aria-hidden="true">Drop a score or MIDI file to open it</div>
     {/if}
     {#if loadError}
       <p class="message error" role="alert">{loadError}</p>
-    {:else if !track}
+    {:else if !track || !score}
       <p class="message">Loading…</p>
+    {:else if isRows}
+      <TrackRows
+        {score}
+        {shown}
+        {editor}
+        {playback}
+        ontogglecollapse={(index) => (view = toggleCollapsed({ view, track: index }))}
+        onremove={(index) => void removeTrack(index)}
+        onmenu={openMenu}
+      />
     {:else}
       <div class="paper" bind:this={paper} bind:clientWidth={paperWidth}>
         {#if layout}
@@ -568,7 +659,17 @@
     border-bottom: 1px solid var(--border);
   }
 
+  .tab-list {
+    display: flex;
+    flex: 0 1 auto;
+    gap: 6px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
   .track-tab {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 2px;
@@ -672,6 +773,60 @@
     background: var(--surface-2);
   }
 
+  .track-picker {
+    max-width: 160px;
+    margin-left: auto;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .view-switch {
+    display: flex;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+
+  .view-switch button {
+    padding: 3px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--ink-muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .view-switch button[aria-pressed='true'] {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  }
+
+  .add-track .family {
+    display: flex;
+    flex-direction: column;
+    white-space: nowrap;
+  }
+
+  .add-track .family span {
+    padding: 6px 10px 2px;
+    color: var(--ink-muted);
+    font-size: 12px;
+  }
+
+  .add-track .menu button.sound {
+    padding-left: 20px;
+  }
+
   .track-field,
   .tuning {
     display: flex;
@@ -679,10 +834,6 @@
     gap: 8px;
     color: var(--ink-muted);
     font-size: 12px;
-  }
-
-  .track-field:first-of-type {
-    margin-left: auto;
   }
 
   .track-field input,
@@ -725,10 +876,15 @@
     padding: 24px;
   }
 
+  .stage.rows {
+    padding: 0;
+    overflow: hidden;
+  }
+
   .drop-hint {
     position: absolute;
     inset: 12px;
-    z-index: 1;
+    z-index: 3;
     display: grid;
     place-items: center;
     border: 2px dashed var(--accent);

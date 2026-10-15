@@ -9,8 +9,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    decompose_ticks, Beat, Duration, Instrument, Measure, Note, Score, Technique, TimeSignature,
-    Track, Voice, MAX_FRET,
+    decompose_ticks, Beat, Duration, Instrument, Measure, Note, Score, Sound, Technique,
+    TimeSignature, Track, Voice, MAX_FRET,
 };
 
 /// A beat of the first voice of a track.
@@ -85,9 +85,13 @@ pub enum Edit {
         string: u8,
         technique: Option<Technique>,
     },
-    /// Appends a track with the standard tuning, as many empty measures as the first track.
+    /// Appends a track with the standard tuning, as many empty measures as the first track, and
+    /// `sound` (the default sound of the instrument when not given). Refused if the sound is not
+    /// one of the instrument.
     AddTrack {
         instrument: Instrument,
+        #[serde(default)]
+        sound: Option<Sound>,
     },
     RemoveTrack {
         index: usize,
@@ -114,10 +118,18 @@ pub enum Edit {
         track: usize,
         name: String,
     },
-    /// Changes the sound of a track. The tuning is left alone: retune it if the strings differ.
+    /// Changes the instrument of a track; its sound becomes the default sound of the new
+    /// instrument. The strings and frets of the notes are left alone (retune the track if the
+    /// strings differ). Refused if a note would land on a fret the instrument does not have (the
+    /// first frets of the short fifth string of a banjo).
     SetInstrument {
         track: usize,
         instrument: Instrument,
+    },
+    /// Changes the sound of a track, among the sounds of its instrument.
+    SetSound {
+        track: usize,
+        sound: Sound,
     },
     /// Retunes a track, highest string first. Refused if a note would no longer be playable.
     SetTuning {
@@ -148,6 +160,11 @@ pub enum EditError {
     /// Names what was out of range: "track", "measure", "beat" or "string".
     OutOfRange(&'static str),
     InvalidFret,
+    /// The string has no such fret: the first frets of the short fifth string of a banjo, or a
+    /// fret above MIDI pitch 127.
+    NoSuchFret,
+    /// The sound belongs to another instrument than the track's.
+    SoundOfAnotherInstrument,
     InvalidDuration,
     InvalidTempo,
     /// The measure has no room left after the beat for the longer duration.
@@ -174,6 +191,13 @@ impl fmt::Display for EditError {
         match self {
             Self::OutOfRange(what) => write!(f, "there is no such {what}"),
             Self::InvalidFret => write!(f, "the fret must be between 0 and {MAX_FRET}"),
+            Self::NoSuchFret => write!(
+                f,
+                "this string has no such fret (the short fifth string of a banjo starts at fret 6)"
+            ),
+            Self::SoundOfAnotherInstrument => {
+                write!(f, "this sound belongs to another instrument")
+            }
             Self::InvalidDuration => write!(f, "this note duration is not supported"),
             Self::InvalidTempo => write!(f, "the tempo must be between 1 and 999 bpm"),
             Self::NotEnoughRoom => write!(f, "there is not enough room left in the measure"),
@@ -234,9 +258,10 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
                 technique: None,
                 tied: false,
             };
-            // A very high tuning can leave no MIDI pitch for a fret that is otherwise allowed.
+            // A very high tuning can leave no MIDI pitch for a fret that is otherwise allowed, and
+            // a banjo's short string has no first frets.
             if score.tracks[track].pitch(&note).is_none() {
-                return Err(EditError::InvalidFret);
+                return Err(EditError::NoSuchFret);
             }
             let beat = beat_mut(score, track, measure, beat)?;
             match beat.notes.iter_mut().find(|n| n.string == string) {
@@ -334,15 +359,25 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
                 .name = name.to_string();
             Ok(())
         }
-        Edit::SetInstrument { track, instrument } => {
-            score
+        Edit::SetInstrument { track, instrument } => set_instrument(score, track, instrument),
+        Edit::SetSound { track, sound } => {
+            let target = score
                 .tracks
                 .get_mut(track)
-                .ok_or(EditError::OutOfRange("track"))?
-                .instrument = instrument;
+                .ok_or(EditError::OutOfRange("track"))?;
+            if sound.instrument() != target.instrument {
+                return Err(EditError::SoundOfAnotherInstrument);
+            }
+            target.sound = sound;
             Ok(())
         }
-        Edit::AddTrack { instrument } => add_track(score, instrument),
+        Edit::AddTrack { instrument, sound } => {
+            let sound = sound.unwrap_or_else(|| instrument.default_sound());
+            if sound.instrument() != instrument {
+                return Err(EditError::SoundOfAnotherInstrument);
+            }
+            add_track(score, sound)
+        }
         Edit::RemoveTrack { index } => {
             if index >= score.tracks.len() {
                 return Err(EditError::OutOfRange("track"));
@@ -658,7 +693,37 @@ fn split_beat(beat: &Beat, ticks: u32) -> Result<Vec<Beat>, EditError> {
         .collect())
 }
 
-fn add_track(score: &mut Score, instrument: Instrument) -> Result<(), EditError> {
+fn set_instrument(
+    score: &mut Score,
+    track: usize,
+    instrument: Instrument,
+) -> Result<(), EditError> {
+    let target = score
+        .tracks
+        .get_mut(track)
+        .ok_or(EditError::OutOfRange("track"))?;
+    if target.instrument == instrument {
+        return Ok(());
+    }
+    let mut changed = target.clone();
+    changed.instrument = instrument;
+    changed.sound = instrument.default_sound();
+    let is_playable = changed
+        .measures
+        .iter()
+        .flat_map(|m| &m.voices)
+        .flat_map(|v| &v.beats)
+        .flat_map(|b| &b.notes)
+        .all(|n| changed.pitch(n).is_some());
+    if !is_playable {
+        return Err(EditError::NoSuchFret);
+    }
+    *target = changed;
+    Ok(())
+}
+
+fn add_track(score: &mut Score, sound: Sound) -> Result<(), EditError> {
+    let instrument = sound.instrument();
     if score.tracks.len() >= MAX_TRACKS {
         return Err(EditError::TooManyTracks);
     }
@@ -693,6 +758,7 @@ fn add_track(score: &mut Score, instrument: Instrument) -> Result<(), EditError>
     score.tracks.push(Track {
         name,
         instrument,
+        sound,
         tuning: instrument.standard_tuning().to_vec(),
         measures,
     });
@@ -1313,6 +1379,7 @@ mod tests {
             &mut score,
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
+                sound: None,
             },
         )
         .unwrap();
@@ -1452,6 +1519,7 @@ mod tests {
             &mut score,
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
+                sound: None,
             },
         )
         .unwrap();
@@ -1473,6 +1541,7 @@ mod tests {
             &mut score,
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
+                sound: None,
             },
         )
         .unwrap();
@@ -1503,6 +1572,7 @@ mod tests {
             &mut score,
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
+                sound: None,
             },
         )
         .unwrap();
@@ -1677,6 +1747,7 @@ mod tests {
             &mut score,
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
+                sound: None,
             },
         )
         .unwrap();
@@ -1684,6 +1755,7 @@ mod tests {
             &mut score,
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
+                sound: None,
             },
         )
         .unwrap();
@@ -1692,7 +1764,46 @@ mod tests {
         let added = &score.tracks[tracks];
         assert_eq!(added.measures.len(), measures);
         assert_eq!(added.tuning, Instrument::Bass.standard_tuning());
+        assert_eq!(added.sound, Sound::BassFinger);
         assert_ne!(added.name, score.tracks[tracks + 1].name);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_track_is_added_with_the_sound_asked_for_if_its_instrument_has_it() {
+        let mut score = demo_score();
+        let add = |sound| Edit::AddTrack {
+            instrument: Instrument::ElectricGuitar,
+            sound: Some(sound),
+        };
+        apply_edit(&mut score, &add(Sound::ElectricGuitarDistortion)).unwrap();
+        assert_eq!(
+            score.tracks.last().unwrap().sound,
+            Sound::ElectricGuitarDistortion
+        );
+
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &add(Sound::BassSlap)),
+            Err(EditError::SoundOfAnotherInstrument)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_banjo_track_gets_five_strings_and_the_banjo_sound() {
+        let mut score = demo_score();
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Banjo,
+                sound: None,
+            },
+        )
+        .unwrap();
+        let banjo = score.tracks.last().unwrap();
+        assert_eq!(banjo.tuning, crate::BANJO_STANDARD);
+        assert_eq!(banjo.sound, Sound::Banjo);
         assert_eq!(score.validate(), Ok(()));
     }
 
@@ -1726,7 +1837,7 @@ mod tests {
         // 120 + 10 is above MIDI pitch 127.
         assert_eq!(
             apply_edit(&mut score, &set_fret(0, 0, 1, 10)),
-            Err(EditError::InvalidFret)
+            Err(EditError::NoSuchFret)
         );
         assert_eq!(score, before);
         apply_edit(&mut score, &set_fret(0, 0, 1, 7)).unwrap();
@@ -1804,7 +1915,17 @@ mod tests {
         assert_eq!(
             edit,
             Edit::AddTrack {
-                instrument: Instrument::Violin
+                instrument: Instrument::Violin,
+                sound: None,
+            }
+        );
+        let edit: Edit =
+            serde_json::from_str(r#"{"type":"setSound","track":1,"sound":"bass/slap"}"#).unwrap();
+        assert_eq!(
+            edit,
+            Edit::SetSound {
+                track: 1,
+                sound: Sound::BassSlap
             }
         );
     }
@@ -1935,6 +2056,101 @@ mod tests {
         .unwrap();
         assert_eq!(score.tracks[0].instrument, Instrument::Violin);
         assert_eq!(score.tracks[0].tuning, tuning);
+    }
+
+    #[test]
+    fn a_new_instrument_brings_its_default_sound() {
+        let mut score = demo_score();
+        score.tracks[0].instrument = Instrument::ElectricGuitar;
+        score.tracks[0].sound = Sound::ElectricGuitarDistortion;
+        let set = |instrument| Edit::SetInstrument {
+            track: 0,
+            instrument,
+        };
+
+        apply_edit(&mut score, &set(Instrument::ElectricGuitar)).unwrap();
+        assert_eq!(score.tracks[0].sound, Sound::ElectricGuitarDistortion);
+
+        apply_edit(&mut score, &set(Instrument::Guitar)).unwrap();
+        assert_eq!(score.tracks[0].sound, Sound::GuitarNylon);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn an_instrument_is_refused_if_a_note_would_be_on_a_fret_it_lacks() {
+        let mut score = demo_score();
+        // Five strings, with a note at fret 2 of the fifth: a banjo's fifth string has no fret 2.
+        score.tracks[0].tuning.truncate(5);
+        score.tracks[0].measures[0].voices[0].beats[0].notes = vec![Note {
+            string: 5,
+            fret: 2,
+            technique: None,
+            tied: false,
+        }];
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(
+                &mut score,
+                &Edit::SetInstrument {
+                    track: 0,
+                    instrument: Instrument::Banjo,
+                }
+            ),
+            Err(EditError::NoSuchFret)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn the_sound_of_a_track_changes_among_those_of_its_instrument() {
+        let mut score = demo_score();
+        let set = |sound| Edit::SetSound { track: 1, sound };
+
+        apply_edit(&mut score, &set(Sound::BassSlap)).unwrap();
+        assert_eq!(score.tracks[1].sound, Sound::BassSlap);
+        assert_eq!(score.tracks[1].instrument, Instrument::Bass);
+
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &set(Sound::Violin)),
+            Err(EditError::SoundOfAnotherInstrument)
+        );
+        assert_eq!(
+            apply_edit(
+                &mut score,
+                &Edit::SetSound {
+                    track: 9,
+                    sound: Sound::BassPick
+                }
+            ),
+            Err(EditError::OutOfRange("track"))
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn the_first_frets_of_the_short_banjo_string_are_refused() {
+        let mut score = demo_score();
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Banjo,
+                sound: None,
+            },
+        )
+        .unwrap();
+        let banjo = score.tracks.len() - 1;
+        let fret = |fret| Edit::SetFret {
+            track: banjo,
+            measure: 0,
+            beat: 0,
+            string: 5,
+            fret,
+        };
+        assert_eq!(apply_edit(&mut score, &fret(3)), Err(EditError::NoSuchFret));
+        apply_edit(&mut score, &fret(0)).unwrap();
+        apply_edit(&mut score, &fret(7)).unwrap();
+        assert_eq!(score.validate(), Ok(()));
     }
 
     fn note_beat(value: NoteValue, notes: &[(u8, u8)]) -> Beat {
@@ -2192,8 +2408,8 @@ mod tests {
                         technique: [None, Some(Technique::Slide), Some(Technique::Bend)][next(3)],
                     },
                     9 => Edit::AddTrack {
-                        instrument: [Instrument::Guitar, Instrument::Bass, Instrument::Violin]
-                            [next(3)],
+                        instrument: Instrument::ALL[next(Instrument::ALL.len())],
+                        sound: [None, Some(Sound::ALL[next(Sound::ALL.len())])][next(2)],
                     },
                     10 => Edit::RemoveTrack {
                         index: next(score.tracks.len() + 1),
@@ -2230,10 +2446,13 @@ mod tests {
                         track,
                         name: ["Lead", "", "  Bass  "][next(3)].to_string(),
                     },
+                    13 if next(2) == 0 => Edit::SetSound {
+                        track,
+                        sound: Sound::ALL[next(Sound::ALL.len())],
+                    },
                     13 => Edit::SetInstrument {
                         track,
-                        instrument: [Instrument::Guitar, Instrument::Bass, Instrument::Violin]
-                            [next(3)],
+                        instrument: Instrument::ALL[next(Instrument::ALL.len())],
                     },
                     14 => Edit::Paste {
                         track,
