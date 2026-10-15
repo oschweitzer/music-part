@@ -220,6 +220,8 @@ fn timbre_offsets(timbre: Timbre) -> &'static [(u8, i32)] {
 }
 /// Sample banks a player can hold. Bank numbers stay well under the 128 a controller can carry.
 const MAX_BANKS: u8 = 32;
+/// Bank number of the first sample bank added; see `Player::add_bank`.
+const FIRST_BANK: u8 = 100;
 
 /// The SF2 parser panics on some corrupted files: turn that into an error.
 fn read_soundfont<R: Read + Seek>(soundfont: &mut R) -> Result<SoundFont, PlayerError> {
@@ -277,10 +279,15 @@ impl Player {
         keys: RangeInclusive<u8>,
     ) -> Result<(), PlayerError> {
         let font = read_soundfont(soundfont)?;
-        // Bank 0 is the base SoundFont; each bank takes the next number, shifting its presets.
-        let number = u8::try_from(self.banks.len() + 1)
+        // Bank 0 is the base SoundFont. Each bank is shifted to a number counting down from
+        // `FIRST_BANK`, so the most recent one, on top of the synthesizer's stack of fonts, has the
+        // lowest. The synthesizer subtracts a font's shift from the requested bank and clamps at
+        // zero: with the lowest shift on top, a request for another bank asks a font for a bank it
+        // does not have and moves on, instead of landing on its bank 0.
+        let number = u8::try_from(self.banks.len())
             .ok()
-            .filter(|b| *b <= MAX_BANKS)
+            .filter(|n| *n < MAX_BANKS)
+            .map(|n| FIRST_BANK - n)
             .ok_or_else(|| PlayerError::SoundFont("too many sample banks".into()))?;
         let id = self.synth.add_font(font, false);
         self.synth.set_bank_offset(id, u32::from(number));
@@ -1034,6 +1041,53 @@ mod tests {
         };
         let (muted, open) = (brightness(&muted, 0.0, 0.4), brightness(&open, 0.0, 0.4));
         assert!(muted < open * 0.5, "muted {muted}, open {open}");
+    }
+
+    #[test]
+    fn each_instrument_plays_its_own_bank_when_all_banks_are_loaded() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let banks: Vec<_> = crate::SAMPLE_BANKS
+            .iter()
+            .filter_map(|bank| Some((bank, test_bank(bank.file)?)))
+            .collect();
+        if banks.len() < crate::SAMPLE_BANKS.len() {
+            eprintln!("sample banks missing, test skipped");
+            return;
+        }
+        for (bank, path) in &banks {
+            let mut score = one_note_score();
+            score.tracks[0].instrument = bank.instrument;
+            // Bass notes: the fallback would hide a wrong bank for the high ones.
+            score.tracks[0].tuning = vec![40, 35, 31, 28];
+            let alone = render_with_bank(
+                &base,
+                Some((bank.instrument, path.as_path(), bank.keys())),
+                &score,
+            );
+            let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
+            for (other, other_path) in &banks {
+                player
+                    .add_bank(
+                        other.instrument,
+                        &mut File::open(other_path).unwrap(),
+                        other.keys(),
+                    )
+                    .unwrap();
+            }
+            player.load_score(&score);
+            player.play();
+            let mut all = vec![0.0f32; 2 * 44_100];
+            player.render(&mut all);
+
+            assert!(
+                alone == all,
+                "{:?} does not play its own bank when the others are loaded",
+                bank.instrument
+            );
+        }
     }
 
     #[test]

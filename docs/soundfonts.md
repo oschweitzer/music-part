@@ -64,8 +64,11 @@ The violin has no free recording yet and keeps the General MIDI sound.
 
 How it works (`audio-engine::Player::add_bank`):
 
-- Each bank is loaded as another SoundFont, shifted to its own bank number; a track picks it with a
-  Bank Select message and program 0. Everything the base bank does (pitch wheel, mute, solo, seek)
+- Each bank is loaded as another SoundFont, shifted to its own bank number (100, 99, 98...); a
+  track picks it with a Bank Select message and program 0. The numbers count down so that the
+  last bank added has the lowest: the synthesizer subtracts a font's shift from the requested bank
+  and stops at zero, so with the numbers going up, a request for the first bank landed on the
+  bank 0 of the last one. The General MIDI sound must not use program 0 for the same reason. Everything the base bank does (pitch wheel, mute, solo, seek)
   works the same.
 - **Notes the recording does not cover** are played with the General MIDI sound. This matters for
   the bass, whose recording stops at A2: higher notes go to a second channel of the same track that

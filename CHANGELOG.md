@@ -82,6 +82,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Playback: with the sample banks loaded, the guitars played the bass recording. Each instrument
+  now plays its own bank.
 - A score with more than 15 tracks no longer makes tracks share a MIDI channel (and so an
   instrument) during playback.
 - Typing a fret on a very high string no longer builds a note above MIDI pitch 127.
