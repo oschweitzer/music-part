@@ -107,6 +107,8 @@ dependencies = [
  "midly",
  "oxisynth",
  "score-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

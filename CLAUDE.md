@@ -26,7 +26,7 @@ root/
 ├── ui/                # Svelte + TypeScript front end
 │   ├── public/        # demo-score.json: export of the Rust demo score, checked by a Rust test
 │   └── src/lib/       # tab-layout.ts (pure layout), editor.svelte.ts (editing), keymap, selection, playback
-└── docs/              # Design notes: soundfonts.md, editing.md, musicxml.md
+└── docs/              # Design notes: soundfonts.md, sounds.md, sound-packs.md, editing.md, musicxml.md
 ```
 
 The roadmap is in the approved plan: foundations, playback, tab rendering, editing, realistic
@@ -62,9 +62,9 @@ samples and technique sounds, then more instruments. Guitar Pro import is not pl
 cargo test --workspace                          # Run all tests
 cargo fmt --all                                 # Format
 cargo clippy --workspace --all-targets -- -D warnings   # Lint, CI fails on any warning
-pnpm fetch:soundfont                            # Download the SoundFont and the sample banks (assets/soundfonts, not in git)
+pnpm fetch:soundfont                            # Download the SoundFont and the sound pack samples (assets/soundfonts, not in git)
 cargo run -p audio-engine --example play_midi -- song.mid assets/soundfonts/GeneralUser-GS.sf2
-cargo run -p audio-engine --release --example render_wav -- out.wav [song.mid] [--no-banks]   # Listen without the app
+cargo run -p audio-engine --release --example render_wav -- out.wav [song.mid] [--no-packs]   # Listen without the app
 ```
 
 ```bash
@@ -83,9 +83,9 @@ script with `pnpm --filter ui <script>`.
 
 `src-tauri` embeds `ui/dist` at compile time and the build checks that the bundled SoundFont exists,
 so on a fresh checkout run `pnpm --filter ui build` and `pnpm fetch:soundfont` once (it also needs
-`pnpm install`: the `.7z` banks are unpacked by the `7z-wasm` dev dependency) before
+`pnpm install`: the `.7z` samples are unpacked by the `7z-wasm` dev dependency) before
 `cargo build`, `cargo clippy` or `cargo test --workspace`. Set `MUSIC_PART_SOUNDFONT` to use
-another SoundFont file in the app, and `MUSIC_PART_BANKS` for another folder of sample banks.
+another SoundFont file in the app, and `MUSIC_PART_PACKS` for another folder of sound packs.
 
 The dev server uses port 1420 (fixed, Tauri needs it). Port 5173 is often taken by other projects.
 

@@ -1,22 +1,22 @@
-//! Renders a score to a WAV file, with or without the sample banks, to listen to the difference
+//! Renders a score to a WAV file, with or without the sound packs, to listen to the difference
 //! without opening the app. The score is the built-in demo, or a MIDI file.
 //!
-//! Usage: cargo run -p audio-engine --release --example render_wav -- out.wav [song.mid] [--no-banks]
+//! Usage: cargo run -p audio-engine --release --example render_wav -- out.wav [song.mid] [--no-packs]
 //! Needs `pnpm fetch:soundfont` to have been run.
 
 use std::{env, fs::File, io::Write, path::Path};
 
-use audio_engine::{Player, SAMPLE_BANKS};
+use audio_engine::{pack, Player};
 
 const SAMPLE_RATE: u32 = 44_100;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
-    let use_banks = !args.iter().any(|a| a == "--no-banks");
+    let use_packs = !args.iter().any(|a| a == "--no-packs");
     let mut paths = args.iter().filter(|a| !a.starts_with("--"));
     let out = paths
         .next()
-        .ok_or("usage: render_wav <out.wav> [song.mid] [--no-banks]")?;
+        .ok_or("usage: render_wav <out.wav> [song.mid] [--no-packs]")?;
     let score = match paths.next() {
         Some(midi) => io_midi::import_midi(&std::fs::read(midi)?)?.score,
         None => score_model::demo_score(),
@@ -27,10 +27,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut File::open(assets.join("GeneralUser-GS.sf2"))?,
         SAMPLE_RATE,
     )?;
-    if use_banks {
-        for bank in &SAMPLE_BANKS {
-            let mut file = File::open(assets.join("banks").join(bank.file))?;
-            player.add_bank(bank.sound, &mut file, bank.keys())?;
+    if use_packs {
+        let (packs, mut errors) = pack::discover(&[assets.join("packs")]);
+        errors.extend(pack::add_packs(&mut player, &packs));
+        if let Some(error) = errors.first() {
+            return Err(error.clone().into());
         }
     }
     player.load_score(&score);
@@ -47,8 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{out}: {:.1} s, peak {peak:.2}, {}",
         samples.len() as f32 / 2.0 / SAMPLE_RATE as f32,
-        if use_banks {
-            "sample banks"
+        if use_packs {
+            "sound packs"
         } else {
             "General MIDI only"
         }

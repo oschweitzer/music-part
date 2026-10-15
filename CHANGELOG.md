@@ -25,6 +25,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `score-model`: `Sound`, the sounds table (id such as `"electric-guitar/distortion"`, name,
   General MIDI program, instrument), `Track::sound`, the `SetSound` edit and an optional `sound`
   on `AddTrack`. Scores saved before sounds existed load with the sound they had.
+- Sound packs: a folder with a `pack.json` manifest (name, author, licence, sounds and their key
+  range) and SoundFont samples gives recordings to sounds. The app loads the bundled packs and
+  the user's own from `packs/` in its data folder, a user's pack replacing a bundled one with the
+  same id. See `docs/sound-packs.md`.
 - Playback: palm mutes, harmonics, hammer-ons, pull-offs and slide landings now have their own
   tone, not only a different volume: palm mutes are dull and stop short, harmonics are pure,
   legato notes swell in without the pick attack. It works with the recordings too.
@@ -93,6 +97,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for the UI.
 
 ### Changed
+
+- The three recorded sounds (nylon guitar, clean electric guitar, finger bass) are now sound
+  packs in `assets/soundfonts/packs/`, each with its licence text. `MUSIC_PART_BANKS` is replaced
+  by `MUSIC_PART_PACKS`, and `render_wav --no-banks` by `--no-packs`.
 
 - `io-midi` and `io-musicxml`: a General MIDI program now gives the closest sound, not only an
   instrument (program 30 is a distorted electric guitar, 25 a steel-string guitar, 105 a banjo),
