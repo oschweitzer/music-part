@@ -2,7 +2,7 @@ import type { DocumentApi, DocumentState, Edit, ExportFormat, OpenedDocument } f
 import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
-import type { Beat, Instrument, Note, NoteValue, TimeSignature } from './score-types'
+import type { Beat, Instrument, Note, NoteValue, SoundId, TimeSignature } from './score-types'
 import {
   clampSelection,
   extendSelection,
@@ -244,6 +244,11 @@ export class Editor {
     return this.#send({ type: 'setInstrument', track: this.track, instrument })
   }
 
+  /** Changes the sound of the current track, among the sounds of its instrument. */
+  setSound(sound: SoundId): Promise<void> {
+    return this.#send({ type: 'setSound', track: this.track, sound })
+  }
+
   /** Copies the selected beats (or the selected beat) of this track, all strings. */
   copy(): Promise<void> {
     const beats = this.#selectedBeats()
@@ -273,10 +278,10 @@ export class Editor {
     )
   }
 
-  /** Adds a track after the others and shows it. */
-  addTrack(instrument: Instrument): Promise<void> {
+  /** Adds a track after the others and shows it, with the default sound of its instrument unless given one. */
+  addTrack(instrument: Instrument, sound?: SoundId): Promise<void> {
     const index = this.document?.score.tracks.length ?? 0
-    return this.#send({ type: 'addTrack', instrument }, () => {
+    return this.#send(sound ? { type: 'addTrack', instrument, sound } : { type: 'addTrack', instrument }, () => {
       this.track = index
       this.selection = FIRST_NOTE
     })

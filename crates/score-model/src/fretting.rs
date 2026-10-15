@@ -1,23 +1,26 @@
 //! Finding where to play pitches on a stringed instrument. Importers use it for formats that
 //! store pitches rather than strings and frets.
 
-use crate::{Note, MAX_FRET};
+use crate::{pitch_fret, Instrument, Note};
 
-/// Places the pitches of a chord on distinct strings, preferring low frets. `taken` lists strings
-/// that are already used (for instance by notes whose string the file gave). Returns the notes
-/// sorted by string, and how many pitches no free string could play.
-pub fn place_chord(tuning: &[u8], pitches: &[u8], taken: &[u8]) -> (Vec<Note>, usize) {
+/// Places the pitches of a chord on distinct strings of an instrument, preferring low frets.
+/// `taken` lists strings that are already used (for instance by notes whose string the file gave).
+/// Returns the notes sorted by string, and how many pitches no free string could play.
+pub fn place_chord(
+    instrument: Instrument,
+    tuning: &[u8],
+    pitches: &[u8],
+    taken: &[u8],
+) -> (Vec<Note>, usize) {
     let mut pitches = pitches.to_vec();
     pitches.sort_unstable();
     pitches.dedup();
 
     let candidates = |pitch: u8| -> Vec<(u8, u8)> {
-        tuning
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &open)| {
-                let fret = pitch.checked_sub(open)?;
-                (fret <= MAX_FRET).then_some((i as u8 + 1, fret))
+        (1..=tuning.len().min(usize::from(u8::MAX)) as u8)
+            .filter_map(|string| {
+                let fret = pitch_fret(instrument, tuning, string, pitch)?;
+                Some((string, fret))
             })
             .collect()
     };
@@ -55,12 +58,16 @@ pub fn place_chord(tuning: &[u8], pitches: &[u8], taken: &[u8]) -> (Vec<Note>, u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GUITAR_STANDARD;
+    use crate::{BANJO_STANDARD, GUITAR_STANDARD};
+
+    fn place_on_guitar(pitches: &[u8], taken: &[u8]) -> (Vec<Note>, usize) {
+        place_chord(Instrument::Guitar, &GUITAR_STANDARD, pitches, taken)
+    }
 
     #[test]
     fn a_chord_goes_on_distinct_strings_at_low_frets() {
         // E major open: E2 B2 E3 G#3 B3 E4.
-        let (notes, skipped) = place_chord(&GUITAR_STANDARD, &[40, 47, 52, 56, 59, 64], &[]);
+        let (notes, skipped) = place_on_guitar(&[40, 47, 52, 56, 59, 64], &[]);
         assert_eq!(skipped, 0);
         let placed: Vec<(u8, u8)> = notes.iter().map(|n| (n.string, n.fret)).collect();
         assert_eq!(placed, vec![(1, 0), (2, 0), (3, 1), (4, 2), (5, 2), (6, 0)]);
@@ -68,14 +75,21 @@ mod tests {
 
     #[test]
     fn a_pitch_no_string_can_play_is_counted() {
-        let (notes, skipped) = place_chord(&GUITAR_STANDARD, &[20, 64], &[]);
+        let (notes, skipped) = place_on_guitar(&[20, 64], &[]);
         assert_eq!((notes.len(), skipped), (1, 1));
     }
 
     #[test]
     fn strings_already_taken_are_left_alone() {
         // E4 could be string 1 (open) but that string is taken: it goes on string 2, fret 5.
-        let (notes, _) = place_chord(&GUITAR_STANDARD, &[64], &[1]);
+        let (notes, _) = place_on_guitar(&[64], &[1]);
         assert_eq!((notes[0].string, notes[0].fret), (2, 5));
+    }
+
+    #[test]
+    fn a_note_on_the_short_banjo_string_is_numbered_from_the_neck() {
+        // A4 on the fifth string only, the others being taken: one semitone above G4 is fret 6.
+        let (notes, _) = place_chord(Instrument::Banjo, &BANJO_STANDARD, &[69], &[1, 2, 3, 4]);
+        assert_eq!((notes[0].string, notes[0].fret), (5, 7));
     }
 }

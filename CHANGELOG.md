@@ -16,6 +16,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - UI: `Alt+Up` and `Alt+Down` move the selection to the previous or next track.
 - UI: a track menu next to the track fields picks the track to edit, and the track tabs scroll
   sideways when there are too many to fit.
+- Sounds: a track now picks a sound of its instrument, from a Sound menu next to the Instrument
+  menu: steel or nylon strings for the acoustic guitar; clean, muted, overdrive or distortion for
+  the electric guitar; finger, pick or slap for the bass. The "+ Track" menu lists every sound. See
+  `docs/sounds.md`.
+- A new instrument, the five-string banjo (open G tuning), whose short fifth string is numbered
+  from the neck like in banjo tablature: it has no frets 1 to 5.
+- `score-model`: `Sound`, the sounds table (id such as `"electric-guitar/distortion"`, name,
+  General MIDI program, instrument), `Track::sound`, the `SetSound` edit and an optional `sound`
+  on `AddTrack`. Scores saved before sounds existed load with the sound they had.
 - Playback: palm mutes, harmonics, hammer-ons, pull-offs and slide landings now have their own
   tone, not only a different volume: palm mutes are dull and stop short, harmonics are pure,
   legato notes swell in without the pick attack. It works with the recordings too.
@@ -85,6 +94,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `io-midi` and `io-musicxml`: a General MIDI program now gives the closest sound, not only an
+  instrument (program 30 is a distorted electric guitar, 25 a steel-string guitar, 105 a banjo),
+  and exports write the program of the track's sound.
+- Playback: the sound of a track chooses its General MIDI program, and a sample bank now plays one
+  sound (the nylon guitar, the clean electric guitar, the finger bass) instead of every sound of
+  its instrument.
+- Changing the instrument of a track gives it the default sound of the new instrument. The former
+  "Nylon guitar" is now the acoustic guitar, with nylon strings as its default sound.
 - Playback is louder: the synthesizer gain went from 0.2 to 0.6.
 - A theme button in the toolbar goes round the system theme, the light theme and the dark theme;
   the choice is remembered.

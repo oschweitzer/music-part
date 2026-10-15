@@ -149,7 +149,7 @@ fn add_banks(player: &mut Player, dir: &Path) {
             .map_err(|e| e.to_string())
             .and_then(|mut file| {
                 player
-                    .add_bank(bank.instrument, &mut file, bank.keys())
+                    .add_bank(bank.sound, &mut file, bank.keys())
                     .map_err(|e| e.to_string())
             });
         if let Err(message) = loaded {

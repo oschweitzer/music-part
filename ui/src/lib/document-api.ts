@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from './score-source'
-import type { Beat, Duration, Instrument, Score, Technique } from './score-types'
+import type { Beat, Duration, Instrument, Score, SoundId, Technique } from './score-types'
 
 export type BeatAddress = { measure: number; beat: number }
 
@@ -14,13 +14,14 @@ export type Edit =
   | { type: 'setTempo'; bpm: number }
   | { type: 'setTied'; track: number; measure: number; beat: number; string: number; tied: boolean }
   | { type: 'setTechnique'; track: number; measure: number; beat: number; string: number; technique: Technique | null }
-  | { type: 'addTrack'; instrument: Instrument }
+  | { type: 'addTrack'; instrument: Instrument; sound?: SoundId }
   | { type: 'removeTrack'; index: number }
   | { type: 'setTuning'; track: number; tuning: number[] }
   | { type: 'paste'; track: number; measure: number; beat: number; beats: Beat[] }
   | { type: 'setTimeSignature'; measure: number; numerator: number; denominator: number }
   | { type: 'renameTrack'; track: number; name: string }
   | { type: 'setInstrument'; track: number; instrument: Instrument }
+  | { type: 'setSound'; track: number; sound: SoundId }
   | { type: 'clearNotes'; track: number; from: BeatAddress; to: BeatAddress; strings: { first: number; last: number } | null }
   | { type: 'removeRests'; track: number; from: BeatAddress; to: BeatAddress }
 

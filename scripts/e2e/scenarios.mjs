@@ -480,8 +480,9 @@ export const scenarios = [
     async (context) => {
       const { page } = context
       await page.eval(`document.querySelector('.add-track summary').click()`)
-      await clickButton(page, 'Electric bass')
+      await clickButton(page, 'Electric bass: Finger')
       assert.equal((await document_(context)).score.tracks.length, 3)
+      assert.equal((await document_(context)).score.tracks[2].sound, 'bass/finger')
       assert.equal(await page.eval(`document.querySelector('.track-tab.active').textContent.includes('Bass')`), true)
 
       await page.eval(`(() => { const i = document.querySelector('.tuning input'); i.value = 'G2 D2 A1 D1'; i.dispatchEvent(new Event('change', { bubbles: true })) })()`)
@@ -581,6 +582,47 @@ export const scenarios = [
       await page.eval(`(() => { const s = document.querySelector('select[aria-label="Instrument of this track"]'); s.value = 'Violin'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
       await settle()
       assert.equal((await document_(context)).score.tracks[0].instrument, 'Violin')
+      assert.equal((await document_(context)).score.tracks[0].sound, 'violin/standard')
+    },
+  ],
+
+  [
+    'a track can be given another sound of its instrument, and the menu adds a track with a sound',
+    async (context) => {
+      const { page } = context
+      const soundSelect = `document.querySelector('select[aria-label="Sound of this track"]')`
+      const choose = async (label, value) => {
+        await page.eval(`(() => { const s = document.querySelector('select[aria-label="${label}"]'); s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+        await settle()
+      }
+      const options = () => page.eval(`[...${soundSelect}.options].map(o => o.value).join(' ')`)
+
+      // The nylon guitar of the demo offers the sounds of an acoustic guitar only.
+      assert.equal(await page.eval(`${soundSelect}.value`), 'guitar/nylon')
+      assert.equal(await options(), 'guitar/nylon guitar/steel')
+      await choose('Sound of this track', 'guitar/steel')
+      assert.equal((await document_(context)).score.tracks[0].sound, 'guitar/steel')
+      assert.equal(await isDirty(page), true)
+
+      // Another instrument brings its own sounds, starting from its default one.
+      await choose('Instrument of this track', 'ElectricGuitar')
+      assert.equal(await page.eval(`${soundSelect}.value`), 'electric-guitar/clean')
+      assert.equal(await options(), 'electric-guitar/clean electric-guitar/muted electric-guitar/overdrive electric-guitar/distortion')
+      await choose('Sound of this track', 'electric-guitar/distortion')
+      assert.equal((await document_(context)).score.tracks[0].sound, 'electric-guitar/distortion')
+
+      await page.press('z', ['ctrl'])
+      await settle()
+      assert.equal((await document_(context)).score.tracks[0].sound, 'electric-guitar/clean')
+      assert.equal(await page.eval(`${soundSelect}.value`), 'electric-guitar/clean')
+
+      // The add-track menu names each sound with its instrument.
+      await page.eval(`document.querySelector('.add-track summary').click()`)
+      await clickButton(page, 'Banjo: Standard')
+      const banjo = (await document_(context)).score.tracks[2]
+      assert.equal(banjo.sound, 'banjo/standard')
+      assert.deepEqual(banjo.tuning, [62, 59, 55, 50, 67])
+      assert.equal(await page.eval(`document.querySelector('.tuning input').value`), 'D4 B3 G3 D3 G4')
     },
   ],
 

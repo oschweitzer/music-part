@@ -6,9 +6,9 @@
   import { createDocumentApi, type ExportFormat } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
-  import { INSTRUMENTS, instrumentLabel } from './lib/instruments'
+  import { INSTRUMENTS, instrumentLabel, soundsOf } from './lib/instruments'
   import { interpretKey } from './lib/keymap'
-  import type { Instrument } from './lib/score-types'
+  import type { Instrument, SoundId } from './lib/score-types'
   import type { Selection } from './lib/selection'
   import { formatTuning } from './lib/tuning'
   import { Playback } from './lib/playback.svelte'
@@ -160,9 +160,9 @@
     }
   })
 
-  function addTrack(event: MouseEvent, instrument: Instrument) {
+  function addTrack(event: MouseEvent, instrument: Instrument, sound: SoundId) {
     ;(event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
-    void editor.addTrack(instrument)
+    void editor.addTrack(instrument, sound)
   }
 
   async function changeName(event: Event) {
@@ -173,6 +173,10 @@
 
   function changeInstrument(event: Event) {
     void editor.setInstrument((event.currentTarget as HTMLSelectElement).value as Instrument)
+  }
+
+  function changeSound(event: Event) {
+    void editor.setSound((event.currentTarget as HTMLSelectElement).value as SoundId)
   }
 
   async function changeTuning(event: Event) {
@@ -375,7 +379,17 @@
           <summary title="Add a track">+ Track</summary>
           <div class="menu">
             {#each INSTRUMENTS as instrument (instrument)}
-              <button type="button" onmousedown={keepFocus} onclick={(event) => addTrack(event, instrument)}>{instrumentLabel(instrument)}</button>
+              <div class="family" role="group" aria-label={instrumentLabel(instrument)}>
+                <span>{instrumentLabel(instrument)}</span>
+                {#each soundsOf(instrument) as sound (sound.id)}
+                  <button
+                    type="button"
+                    class="sound"
+                    aria-label="{instrumentLabel(instrument)}: {sound.name}"
+                    onmousedown={keepFocus}
+                    onclick={(event) => addTrack(event, instrument, sound.id)}>{sound.name}</button>
+                {/each}
+              </div>
             {/each}
           </div>
         </details>
@@ -400,11 +414,19 @@
               onchange={changeName}
             />
           </label>
-          <label class="track-field" title="The sound of this track. The strings stay as they are.">
-            Sound
+          <label class="track-field" title="The instrument of this track. The strings stay as they are.">
+            Instrument
             <select value={track.instrument} aria-label="Instrument of this track" onchange={changeInstrument}>
               {#each INSTRUMENTS as instrument (instrument)}
                 <option value={instrument}>{instrumentLabel(instrument)}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="track-field" title="How this track sounds, among the sounds of its instrument.">
+            Sound
+            <select value={track.sound} aria-label="Sound of this track" onchange={changeSound}>
+              {#each soundsOf(track.instrument) as sound (sound.id)}
+                <option value={sound.id}>{sound.name}</option>
               {/each}
             </select>
           </label>
@@ -787,6 +809,22 @@
     background: var(--surface);
     color: var(--ink);
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  }
+
+  .add-track .family {
+    display: flex;
+    flex-direction: column;
+    white-space: nowrap;
+  }
+
+  .add-track .family span {
+    padding: 6px 10px 2px;
+    color: var(--ink-muted);
+    font-size: 12px;
+  }
+
+  .add-track .menu button.sound {
+    padding-left: 20px;
   }
 
   .track-field,

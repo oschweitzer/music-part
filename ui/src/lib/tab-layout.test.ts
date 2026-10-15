@@ -21,7 +21,7 @@ const bass = score.tracks[1] as Track
 const fourFour = { numerator: 4, denominator: 4 }
 
 function trackWith(measures: Measure[], tuning = guitar.tuning): Track {
-  return { name: 'test', instrument: 'Guitar', tuning, measures }
+  return { name: 'test', instrument: 'Guitar', sound: 'guitar/nylon', tuning, measures }
 }
 
 function measureOf(beats: Beat[]): Measure {

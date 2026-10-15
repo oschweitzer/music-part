@@ -61,7 +61,7 @@ fn write_score(out: &mut String, score: &Score) -> std::fmt::Result {
             }
         };
         // MusicXML counts programs from 1.
-        let program = track.instrument.midi_program() + 1;
+        let program = track.sound.midi_program() + 1;
         writeln!(
             out,
             r#"    <score-part id="P{n}"><part-name>{name}</part-name><score-instrument id="P{n}-I1"><instrument-name>{name}</instrument-name></score-instrument><midi-instrument id="P{n}-I1"><midi-channel>{channel}</midi-channel><midi-program>{program}</midi-program></midi-instrument></score-part>"#,
@@ -336,7 +336,7 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::import_musicxml;
-    use score_model::{apply_edit, blank_score, demo_score, Edit, Instrument, Technique};
+    use score_model::{apply_edit, blank_score, demo_score, Edit, Instrument, Sound, Technique};
 
     /// What a round trip may change without changing the music: the order of the notes of a chord,
     /// and silent extra voices (the importer gives every measure of a part the same voices).
@@ -366,8 +366,8 @@ mod tests {
         assert_eq!(a.tracks.len(), b.tracks.len());
         for (x, y) in a.tracks.iter().zip(&b.tracks) {
             assert_eq!(
-                (&x.name, x.instrument, &x.tuning),
-                (&y.name, y.instrument, &y.tuning)
+                (&x.name, x.instrument, x.sound, &x.tuning),
+                (&y.name, y.instrument, y.sound, &y.tuning)
             );
             assert_eq!(x.measures.len(), y.measures.len());
             for (m, (p, q)) in x.measures.iter().zip(&y.measures).enumerate() {
@@ -387,6 +387,36 @@ mod tests {
     fn the_demo_survives_a_round_trip_exactly() {
         let original = demo_score();
         assert_same_music(&roundtrip(&original), &original);
+    }
+
+    #[test]
+    fn every_sound_survives_a_round_trip() {
+        let mut score = blank_score("t");
+        for sound in Sound::ALL {
+            apply_edit(
+                &mut score,
+                &Edit::AddTrack {
+                    instrument: sound.instrument(),
+                    sound: Some(sound),
+                },
+            )
+            .unwrap();
+            let track = score.tracks.len() - 1;
+            // The last string at fret 7: on a banjo, the short fifth string.
+            let string = score.tracks[track].tuning.len() as u8;
+            apply_edit(
+                &mut score,
+                &Edit::SetFret {
+                    track,
+                    measure: 0,
+                    beat: 0,
+                    string,
+                    fret: 7,
+                },
+            )
+            .unwrap();
+        }
+        assert_same_music(&roundtrip(&score), &score);
     }
 
     #[test]
@@ -462,6 +492,7 @@ mod tests {
             },
             Edit::AddTrack {
                 instrument: Instrument::Violin,
+                sound: None,
             },
             Edit::SetTempo { bpm: 77 },
         ] {

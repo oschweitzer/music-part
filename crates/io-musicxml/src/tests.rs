@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use score_model::{Instrument, Score, Technique, GUITAR_STANDARD};
+use score_model::{Instrument, Score, Sound, Technique, GUITAR_STANDARD};
 
 use super::*;
 
@@ -370,6 +370,40 @@ fn instruments_come_from_the_midi_program_or_the_name() {
         ok(&with_program).score.tracks[0].instrument,
         Instrument::Bass
     );
+}
+
+#[test]
+fn the_midi_program_picks_the_closest_sound() {
+    let notes = [pitched("E", 3, 8, "")].concat();
+    let with_program = |program: u8| {
+        score_xml("Part", FOUR_FOUR, &[&notes]).replace(
+            "<part-name>Part</part-name>",
+            &format!("<part-name>Part</part-name><midi-instrument id=\"i1\"><midi-program>{program}</midi-program></midi-instrument>"),
+        )
+    };
+    // MusicXML counts programs from 1: 31 is General MIDI program 30.
+    assert_eq!(
+        ok(&with_program(31)).score.tracks[0].sound,
+        Sound::ElectricGuitarDistortion
+    );
+    assert_eq!(
+        ok(&with_program(26)).score.tracks[0].sound,
+        Sound::GuitarSteel
+    );
+    assert_eq!(ok(&with_program(106)).score.tracks[0].sound, Sound::Banjo);
+    // A piano is not a string instrument: the part name decides, here the default guitar.
+    assert_eq!(
+        ok(&with_program(1)).score.tracks[0].sound,
+        Sound::GuitarNylon
+    );
+}
+
+#[test]
+fn a_banjo_part_is_found_by_its_name_and_gets_five_strings() {
+    let banjo = ok(&score_xml("Banjo", FOUR_FOUR, &[&pitched("G", 4, 8, "")]));
+    let track = &banjo.score.tracks[0];
+    assert_eq!(track.sound, Sound::Banjo);
+    assert_eq!(track.tuning, score_model::BANJO_STANDARD);
 }
 
 #[test]
