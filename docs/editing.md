@@ -78,15 +78,36 @@ The player turns techniques into MIDI (`audio-engine/src/sequencer.rs`):
 
 | Technique           | Sound                                                                            |
 | ------------------- | -------------------------------------------------------------------------------- |
-| Hammer-on, pull-off | The note is played softly, without the attack of a pick                          |
+| Hammer-on, pull-off | The note is played softly, and swells in without the attack of a pick            |
 | Slide               | Glides, in the second half of the note, to the note on the same string that      |
 |                     | follows (up to an octave away), which is then played softly. Nothing to reach:   |
 |                     | a plain note                                                                     |
 | Bend                | Rises a whole tone over the start of the note and is held until it ends          |
-| Palm mute           | Quieter, and cut to half its length                                              |
+| Palm mute           | Quieter, dull, and cut to half its length; the string stops ringing at once      |
 | Harmonic            | Natural harmonic: frets 12 and 24 an octave above the open string, 7 and 19 an   |
 |                     | octave and a fifth, 5 two octaves, 4 two octaves and a third, 9 an octave and a  |
-|                     | major third; any other fret an octave above the fretted note                     |
+|                     | major third; any other fret an octave above the fretted note. Quieter and purer  |
+
+### Timbres
+
+MIDI cannot say "muted" or "no pick", so the sequencer gives each note a timbre (`Timbre`: open,
+muted, harmonic, legato) and the player plays each timbre on its own MIDI channels. A channel is
+shaped with SoundFont NRPN messages, which offset a generator of every note it plays:
+
+| Timbre   | Used for                                   | Filter cutoff    | Other                          |
+| -------- | ------------------------------------------ | ---------------- | ------------------------------ |
+| Open     | everything else                            | unchanged        | unchanged                      |
+| Muted    | palm mute                                  | 4 octaves down   | release about 20 times shorter |
+| Harmonic | harmonic                                   | 2.5 octaves down | unchanged                      |
+| Legato   | hammer-on, pull-off, note a slide lands on | 1 octave down    | attack of about 10 ms          |
+
+The values are in `timbre_offsets` (`audio-engine/src/player.rs`) and were set by measuring the
+rendered sound, not by ear: tests check that each timbre is duller than the open note, and that a
+muted note dies when cut. They are a starting point, tune them by listening with `render_wav`.
+
+Channels are handed out when a score is loaded: only a track that uses a timbre gets its
+channels. A MIDI channel number is a byte, which leaves room for 53 such pairs; a score that needs
+more plays the rest with the open timbre. The pitch wheel moves every channel of a track.
 
 Bends and slides move the pitch wheel of the track's MIDI channel, so they bend every note sounding
 on that track at the same time. A bend always rises a whole tone: the model has no bend amount yet.

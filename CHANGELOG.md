@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Playback: palm mutes, harmonics, hammer-ons, pull-offs and slide landings now have their own
+  tone, not only a different volume: palm mutes are dull and stop short, harmonics are pure,
+  legato notes swell in without the pick attack. It works with the recordings too.
 - Playback with recordings: the nylon guitar, the electric guitar and the electric bass now play
   sampled instruments (CC0 banks from FreePats, fetched by `pnpm fetch:soundfont`) instead of the
   General MIDI sound. Notes a recording does not cover fall back to the General MIDI sound.

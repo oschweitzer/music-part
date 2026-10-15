@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 use oxisynth::{MidiEvent, SoundFont, Synth, SynthDescriptor};
 use score_model::{Instrument, Score};
 
-use crate::sequencer::{self, Action, Event, BEND_CENTER, BEND_RANGE_SEMITONES};
+use crate::sequencer::{self, Action, Event, Timbre, BEND_CENTER, BEND_RANGE_SEMITONES};
 
 /// Silence kept after the last event so the notes can ring out.
 const RELEASE_TAIL_SECS: u64 = 2;
@@ -30,23 +30,60 @@ impl std::error::Error for PlayerError {}
 const MAX_TRACKS: usize = 64;
 /// Where the fallback channels start: after every track channel. Channel 9 (percussion) is skipped.
 const FALLBACK_BASE: usize = MAX_TRACKS + 6;
+/// Where the channels of the muted and harmonic timbres start, two by two (recording and
+/// fallback). A MIDI channel number is a byte, so there is room for 53 of these pairs: a score
+/// that needs more plays the rest with the open timbre.
+const TIMBRE_BASE: usize = FALLBACK_BASE + MAX_TRACKS;
 const SYNTH_GAIN: f32 = 0.6;
-/// The synthesizer wants a multiple of 16.
-const SYNTH_CHANNELS: u8 = ((FALLBACK_BASE + MAX_TRACKS).div_ceil(16) * 16) as u8;
+/// The synthesizer wants a multiple of 16, and a channel number must fit in a byte.
+const SYNTH_CHANNELS: u8 = 240;
 
-/// The MIDI channels of a track, and what it plays.
-struct Channel {
+/// Two MIDI channels that play one timbre of a track.
+#[derive(Clone, Copy)]
+struct Lane {
     channel: u8,
     /// Plays the notes a sample bank has no recording for, with the General MIDI sound.
     fallback: u8,
+}
+
+/// The MIDI channels of a track, and what it plays.
+struct Channel {
+    open: Lane,
+    /// The lanes of the muted, harmonic and legato timbres, when the score uses them.
+    muted: Option<Lane>,
+    harmonic: Option<Lane>,
+    legato: Option<Lane>,
     /// General MIDI program, used when no sample bank is set for the instrument.
     program: u8,
     instrument: Instrument,
 }
 
 impl Channel {
-    fn both(&self) -> [u8; 2] {
-        [self.channel, self.fallback]
+    /// The lane for a timbre; the open one when the score gave the timbre none.
+    fn lane(&self, timbre: Timbre) -> Lane {
+        match timbre {
+            Timbre::Open => self.open,
+            Timbre::Muted => self.muted.unwrap_or(self.open),
+            Timbre::Harmonic => self.harmonic.unwrap_or(self.open),
+            Timbre::Legato => self.legato.unwrap_or(self.open),
+        }
+    }
+
+    /// Every lane with its timbre.
+    fn lanes(&self) -> impl Iterator<Item = (Timbre, Lane)> {
+        [
+            Some((Timbre::Open, self.open)),
+            self.muted.map(|lane| (Timbre::Muted, lane)),
+            self.harmonic.map(|lane| (Timbre::Harmonic, lane)),
+            self.legato.map(|lane| (Timbre::Legato, lane)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    fn channels(&self) -> impl Iterator<Item = u8> {
+        self.lanes()
+            .flat_map(|(_, lane)| [lane.channel, lane.fallback])
     }
 }
 
@@ -84,22 +121,51 @@ impl Program {
             .map_or(0, |last| last + RELEASE_TAIL_SECS * u64::from(sample_rate));
 
         // Two MIDI channels per track (the synthesizer is given enough of them), skipping the
-        // percussion channel 9.
-        let voices = score
+        // percussion channel 9, then two more for each timbre a track actually uses.
+        let mut voices: Vec<Channel> = score
             .tracks
             .iter()
             .take(MAX_TRACKS)
             .enumerate()
-            .map(|(i, track)| {
-                let channel = (i + usize::from(i >= 9)) as u8;
-                Channel {
-                    channel,
+            .map(|(i, track)| Channel {
+                open: Lane {
+                    channel: (i + usize::from(i >= 9)) as u8,
                     fallback: (FALLBACK_BASE + i) as u8,
-                    program: track.instrument.midi_program(),
-                    instrument: track.instrument,
-                }
+                },
+                muted: None,
+                harmonic: None,
+                legato: None,
+                program: track.instrument.midi_program(),
+                instrument: track.instrument,
             })
             .collect();
+        let mut next_lane = TIMBRE_BASE;
+        let mut take_lane = || {
+            let lane = (next_lane + 2 <= usize::from(SYNTH_CHANNELS)).then_some(Lane {
+                channel: next_lane as u8,
+                fallback: (next_lane + 1) as u8,
+            });
+            next_lane += 2;
+            lane
+        };
+        // Events come sorted by time, so lanes are handed out in order of first use.
+        for event in &events {
+            let Action::NoteOn { timbre, .. } = event.action else {
+                continue;
+            };
+            let Some(voice) = voices.get_mut(event.track) else {
+                continue;
+            };
+            let slot = match timbre {
+                Timbre::Open => continue,
+                Timbre::Muted => &mut voice.muted,
+                Timbre::Harmonic => &mut voice.harmonic,
+                Timbre::Legato => &mut voice.legato,
+            };
+            if slot.is_none() {
+                *slot = take_lane();
+            }
+        }
 
         Self {
             events,
@@ -125,6 +191,33 @@ impl Program {
 
 /// Bank Select (most significant byte) controller.
 const BANK_SELECT_MSB: u8 = 0;
+/// Controllers of a SoundFont NRPN message: the select number (120 for a generator, then the
+/// generator) and the data entry that sets its value.
+const NRPN_MSB: u8 = 99;
+const NRPN_LSB: u8 = 98;
+const DATA_ENTRY_MSB: u8 = 6;
+const DATA_ENTRY_LSB: u8 = 38;
+/// SoundFont generators a timbre offsets.
+const GEN_FILTER_FC: u8 = 8;
+const GEN_VOL_ENV_ATTACK: u8 = 34;
+const GEN_VOL_ENV_RELEASE: u8 = 38;
+/// One step of NRPN data is two cents (or timecents) for these generators.
+const NRPN_STEP: i32 = 2;
+
+/// How a timbre differs from the sound of the SoundFont, as (generator, offset in cents).
+fn timbre_offsets(timbre: Timbre) -> &'static [(u8, i32)] {
+    match timbre {
+        Timbre::Open => &[],
+        // About four octaves below the open filter (20 kHz to 1.2 kHz): dull. A release of a
+        // twentieth of the usual length: a muted string does not ring on.
+        Timbre::Muted => &[(GEN_FILTER_FC, -4800), (GEN_VOL_ENV_RELEASE, -5000)],
+        // About two and a half octaves down: the few overtones of a harmonic.
+        Timbre::Harmonic => &[(GEN_FILTER_FC, -3000)],
+        // An attack of about ten milliseconds instead of a pick: the note swells in, and a
+        // little duller since nothing struck the string.
+        Timbre::Legato => &[(GEN_VOL_ENV_ATTACK, 4000), (GEN_FILTER_FC, -1200)],
+    }
+}
 /// Sample banks a player can hold. Bank numbers stay well under the 128 a controller can carry.
 const MAX_BANKS: u8 = 32;
 
@@ -215,12 +308,16 @@ impl Player {
             // program 0; the fallback channel and instruments without a bank use the General
             // MIDI sound of the base SoundFont.
             let bank = self.bank_of(voice.instrument).map(|b| b.number);
-            self.set_sound(
-                voice.channel,
-                bank.unwrap_or(0),
-                bank.map_or(voice.program, |_| 0),
-            );
-            self.set_sound(voice.fallback, 0, voice.program);
+            for (timbre, lane) in voice.lanes() {
+                self.set_sound(
+                    lane.channel,
+                    bank.unwrap_or(0),
+                    bank.map_or(voice.program, |_| 0),
+                );
+                self.set_sound(lane.fallback, 0, voice.program);
+                self.set_timbre(lane.channel, timbre);
+                self.set_timbre(lane.fallback, timbre);
+            }
         }
         self.program = program;
     }
@@ -241,6 +338,36 @@ impl Player {
                 channel,
                 ctrl,
                 value,
+            });
+        }
+    }
+
+    /// Shapes the sound of a channel for a timbre with SoundFont NRPN messages, which offset a
+    /// generator of every note the channel plays: a lower filter cutoff makes it duller, a shorter
+    /// release lets a note stop short.
+    fn set_timbre(&mut self, channel: u8, timbre: Timbre) {
+        for (generator, offset) in timbre_offsets(timbre) {
+            // The data is centred on 8192 and each step is `NRPN_STEP` units of the generator.
+            let data = (8192 + offset / NRPN_STEP) as u16;
+            for (ctrl, value) in [
+                (NRPN_MSB, 120),
+                (NRPN_LSB, *generator),
+                (DATA_ENTRY_LSB, (data & 0x7f) as u8),
+                (DATA_ENTRY_MSB, (data >> 7) as u8),
+            ] {
+                let _ = self.synth.send_event(MidiEvent::ControlChange {
+                    channel,
+                    ctrl,
+                    value,
+                });
+            }
+        }
+        // Park the parameter selection so that no later data entry changes a generator.
+        for ctrl in [101, 100] {
+            let _ = self.synth.send_event(MidiEvent::ControlChange {
+                channel,
+                ctrl,
+                value: 127,
             });
         }
     }
@@ -271,7 +398,7 @@ impl Player {
     pub fn seek(&mut self, ticks: f64) {
         // Cut the sound, not just release it: the notes of the old position must not ring on.
         for voice in &self.program.voices {
-            for channel in voice.both() {
+            for channel in voice.channels() {
                 let _ = self.synth.send_event(MidiEvent::AllSoundOff { channel });
             }
         }
@@ -300,7 +427,7 @@ impl Player {
         self.audible = audible;
         for (track, voice) in self.program.voices.iter().enumerate() {
             if !self.is_audible(track) {
-                for channel in voice.both() {
+                for channel in voice.channels() {
                     let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
                 }
             }
@@ -327,7 +454,7 @@ impl Player {
 
     fn silence(&mut self) {
         for voice in &self.program.voices {
-            for channel in voice.both() {
+            for channel in voice.channels() {
                 let _ = self.synth.send_event(MidiEvent::AllNotesOff { channel });
                 let _ = self.synth.send_event(MidiEvent::PitchBend {
                     channel,
@@ -370,47 +497,45 @@ impl Player {
         if matches!(e.action, Action::NoteOn { .. }) && !self.is_audible(e.track) {
             return;
         }
+        let Some(instrument) = self.program.voices.get(e.track).map(|v| v.instrument) else {
+            return;
+        };
+        let keys = self.bank_of(instrument).map(|b| b.keys.clone());
         let Some(voice) = self.program.voices.get(e.track) else {
             return;
         };
-        let (main, fallback) = (voice.channel, voice.fallback);
-        let keys = self.bank_of(voice.instrument).map(|b| b.keys.clone());
         // A note the sample bank did not record goes to the General MIDI channel.
-        let channel_for = |pitch: u8| match &keys {
-            Some(keys) if !keys.contains(&pitch) => fallback,
-            _ => main,
+        let channel_for = |lane: Lane, pitch: u8| match &keys {
+            Some(keys) if !keys.contains(&pitch) => lane.fallback,
+            _ => lane.channel,
         };
-        let events = match e.action {
-            Action::NoteOn { pitch, velocity } => [
-                Some(MidiEvent::NoteOn {
-                    channel: channel_for(pitch),
+        // An out-of-range note must not interrupt playback, so errors are ignored.
+        match e.action {
+            Action::NoteOn {
+                pitch,
+                velocity,
+                timbre,
+            } => {
+                let _ = self.synth.send_event(MidiEvent::NoteOn {
+                    channel: channel_for(voice.lane(timbre), pitch),
                     key: pitch,
                     vel: velocity,
-                }),
-                None,
-            ],
-            Action::NoteOff { pitch } => [
-                Some(MidiEvent::NoteOff {
-                    channel: channel_for(pitch),
+                });
+            }
+            Action::NoteOff { pitch, timbre } => {
+                let _ = self.synth.send_event(MidiEvent::NoteOff {
+                    channel: channel_for(voice.lane(timbre), pitch),
                     key: pitch,
-                }),
-                None,
-            ],
-            // The wheel moves the notes of both channels together.
-            Action::PitchBend(value) => [
-                Some(MidiEvent::PitchBend {
-                    channel: main,
-                    value,
-                }),
-                keys.is_some().then_some(MidiEvent::PitchBend {
-                    channel: fallback,
-                    value,
-                }),
-            ],
-        };
-        // An out-of-range note must not interrupt playback.
-        for event in events.into_iter().flatten() {
-            let _ = self.synth.send_event(event);
+                });
+            }
+            // The wheel moves the notes of every channel of the track together.
+            Action::PitchBend(value) => {
+                for channel in voice.channels() {
+                    let _ = self
+                        .synth
+                        .send_event(MidiEvent::PitchBend { channel, value });
+                }
+            }
         }
     }
 }
@@ -600,6 +725,156 @@ mod tests {
         buf
     }
 
+    /// Renders a score with the muted, harmonic and legato lanes taken away, so those notes use the open
+    /// timbre: same notes, same velocities, only the timbre differs.
+    fn render_open_only(path: &std::path::Path, score: &Score, seconds: usize) -> Vec<f32> {
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        let mut program = Program::new(score, 44_100);
+        for voice in &mut program.voices {
+            voice.muted = None;
+            voice.harmonic = None;
+            voice.legato = None;
+        }
+        player.load(program);
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100 * seconds];
+        player.render(&mut buf);
+        buf
+    }
+
+    /// How much of the energy is in the high frequencies, left channel, between two instants in
+    /// seconds: the energy of the sample-to-sample change over the energy of the signal.
+    fn brightness(buf: &[f32], from: f64, to: f64) -> f64 {
+        let left: Vec<f64> = buf
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|frame| f64::from(frame[0]))
+            .skip((from * 44_100.0) as usize)
+            .take(((to - from) * 44_100.0) as usize)
+            .collect();
+        let change: f64 = left.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
+        let energy: f64 = left.iter().map(|x| x * x).sum();
+        change / energy.max(1e-12)
+    }
+
+    fn energy(buf: &[f32], from: f64, to: f64) -> f64 {
+        buf.as_chunks::<2>()
+            .0
+            .iter()
+            .skip((from * 44_100.0) as usize)
+            .take(((to - from) * 44_100.0) as usize)
+            .map(|frame| f64::from(frame[0]).powi(2))
+            .sum()
+    }
+
+    #[test]
+    fn a_palm_muted_note_is_duller_than_the_same_note_open() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = two_notes(Some(Technique::PalmMute));
+        let muted = render_seconds(&path, &score, 1);
+        let open = render_open_only(&path, &score, 1);
+
+        let (muted, open) = (brightness(&muted, 0.0, 0.4), brightness(&open, 0.0, 0.4));
+        assert!(muted < open * 0.5, "muted {muted}, open {open}");
+    }
+
+    #[test]
+    fn a_palm_muted_note_dies_when_it_is_cut() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        // The half note lasts a second and the mute cuts it at half a second.
+        let score = two_notes(Some(Technique::PalmMute));
+        let muted = render_seconds(&path, &score, 1);
+        let open = render_open_only(&path, &score, 1);
+
+        let (muted, open) = (energy(&muted, 0.5, 0.62), energy(&open, 0.5, 0.62));
+        assert!(muted < open * 0.25, "muted {muted}, open {open}");
+    }
+
+    #[test]
+    fn a_hammer_on_swells_in_instead_of_starting_with_a_pick() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = two_notes(Some(Technique::HammerOn));
+        let legato = render_seconds(&path, &score, 1);
+        let open = render_open_only(&path, &score, 1);
+
+        // The first five milliseconds: the same note and velocity, so only the onset differs.
+        let (legato, open) = (energy(&legato, 0.0, 0.005), energy(&open, 0.0, 0.005));
+        assert!(legato < open * 0.5, "legato {legato}, open {open}");
+    }
+
+    #[test]
+    fn a_harmonic_is_duller_than_the_same_note_open() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = two_notes(Some(Technique::Harmonic));
+        let harmonic = render_seconds(&path, &score, 1);
+        let open = render_open_only(&path, &score, 1);
+
+        let (harmonic, open) = (brightness(&harmonic, 0.0, 0.8), brightness(&open, 0.0, 0.8));
+        assert!(harmonic < open * 0.7, "harmonic {harmonic}, open {open}");
+    }
+
+    #[test]
+    fn a_timbre_does_not_leak_into_the_next_open_note() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        // The second note (fret 5) is open in both scores, and starts after the first one.
+        let muted = render_seconds(&path, &two_notes(Some(Technique::PalmMute)), 2);
+        let plain = render_seconds(&path, &two_notes(None), 2);
+
+        let (muted, plain) = (brightness(&muted, 1.0, 1.4), brightness(&plain, 1.0, 1.4));
+        assert!((muted / plain - 1.0).abs() < 0.2, "{muted} against {plain}");
+    }
+
+    #[test]
+    fn a_score_using_every_timbre_on_every_track_keeps_its_channels_apart() {
+        let mut score = one_note_score();
+        let beat = |technique| Beat {
+            duration: Duration {
+                value: NoteValue::Half,
+                dots: 0,
+            },
+            notes: vec![Note {
+                string: 1,
+                fret: 5,
+                technique,
+                tied: false,
+            }],
+        };
+        score.tracks[0].measures[0].voices[0].beats = vec![
+            beat(Some(Technique::PalmMute)),
+            beat(Some(Technique::Harmonic)),
+        ];
+        let track = score.tracks[0].clone();
+        score.tracks = vec![track; MAX_TRACKS];
+
+        let program = Program::new(&score, 44_100);
+        let mut channels: Vec<u8> = program.voices.iter().flat_map(Channel::channels).collect();
+        let used = channels.len();
+        channels.sort_unstable();
+        channels.dedup();
+
+        assert_eq!(channels.len(), used, "a channel is shared by two lanes");
+        assert!(channels.iter().all(|c| *c != 9 && *c < SYNTH_CHANNELS));
+        // Past the last free pair a track keeps the open timbre instead of failing.
+        assert!(program.voices.iter().any(|v| v.muted.is_none()));
+        assert!(program.voices[0].muted.is_some());
+    }
+
     #[test]
     fn a_slide_changes_the_sound_only_once_the_glide_starts() {
         let Some(path) = test_soundfont() else {
@@ -723,6 +998,42 @@ mod tests {
         let mut buf = vec![0.0f32; 2 * 44_100];
         player.render(&mut buf);
         buf
+    }
+
+    #[test]
+    fn a_palm_muted_note_of_a_sample_bank_is_duller_than_the_bank_open() {
+        let (Some(base), Some(nylon)) = (test_soundfont(), test_bank("nylon-guitar.sf2")) else {
+            eprintln!("no SoundFont or sample bank available, test skipped");
+            return;
+        };
+        let bank = || Some((Instrument::Guitar, nylon.as_path(), 29..=88));
+        let muted = render_with_bank(&base, bank(), &two_notes(Some(Technique::PalmMute)));
+        let general_midi = render_with_bank(&base, None, &two_notes(Some(Technique::PalmMute)));
+
+        // The muted lane plays the recording, not the General MIDI stand-in.
+        assert!(muted
+            .iter()
+            .zip(&general_midi)
+            .any(|(a, b)| (a - b).abs() > 1e-3));
+        let open = {
+            let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
+            player
+                .add_bank(
+                    Instrument::Guitar,
+                    &mut File::open(&nylon).unwrap(),
+                    29..=88,
+                )
+                .unwrap();
+            let mut program = Program::new(&two_notes(Some(Technique::PalmMute)), 44_100);
+            program.voices[0].muted = None;
+            player.load(program);
+            player.play();
+            let mut buf = vec![0.0f32; 2 * 44_100];
+            player.render(&mut buf);
+            buf
+        };
+        let (muted, open) = (brightness(&muted, 0.0, 0.4), brightness(&open, 0.0, 0.4));
+        assert!(muted < open * 0.5, "muted {muted}, open {open}");
     }
 
     #[test]

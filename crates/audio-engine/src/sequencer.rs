@@ -22,6 +22,19 @@ const RAMP_STEP: u32 = 4;
 /// A slide only travels this far; a wider jump is played as two plain notes.
 const MAX_SLIDE_SEMITONES: i32 = BEND_RANGE_SEMITONES;
 
+/// The tone colour a note is played with. The player gives each one its own MIDI channel, set up
+/// differently, because a MIDI note has no way to say "muted".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Timbre {
+    Open,
+    /// Palm mute: dull and short.
+    Muted,
+    /// Natural harmonic: pure, without the pick.
+    Harmonic,
+    /// Hammer-on, pull-off and the landing of a slide: no pick attack.
+    Legato,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Event {
     /// Position in 1/128 of a whole note since the start of the piece.
@@ -35,9 +48,11 @@ pub enum Action {
     NoteOn {
         pitch: u8,
         velocity: u8,
+        timbre: Timbre,
     },
     NoteOff {
         pitch: u8,
+        timbre: Timbre,
     },
     /// 14-bit pitch wheel value, `BEND_CENTER` being no bend. It moves the whole channel, that is
     /// the whole track: a bent note bends the other notes sounding with it.
@@ -68,12 +83,12 @@ struct Sounding {
 ///
 /// A tied note (`tied`) emits no note-on: it pushes back the note-off of the same pitch played on
 /// the previous beat of the voice. Techniques shape the sound:
-/// - hammer-on and pull-off are played softly, without the pick attack;
+/// - hammer-on and pull-off are played softly, without the pick attack (the legato timbre);
 /// - a slide glides, in the second half of the note, to the note of the same string that follows,
-///   which is then played softly;
+///   which is then played softly, with the legato timbre;
 /// - a bend rises a whole tone at the start of the note and is held;
-/// - a palm mute is quieter and cut short;
-/// - a natural harmonic sounds at the pitch of the harmonic, quieter.
+/// - a palm mute is quieter and cut short, and played with the muted timbre;
+/// - a natural harmonic sounds at the pitch of the harmonic, quieter, with the harmonic timbre.
 pub fn schedule(score: &Score) -> Vec<Event> {
     let mut events: Vec<Event> = Vec::new();
 
@@ -132,17 +147,22 @@ pub fn schedule(score: &Score) -> Vec<Event> {
                         _ => beat.duration.ticks(),
                     };
                     let note_end = start + length;
+                    let timbre = timbre_of(note, is_soft);
 
                     events.push(Event {
                         tick: start,
                         track: track_idx,
-                        action: Action::NoteOn { pitch, velocity },
+                        action: Action::NoteOn {
+                            pitch,
+                            velocity,
+                            timbre,
+                        },
                     });
                     let off = events.len();
                     events.push(Event {
                         tick: note_end,
                         track: track_idx,
-                        action: Action::NoteOff { pitch },
+                        action: Action::NoteOff { pitch, timbre },
                     });
 
                     let mut bends = Vec::new();
@@ -209,6 +229,16 @@ fn sounding_pitch(track: &Track, note: &Note) -> Option<u8> {
     u8::try_from(u32::from(open) + above_open)
         .ok()
         .filter(|p| *p <= 127)
+}
+
+fn timbre_of(note: &Note, is_soft: bool) -> Timbre {
+    match note.technique {
+        Some(Technique::PalmMute) => Timbre::Muted,
+        Some(Technique::Harmonic) => Timbre::Harmonic,
+        Some(Technique::HammerOn | Technique::PullOff) => Timbre::Legato,
+        _ if is_soft => Timbre::Legato,
+        _ => Timbre::Open,
+    }
 }
 
 fn velocity_of(note: &Note, is_soft: bool) -> u8 {
@@ -282,7 +312,7 @@ mod tests {
             .iter()
             .filter_map(|e| match e.action {
                 Action::NoteOn { pitch, .. } => Some((e.tick, true, pitch)),
-                Action::NoteOff { pitch } => Some((e.tick, false, pitch)),
+                Action::NoteOff { pitch, .. } => Some((e.tick, false, pitch)),
                 Action::PitchBend(_) => None,
             })
             .collect()
@@ -530,6 +560,42 @@ mod tests {
         let events = schedule(&score_with(vec![with_technique(1, 0, Technique::PalmMute)]));
         assert_eq!(note_events(&events), vec![(0, true, 64), (16, false, 64)]);
         assert!(velocities(&events)[0] < DEFAULT_VELOCITY);
+    }
+
+    /// The timbre of the note-on and of the note-off of the first note.
+    fn timbres(events: &[Event]) -> Vec<Timbre> {
+        events
+            .iter()
+            .filter_map(|e| match e.action {
+                Action::NoteOn { timbre, .. } | Action::NoteOff { timbre, .. } => Some(timbre),
+                Action::PitchBend(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_technique_picks_the_timbre_of_both_ends_of_the_note() {
+        let timbres_of = |technique| {
+            timbres(&schedule(&score_with(vec![with_technique(
+                1, 5, technique,
+            )])))
+        };
+        assert_eq!(
+            timbres_of(Technique::PalmMute),
+            vec![Timbre::Muted, Timbre::Muted]
+        );
+        assert_eq!(
+            timbres_of(Technique::Harmonic),
+            vec![Timbre::Harmonic, Timbre::Harmonic]
+        );
+        assert_eq!(
+            timbres_of(Technique::HammerOn),
+            vec![Timbre::Legato, Timbre::Legato]
+        );
+        assert_eq!(
+            timbres_of(Technique::Bend),
+            vec![Timbre::Open, Timbre::Open]
+        );
     }
 
     #[test]
