@@ -611,6 +611,29 @@ export const scenarios = [
   ],
 
   [
+    'dragging the mouse over several beats selects them, and Delete clears them',
+    async (context) => {
+      const { page } = context
+      const before = beatsOf(await document_(context), 0)
+      const centerOf = (index) =>
+        page.eval(`(() => {
+          const r = document.querySelectorAll('svg.tab text.fret')[${index}].getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        })()`)
+      await page.mouseDrag(await centerOf(0), await centerOf(2))
+
+      const highlighted = await page.eval(`document.querySelectorAll('svg.tab .beat-highlight').length`)
+      assert.ok(highlighted >= 2, `the dragged beats are highlighted (${highlighted})`)
+
+      await page.press('Delete')
+      await settle()
+      const after = beatsOf(await document_(context), 0)
+      assert.ok(after.slice(0, highlighted).every((b) => b.notes.length === 0), 'the dragged beats were emptied')
+      assert.deepEqual(after[highlighted]?.notes, before[highlighted]?.notes, 'the next beat is untouched')
+    },
+  ],
+
+  [
     'a MusicXML file opens with its title, tempo, tuning and tied notes',
     async (context) => {
       const { page, out } = context

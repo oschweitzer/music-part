@@ -20,23 +20,58 @@
     onseek?: (tick: number) => void
   } = $props()
 
+  /** What is under the mouse. The drawing is scaled if the page squeezes it, so map back to drawing units. */
+  function targetAt(event: MouseEvent) {
+    const box = (event.currentTarget as SVGSVGElement).getBoundingClientRect()
+    const scale = box.width > 0 ? layout.width / box.width : 1
+    return hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
+  }
+
+  // Dragging over several beats selects them all: the press picks the first, the beat under the
+  // mouse is the last. A drag ends in a click, which must not select the single beat again.
+  let dragFrom: Selection | null = null
+  let dragTo: { measure: number; beat: number } | null = null
+  let isDragging = false
+
+  function handlePointerDown(event: PointerEvent) {
+    isDragging = false
+    dragTo = null
+    dragFrom = null
+    if (!onselect || event.button !== 0 || event.shiftKey) return
+    const target = targetAt(event)
+    if (target) dragFrom = { measure: target.measure, beat: target.beat, string: target.string }
+  }
+
+  function handlePointerMove(event: PointerEvent) {
+    if (!onselect || !dragFrom || event.buttons !== 1) return
+    const target = targetAt(event)
+    if (!target) return
+    if (!isDragging) {
+      if (target.measure === dragFrom.measure && target.beat === dragFrom.beat) return
+      isDragging = true
+      // Keep receiving the moves when the mouse leaves the drawing.
+      ;(event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId)
+      onselect(dragFrom, { extend: false })
+    }
+    if (dragTo?.measure === target.measure && dragTo.beat === target.beat) return
+    dragTo = { measure: target.measure, beat: target.beat }
+    onselect({ measure: target.measure, beat: target.beat, string: dragFrom.string }, { extend: true })
+  }
+
   function handleClick(event: MouseEvent) {
     if (!onselect) return
-    const svg = event.currentTarget as SVGSVGElement
-    const box = svg.getBoundingClientRect()
-    // The drawing is scaled if the page squeezes it; map the click back to drawing units.
-    const scale = box.width > 0 ? layout.width / box.width : 1
-    const target = hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
+    if (isDragging) {
+      isDragging = false
+      return
+    }
+    const target = targetAt(event)
     if (target) onselect({ measure: target.measure, beat: target.beat, string: target.string }, { extend: event.shiftKey })
   }
 
   /** Double-clicking a beat moves playback there. */
   function handleDoubleClick(event: MouseEvent) {
     if (!onseek) return
-    const svg = event.currentTarget as SVGSVGElement
-    const box = svg.getBoundingClientRect()
-    const scale = box.width > 0 ? layout.width / box.width : 1
-    const target = hitTest({ layout, x: (event.clientX - box.left) * scale, y: (event.clientY - box.top) * scale })
+    const target = targetAt(event)
     if (target) onseek(target.tick)
   }
 
@@ -75,6 +110,8 @@
 <svg
   class="tab"
   class:editable={onselect !== undefined}
+  onpointerdown={handlePointerDown}
+  onpointermove={handlePointerMove}
   onclick={handleClick}
   ondblclick={handleDoubleClick}
   width={layout.width}
@@ -224,6 +261,9 @@
   .tab {
     display: block;
     font-family: var(--font-ui);
+    /* A drag selects beats, not the text of the drawing. */
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .tab.editable {

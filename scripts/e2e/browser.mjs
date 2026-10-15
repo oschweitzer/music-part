@@ -129,6 +129,18 @@ export async function launchBrowser({ width = 1200, height = 800, port = 9444 } 
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
     },
 
+    /** Presses the mouse at one point, moves to the other with the button down, and releases. */
+    async mouseDrag(from, to) {
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y })
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 })
+      for (const step of [0.25, 0.5, 0.75, 1]) {
+        const x = from.x + (to.x - from.x) * step
+        const y = from.y + (to.y - from.y) * step
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 })
+      }
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 })
+    },
+
     /** Presses a key. `modifiers`: any of 'ctrl', 'shift', 'alt', 'meta'. */
     async press(key, modifiers = []) {
       const mask = (modifiers.includes('alt') ? 1 : 0) | (modifiers.includes('ctrl') ? 2 : 0) | (modifiers.includes('meta') ? 4 : 0) | (modifiers.includes('shift') ? 8 : 0)

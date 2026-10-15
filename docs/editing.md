@@ -34,7 +34,7 @@ On macOS, `Cmd` replaces `Ctrl`. The same actions are in the toolbars.
 
 ## Copy and paste
 
-`Shift+Left` and `Shift+Right` (or Shift+click) select the beats from where you started to the beat
+`Shift+Left` and `Shift+Right` (or Shift+click, or dragging the mouse over the beats) select the beats from where you started to the beat
 you reach, across barlines. Copy keeps those beats of the current track, with all their strings,
 their durations and their techniques. Paste writes them one after the other from the selected beat
 (the first of the range, when several are selected), over what is there:
