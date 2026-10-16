@@ -1,5 +1,6 @@
-import { isPitchedTrack } from './instruments'
-import { isFrettedNote, notePitch, noteRow } from './notes'
+import { drumPiece, isPlayedByFoot, pieceAtPosition, piecePosition } from './drums'
+import { hasStrings, isPercussionTrack, isPitchedTrack } from './instruments'
+import { isFrettedNote, isPercussionNote, notePitch, noteRow } from './notes'
 import type { Beat, Duration, Measure, NoteValue, Technique, TimeSignature, Track } from './score-types'
 import {
   C_MAJOR,
@@ -116,8 +117,8 @@ export type SystemLayout = {
   measures: MeasureLayout[]
 }
 
-/** What a selection row means in a layout: a string of the tablature, or a pitch of the staff. */
-export type RowKind = 'string' | 'pitch'
+/** What a selection row means in a layout: a string of the tablature, a pitch of the staff, or a drum piece. */
+export type RowKind = 'string' | 'pitch' | 'piece'
 
 export type TabLayout = {
   width: number
@@ -131,11 +132,11 @@ export type TabLayout = {
 export type Notation = { clefs: Clef[]; hasTab: boolean }
 
 /**
- * A pitched track is written on its staves only. A fretted track shows its tablature, its staff
- * or both, as the view asks (`FrettedView`).
+ * A pitched or drum track is written on its staves only. A fretted track shows its tablature, its
+ * staff or both, as the view asks (`FrettedView`).
  */
 export function notationOf({ track, fretted = 'tab' }: { track: Pick<Track, 'instrument'>; fretted?: FrettedView }): Notation {
-  if (isPitchedTrack(track)) return { clefs: clefsFor(track.instrument), hasTab: false }
+  if (!hasStrings(track)) return { clefs: clefsFor(track.instrument), hasTab: false }
   return { clefs: fretted === 'tab' ? [] : clefsFor(track.instrument), hasTab: fretted !== 'staff' }
 }
 
@@ -214,6 +215,7 @@ export function layoutTab({
 }
 
 function rowKindOf(track: Pick<Track, 'instrument'>): RowKind {
+  if (isPercussionTrack(track)) return 'piece'
   return isPitchedTrack(track) ? 'pitch' : 'string'
 }
 
@@ -370,8 +372,10 @@ type DraftMeasure = {
   slotsWidth: number
   /** Width that does not stretch: padding and the time signature. */
   fixedWidth: number
-  /** The sounding pitches of each beat, for the staves. */
+  /** The sounding pitches of each beat, for the staves (for drums the pieces, at their places). */
   pitches: StaffNoteInput[][]
+  /** The way the stem of each beat must go, when it is fixed (drums: down for the feet alone). */
+  stems: ('up' | 'down' | undefined)[]
   /** Pitches sounding at the end of the previous measure, which a tie can continue. */
   carried: number[]
 }
@@ -386,9 +390,20 @@ function draftMeasures(track: Track): DraftMeasure[] {
     const pitches = beats.map((beat) =>
       beat.notes.flatMap((note): StaffNoteInput[] => {
         const pitch = notePitch({ track, note })
-        return pitch === null ? [] : [{ pitch, tied: note.tied === true, row: noteRow(note) }]
+        if (pitch === null) return []
+        const input: StaffNoteInput = { pitch, tied: note.tied === true, row: noteRow(note) }
+        if (isPercussionNote(note)) {
+          input.position = piecePosition(note.piece) ?? 0
+          input.head = drumPiece(note.piece)?.head ?? 'normal'
+        }
+        return [input]
       }),
     )
+    // Drummers read the hands with stems up and the feet with stems down.
+    const stems = beats.map((beat) => {
+      if (!isPercussionTrack(track) || beat.notes.length === 0) return undefined
+      return beat.notes.every((n) => isPlayedByFoot(noteRow(n))) ? ('down' as const) : ('up' as const)
+    })
     const signature = measure.time_signature
     const shouldShowSignature = previous === null || !sameSignature(previous, signature)
     previous = signature
@@ -405,6 +420,7 @@ function draftMeasures(track: Track): DraftMeasure[] {
       fixedWidth:
         METRICS.measurePadLeft + METRICS.measurePadRight + (shouldShowSignature ? METRICS.timeSignatureWidth : 0),
       pitches,
+      stems,
       carried,
     }
     carried = (pitches.at(-1) ?? []).map((p) => p.pitch)
@@ -515,6 +531,7 @@ function placeMeasure({
         value: beat.value,
         dots: beat.dots,
         notes: (draft.pitches[i] ?? []).filter((n) => staffIndexFor({ pitch: n.pitch, staffCount }) === staff),
+        ...(draft.stems[i] ? { stem: draft.stems[i] } : {}),
       })),
       block,
       key,
@@ -848,8 +865,11 @@ export function hitTest({ layout, x, y }: { layout: TabLayout; x: number; y: num
     if (band) {
       const position = positionAt({ y, bottom: band.block.bottom })
       const head = measure.staves[band.index]?.beats[beat]?.heads.find((h) => h.position === position)
-      const pitch = head?.pitch ?? pitchAtPosition({ position, clef: band.block.clef, key: layout.key })
-      const row = head?.row ?? (layout.rowKind === 'pitch' ? pitch : null)
+      // On a percussion staff the line or space names a piece, not a pitch.
+      const pitch =
+        head?.pitch ??
+        (band.block.clef === 'percussion' ? pieceAtPosition(position) : pitchAtPosition({ position, clef: band.block.clef, key: layout.key }))
+      const row = head?.row ?? (layout.rowKind === 'string' ? null : pitch)
       return { measure: measure.index, beat, tick, area: 'staff', row, pitch }
     }
     const lines = system.stringYs.length

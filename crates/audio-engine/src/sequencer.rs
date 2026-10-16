@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use score_model::{Beat, Note, Score, Technique, Track};
+use score_model::{Beat, Note, NoteKind, Score, Technique, Track};
 
 /// MIDI velocity used until the model has dynamics.
 const DEFAULT_VELOCITY: u8 = 90;
@@ -89,10 +89,17 @@ struct Sounding {
 /// - a bend rises a whole tone at the start of the note and is held;
 /// - a palm mute is quieter and cut short, and played with the muted timbre;
 /// - a natural harmonic sounds at the pitch of the harmonic, quieter, with the harmonic timbre.
+///
+/// A drum track is scheduled apart (see `schedule_drums`): its notes are the keys of its pieces,
+/// and a hit rings on instead of stopping at the end of its beat.
 pub fn schedule(score: &Score) -> Vec<Event> {
     let mut events: Vec<Event> = Vec::new();
 
     for (track_idx, track) in score.tracks.iter().enumerate() {
+        if track.instrument.note_kind() == NoteKind::Percussion {
+            schedule_drums(track_idx, track, &mut events);
+            continue;
+        }
         let voice_count = track
             .measures
             .iter()
@@ -208,6 +215,67 @@ pub fn schedule(score: &Score) -> Vec<Event> {
 
     events.sort_by_key(|e| (e.tick, e.action.order()));
     events
+}
+
+/// The hits of a drum track, every voice. A drum is struck, not held: a hit rings until the same
+/// piece is struck again or the track ends, so a crash written as an eighth note is not choked by
+/// a note-off after an eighth (the kit's own release and exclusive classes, such as the closed
+/// hi-hat cutting the open one, shape it). A tied hit is not struck again. Every hit has the
+/// default velocity and the open timbre: techniques are for strings.
+fn schedule_drums(track_index: usize, track: &Track, events: &mut Vec<Event>) {
+    // (start, piece, tied) of every hit.
+    let mut hits: Vec<(u32, u8, bool)> = Vec::new();
+    let mut measure_start = 0;
+    for measure in &track.measures {
+        for voice in &measure.voices {
+            let mut tick = measure_start;
+            for beat in &voice.beats {
+                for note in &beat.notes {
+                    if let Some(piece) = track.pitch(note) {
+                        hits.push((tick, piece, note.tied));
+                    }
+                }
+                tick += beat.duration.ticks();
+            }
+        }
+        measure_start += measure.time_signature.ticks();
+    }
+    hits.sort_unstable();
+    // The same piece struck in two voices at once is one hit.
+    hits.dedup_by_key(|(tick, piece, _)| (*tick, *piece));
+
+    let event = |tick: u32, action: Action| Event {
+        tick,
+        track: track_index,
+        action,
+    };
+    let off = |pitch: u8| Action::NoteOff {
+        pitch,
+        timbre: Timbre::Open,
+    };
+    let mut ringing: Vec<u8> = Vec::new();
+    for (tick, pitch, tied) in hits {
+        let is_ringing = ringing.contains(&pitch);
+        if tied && is_ringing {
+            continue;
+        }
+        if is_ringing {
+            events.push(event(tick, off(pitch)));
+        } else {
+            ringing.push(pitch);
+        }
+        events.push(event(
+            tick,
+            Action::NoteOn {
+                pitch,
+                velocity: DEFAULT_VELOCITY,
+                timbre: Timbre::Open,
+            },
+        ));
+    }
+    for pitch in ringing {
+        events.push(event(measure_start, off(pitch)));
+    }
 }
 
 /// The pitch a note sounds at, or `None` if it has no playable pitch.
@@ -408,6 +476,53 @@ mod tests {
                 (128, false, 67)
             ]
         );
+    }
+
+    #[test]
+    fn a_drum_hit_rings_until_its_piece_is_struck_again_or_the_track_ends() {
+        let mut score = score_with(vec![]);
+        let track = &mut score.tracks[0];
+        (track.instrument, track.sound) = (Instrument::Drums, Sound::DrumsStandard);
+        track.tuning.clear();
+        let eighth = |notes| Beat {
+            duration: Duration {
+                value: NoteValue::Eighth,
+                dots: 0,
+            },
+            notes,
+        };
+        let rest = Beat {
+            duration: Duration {
+                value: NoteValue::Half,
+                dots: 1,
+            },
+            notes: vec![],
+        };
+        let tied_crash = Note {
+            tied: true,
+            // A technique on a drum note means nothing; it must not bend the kit.
+            technique: Some(Technique::Bend),
+            ..Note::percussion(49)
+        };
+        track.measures[0].voices[0].beats = vec![
+            eighth(vec![Note::percussion(36), Note::percussion(49)]),
+            eighth(vec![Note::percussion(36), tied_crash]),
+            rest,
+        ];
+        let events = schedule(&score);
+        assert_eq!(
+            note_events(&events),
+            vec![
+                (0, true, 36),
+                (0, true, 49),
+                (16, false, 36),
+                (16, true, 36),
+                (128, false, 36),
+                (128, false, 49)
+            ]
+        );
+        assert!(bends(&events).is_empty());
+        assert!(velocities(&events).iter().all(|v| *v == DEFAULT_VELOCITY));
     }
 
     #[test]

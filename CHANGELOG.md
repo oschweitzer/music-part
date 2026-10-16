@@ -9,6 +9,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Drums: a new instrument whose notes are the pieces of a kit (General MIDI percussion keys 35 to
+  81), written on a percussion staff (x heads for cymbals and hi-hats, stems up for the hands and
+  down for the feet) and played on MIDI channel 10. Six kits: standard, room, power, electronic,
+  jazz and brush. A drum note is saved as `{"piece":38,...}`; older files load unchanged. See
+  `docs/drums.md`.
+- UI: writing drums: digits `1` to `0` strike the pieces of a palette shown in the toolbar for a
+  drum track (kick, snare, closed, open and pedal hi-hat, crash, ride, toms), which also lists
+  every other piece by name; double-click a line to strike its drum; `Up` and `Down` move a hit
+  to the next line of the staff.
+- `io-midi`: the percussion channel (10) is imported as a drum track, its program picking the kit,
+  and drum tracks are exported on it.
+- `io-musicxml`: parts of `unpitched` notes are imported as drum tracks (the piece from the
+  note's `instrument` and `midi-unpitched`, else from its place and head), and drum tracks are
+  exported with a percussion clef, one instrument per piece and `unpitched` notes.
+
 - Sound packs can give a sound an SFZ instrument (`.sfz` and WAV samples) instead of a SoundFont,
   played by a small SFZ player in `audio-engine`: key and velocity ranges, round-robin, loops,
   amplitude envelope, volume, pan and tuning. Unsupported opcodes are ignored and reported on
@@ -121,6 +136,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for the UI.
 
 ### Changed
+
+- Sound packs: a pack that lists a drum kit is refused; drums always play the SoundFont's kits.
+- Opening a MIDI file that only has drums now opens it instead of saying it has no notes.
 
 - Import: MIDI and MusicXML parts that are not a string instrument (keyboards, winds, voices...)
   now become piano tracks that keep every note, instead of nylon guitar tracks that lost the notes

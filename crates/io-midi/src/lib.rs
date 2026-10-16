@@ -1,10 +1,12 @@
 //! Import MIDI -> `Score`.
 //!
 //! Each (MIDI track, channel) that plays notes becomes a track of the score, so a format 0 file
-//! with several channels is split. The percussion channel (10) is not imported. The sound, and
-//! with it the instrument, is the closest to the General MIDI program (see
-//! `Sound::from_midi_program`): the piano for a program that is not a string instrument here, the
-//! nylon guitar when the channel names no program.
+//! with several channels is split. The sound, and with it the instrument, is the closest to the
+//! General MIDI program (see `Sound::from_midi_program`): the piano for a program that is not a
+//! string instrument here, the nylon guitar when the channel names no program. The percussion
+//! channel (10) becomes a drum track, its program choosing the kit (`Sound::from_drum_kit`): each
+//! hit lasts until the next one, at least a quarter note when nothing follows soon
+//! (`drum_segments`), and keys that are no drum piece are left out and counted.
 //!
 //! A string instrument gets its notes placed on the strings, a chord being cut where the next one
 //! starts. A pitched instrument (piano) keeps every note whole: notes that overlap are written as
@@ -25,13 +27,16 @@ use std::fmt;
 
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use score_model::{
-    decompose_ticks, pitched_segments, place_chord, Beat, Duration, Measure, Note, NoteKind, Score,
-    Sound, Span, TimeSignature, Track, Voice,
+    decompose_ticks, drum_segments, pitched_segments, place_chord, Beat, Duration, Measure, Note,
+    NoteKind, Score, Sound, Span, TimeSignature, Track, Voice,
 };
 
 /// Smallest unit: 1/128 of a whole note. Notes are quantized to a 32nd note (4).
 const GRID: u32 = 4;
 const PERCUSSION_CHANNEL: u8 = 9;
+/// A drum hit with nothing soon after it lasts this long (a quarter note), not the few ticks
+/// files often give it.
+const DRUM_HIT_LENGTH: u32 = 32;
 /// Longest piece accepted. Protects against files that would allocate millions of measures.
 const MAX_MEASURES: u32 = 5000;
 /// Fastest tempo the score model accepts.
@@ -72,8 +77,9 @@ impl From<midly::Error> for MidiImportError {
 
 pub struct MidiImport {
     pub score: Score,
-    /// Notes left out because no string of the instrument could play them: out of range, or more
-    /// notes in a chord than the instrument has strings. Pitched tracks leave none out.
+    /// Notes left out because no string of the instrument could play them (out of range, or more
+    /// notes in a chord than the instrument has strings), or, on the percussion channel, because
+    /// their key is no drum piece. Pitched tracks leave none out.
     pub skipped_notes: usize,
 }
 
@@ -158,7 +164,7 @@ pub fn import_midi(bytes: &[u8]) -> Result<MidiImport, MidiImportError> {
         if track_index == 0 {
             title = name.clone().filter(|n| !n.is_empty());
         }
-        channels.retain(|&ch, c| ch != PERCUSSION_CHANNEL && !c.notes.is_empty());
+        channels.retain(|_, c| !c.notes.is_empty());
         if !channels.is_empty() {
             sources.push((
                 name.filter(|n| !n.is_empty())
@@ -182,7 +188,8 @@ pub fn import_midi(bytes: &[u8]) -> Result<MidiImport, MidiImportError> {
             } else {
                 name.clone()
             };
-            let (track, skipped) = build_track(name, &channel, time_signature)?;
+            let (track, skipped) =
+                build_track(name, &channel, ch == PERCUSSION_CHANNEL, time_signature)?;
             skipped_notes += skipped;
             tracks.push(track);
         }
@@ -266,26 +273,36 @@ fn decompose(len: u32) -> Vec<Duration> {
 fn build_track(
     name: String,
     channel: &ChannelNotes,
+    is_percussion: bool,
     ts: TimeSignature,
 ) -> Result<(Track, usize), MidiImportError> {
-    let sound = Sound::from_midi_program(channel.program);
+    let sound = if is_percussion {
+        Sound::from_drum_kit(channel.program)
+    } else {
+        Sound::from_midi_program(channel.program)
+    };
     let instrument = sound.instrument();
     let tuning = instrument.standard_tuning().to_vec();
     let mut skipped_notes = 0;
+    let spans = || -> Vec<Span> {
+        channel
+            .notes
+            .iter()
+            .map(|&(start, end, pitch)| Span {
+                start,
+                end,
+                pitch,
+                is_tie_end: false,
+            })
+            .collect()
+    };
 
     let segments = match instrument.note_kind() {
-        NoteKind::Pitched => {
-            let spans: Vec<Span> = channel
-                .notes
-                .iter()
-                .map(|&(start, end, pitch)| Span {
-                    start,
-                    end,
-                    pitch,
-                    is_tie_end: false,
-                })
-                .collect();
-            pitched_segments(&spans)
+        NoteKind::Pitched => pitched_segments(&spans()),
+        NoteKind::Percussion => {
+            let (segments, skipped) = drum_segments(&spans(), DRUM_HIT_LENGTH);
+            skipped_notes += skipped;
+            segments
         }
         NoteKind::Fretted => {
             let (segments, skipped) = fretted_segments(channel, instrument, &tuning);
@@ -611,11 +628,43 @@ mod tests {
     }
 
     #[test]
-    fn percussion_channel_is_not_imported() {
-        let events = vec![on_channel(9, 0, 36, true), on_channel(9, 480, 36, false)];
+    fn the_percussion_channel_becomes_a_drum_track_with_its_kit() {
+        // A kick and a closed hi-hat struck together, a hi-hat an eighth later, each a few ticks
+        // long, on the jazz kit; and a key below the drum pieces.
+        let events = vec![
+            program(9, 32),
+            on_channel(9, 0, 36, true),
+            on_channel(9, 0, 42, true),
+            on_channel(9, 0, 20, true),
+            on_channel(9, 10, 36, false),
+            on_channel(9, 0, 42, false),
+            on_channel(9, 0, 20, false),
+            on_channel(9, 230, 42, true),
+            on_channel(9, 10, 42, false),
+        ];
         let result = import_midi(&write(PPQ, vec![events])).unwrap();
-        assert!(result.score.tracks.is_empty());
-        assert_eq!(result.skipped_notes, 0);
+        assert_eq!(result.skipped_notes, 1);
+        let [drums] = &result.score.tracks[..] else {
+            panic!("one track expected")
+        };
+        assert_eq!(drums.instrument, Instrument::Drums);
+        assert_eq!(drums.sound, Sound::DrumsJazz);
+        assert!(drums.tuning.is_empty());
+        let beats = &drums.measures[0].voices[0].beats;
+        assert_eq!(
+            beats[0].notes,
+            vec![Note::percussion(36), Note::percussion(42)]
+        );
+        assert_eq!(beats[0].duration.ticks(), 16);
+        assert_eq!(beats[1].notes, vec![Note::percussion(42)]);
+        assert_eq!(beats[1].duration.ticks(), 32);
+    }
+
+    #[test]
+    fn a_percussion_channel_without_a_program_plays_the_standard_kit() {
+        let events = vec![on_channel(9, 0, 38, true), on_channel(9, 480, 38, false)];
+        let result = import_midi(&write(PPQ, vec![events])).unwrap();
+        assert_eq!(result.score.tracks[0].sound, Sound::DrumsStandard);
     }
 
     #[test]

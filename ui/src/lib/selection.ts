@@ -1,4 +1,5 @@
-import { isPitchedTrack } from './instruments'
+import { DEFAULT_PIECE, FIRST_PIECE, LAST_PIECE, stepPiece } from './drums'
+import { isPercussionTrack, isPitchedTrack, noteKindOf, type NoteKind } from './instruments'
 import type { Score } from './score-types'
 import { stepPitch } from './staff-layout'
 import { durationTicks } from './tab-layout'
@@ -7,7 +8,8 @@ export type BeatPosition = { measure: number; beat: number }
 
 /**
  * The beat and row being edited, in the track of the editor. The row is a string (1 is the
- * highest) on a fretted track, a MIDI pitch on a pitched track: what tells the notes of a beat
+ * highest) on a fretted track, a MIDI pitch on a pitched track, the key of a piece on a drum track
+ * (`drums.ts`): what tells the notes of a beat
  * apart (`noteRow`). With an `anchor`, the beats from the anchor to this one are selected together
  * (for copying or clearing), all their notes. With an `anchorRow` too, only the notes on the
  * strings, or at the pitches, between it and this one are: a rectangle as dragged with the mouse.
@@ -31,13 +33,26 @@ function isPitched(score: Score, track: number): boolean {
   return target !== undefined && isPitchedTrack(target)
 }
 
-/** The first beat of a track, on its first string or at middle C. */
-export function firstSelection({ score, track }: { score: Score; track: number }): Selection {
-  return { measure: 0, beat: 0, row: isPitched(score, track) ? DEFAULT_PITCH : 1 }
+function isPercussion(score: Score, track: number): boolean {
+  const target = score.tracks[track]
+  return target !== undefined && isPercussionTrack(target)
 }
 
-/** The lowest and highest row of a track: its strings, or every MIDI pitch. */
+/** What the rows of a track are: strings, pitches or drum pieces. */
+function rowsOf(score: Score, track: number): NoteKind | null {
+  const target = score.tracks[track]
+  return target ? noteKindOf(target.instrument) : null
+}
+
+/** The first beat of a track, on its first string, at middle C, or on the snare. */
+export function firstSelection({ score, track }: { score: Score; track: number }): Selection {
+  const row = isPercussion(score, track) ? DEFAULT_PIECE : isPitched(score, track) ? DEFAULT_PITCH : 1
+  return { measure: 0, beat: 0, row }
+}
+
+/** The lowest and highest row of a track: its strings, every MIDI pitch, or every drum piece. */
 function rowRange(score: Score, track: number): { low: number; high: number } {
+  if (isPercussion(score, track)) return { low: FIRST_PIECE, high: LAST_PIECE }
   if (isPitched(score, track)) return { low: 0, high: 127 }
   return { low: 1, high: Math.max(score.tracks[track]?.tuning.length ?? 1, 1) }
 }
@@ -48,7 +63,8 @@ function beatCount(score: Score, track: number, measure: number): number {
 
 /**
  * Moves along the beats (crossing barlines), or between strings, or on a pitched track one step of
- * the staff (a line or a space) up or down. Stays put at the edges.
+ * the staff (a line or a space) up or down, or on a drum track to the next piece up or down the
+ * staff. Stays put at the edges.
  */
 export function moveSelection({
   score,
@@ -66,6 +82,7 @@ export function moveSelection({
   const measures = score.tracks[track]?.measures.length ?? 0
   const { low, high } = rowRange(score, track)
   const pitched = isPitched(score, track)
+  const percussion = isPercussion(score, track)
 
   switch (direction) {
     case 'left':
@@ -77,8 +94,10 @@ export function moveSelection({
       if (measure < measures - 1) return { ...current, measure: measure + 1, beat: 0 }
       return current
     case 'up':
+      if (percussion) return { ...current, row: stepPiece({ piece: row, direction: 1 }) ?? row }
       return { ...current, row: pitched ? stepPitch({ pitch: row, direction: 1 }) : Math.max(low, row - 1) }
     case 'down':
+      if (percussion) return { ...current, row: stepPiece({ piece: row, direction: -1 }) ?? row }
       return { ...current, row: pitched ? stepPitch({ pitch: row, direction: -1 }) : Math.min(high, row + 1) }
   }
 }
@@ -86,8 +105,8 @@ export function moveSelection({
 /**
  * Moves the selection to the previous (`step` -1) or next (`step` 1) track, at the same moment: the
  * same measure, on the beat of that track that sounds when the selected beat starts. The row is
- * kept when the track has it and its rows mean the same (strings, or pitches); else it is the
- * first string, or middle C. A range stays behind, since it belongs to its track. At the first or
+ * kept when the track has it and its rows mean the same (strings, pitches or drum pieces); else it
+ * is the first string, middle C or the snare. A range stays behind, since it belongs to its track. At the first or
  * last track nothing moves.
  */
 export function moveToTrack({
@@ -105,7 +124,7 @@ export function moveToTrack({
   if (target < 0 || target >= score.tracks.length) return { track, selection }
 
   const { measure, beat, row: current } = clampSelection({ score, track, selection })
-  const row = isPitched(score, track) === isPitched(score, target) ? current : firstSelection({ score, track: target }).row
+  const row = rowsOf(score, track) === rowsOf(score, target) ? current : firstSelection({ score, track: target }).row
   const startOf = (t: number, upTo: number) =>
     (score.tracks[t]?.measures[measure]?.voices[0]?.beats ?? [])
       .slice(0, upTo)

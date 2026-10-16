@@ -4,7 +4,7 @@ export type NoteValue = 'Whole' | 'Half' | 'Quarter' | 'Eighth' | 'Sixteenth' | 
 
 export type Technique = 'HammerOn' | 'PullOff' | 'Slide' | 'Bend' | 'PalmMute' | 'Harmonic'
 
-export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo' | 'Piano'
+export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo' | 'Piano' | 'Drums'
 
 /** The id of a sound of an instrument, `"<instrument>/<sound>"` (see `SOUNDS` in `instruments.ts`). */
 export type SoundId =
@@ -20,6 +20,12 @@ export type SoundId =
   | 'violin/standard'
   | 'banjo/standard'
   | 'piano/grand'
+  | 'drums/standard'
+  | 'drums/room'
+  | 'drums/power'
+  | 'drums/electronic'
+  | 'drums/jazz'
+  | 'drums/brush'
 
 /** A note on a string and a fret, on a track of a fretted instrument (guitar, bass...). */
 export type FrettedNote = {
@@ -37,8 +43,15 @@ export type PitchedNote = {
   tied?: boolean
 }
 
+/** A hit on a piece of a drum kit, by its General MIDI percussion key (35 to 81; see `drums.ts`). */
+export type PercussionNote = {
+  piece: number
+  technique: Technique | null
+  tied?: boolean
+}
+
 /** `Note` and `Place` of the model: the place fields are written flat in the note. */
-export type Note = FrettedNote | PitchedNote
+export type Note = FrettedNote | PitchedNote | PercussionNote
 
 export type Duration = { value: NoteValue; dots: number }
 
@@ -56,7 +69,7 @@ export type Track = {
   instrument: Instrument
   /** One of the sounds of `instrument`. */
   sound: SoundId
-  /** MIDI pitches of the open strings, string 1 first (the highest, except a banjo's short fifth string). Empty for a pitched instrument. */
+  /** MIDI pitches of the open strings, string 1 first (the highest, except a banjo's short fifth string). Empty for a pitched instrument or drums. */
   tuning: number[]
   measures: Measure[]
 }

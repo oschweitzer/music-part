@@ -451,7 +451,7 @@ export const scenarios = [
   ],
 
   [
-    'a MIDI file opens under the name of the file, and one without playable notes is refused',
+    'a MIDI file opens under the name of the file, drums as a drum track, and one without notes is refused',
     async (context) => {
       const { page, out } = context
       const good = join(out, 'one-note.mid')
@@ -462,10 +462,20 @@ export const scenarios = [
       assert.match(await text(page, '.brand h1'), /one-note/)
       assert.deepEqual(await frets(page), ['0'])
 
+      const drums = Buffer.from(ONE_NOTE_MIDI)
+      drums[23] = 0x99 // percussion channel: E4 is the low conga
+      drums[28] = 0x89
+      const drumFile = join(out, 'drums.mid')
+      writeFileSync(drumFile, drums)
+      await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(drumFile)})`)
+      await clickButton(page, 'Open')
+      await settle()
+      assert.match(await text(page, '.brand h1'), /drums/)
+      assert.ok(await exists(page, 'svg.tab g.staff[data-clef="percussion"]'), 'a drum track')
+
       const silent = Buffer.from(ONE_NOTE_MIDI)
-      silent[23] = 0x99 // percussion channel
-      silent[27] = 0x89
-      const bad = join(out, 'drums.mid')
+      silent[25] = 0 // a note-on of velocity 0 is a note-off
+      const bad = join(out, 'silent.mid')
       writeFileSync(bad, silent)
       await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(bad)})`)
       await clickButton(page, 'Open')

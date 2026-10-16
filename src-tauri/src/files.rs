@@ -169,7 +169,7 @@ fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
 fn import_midi_bytes(bytes: &[u8], file_stem: Option<&str>) -> Result<(Score, usize), String> {
     let mut imported = io_midi::import_midi(bytes).map_err(|e| e.to_string())?;
     if imported.score.tracks.is_empty() {
-        return Err("This file has no notes to import (drum parts are not imported yet).".into());
+        return Err("This file has no notes to import.".into());
     }
     if let (Some(stem), "Untitled") = (file_stem, imported.score.title.as_str()) {
         imported.score.title = stem.to_string();
@@ -314,12 +314,26 @@ mod tests {
 
     #[test]
     fn a_midi_file_without_playable_notes_is_refused() {
-        // Same file with the note moved to the percussion channel.
+        // Same file with a velocity of 0, which makes the note-on a note-off.
+        let mut silent = ONE_NOTE_MIDI.to_vec();
+        silent[25] = 0;
+        let error = import_midi_bytes(&silent, None).unwrap_err();
+        assert!(error.contains("no notes"), "{error}");
+    }
+
+    #[test]
+    fn a_midi_file_on_the_percussion_channel_opens_as_drums() {
+        // Same file with the note (E4, the low conga) on the percussion channel.
         let mut drums = ONE_NOTE_MIDI.to_vec();
         drums[23] = 0x99;
-        drums[27] = 0x89;
-        let error = import_midi_bytes(&drums, None).unwrap_err();
-        assert!(error.contains("no notes"), "{error}");
+        drums[28] = 0x89;
+        let (score, skipped) = import_midi_bytes(&drums, None).unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(score.tracks[0].instrument, score_model::Instrument::Drums);
+        assert_eq!(
+            score.tracks[0].measures[0].voices[0].beats[0].notes,
+            vec![score_model::Note::percussion(64)]
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fretPitch, isPitchedNote, notePitch, noteRow } from './notes'
+import { fretPitch, isPercussionNote, isPitchedNote, notePitch, noteRow } from './notes'
 
 const guitar = { instrument: 'Guitar' as const, tuning: [64, 59, 55, 50, 45, 40] }
 const banjo = { instrument: 'Banjo' as const, tuning: [62, 59, 55, 50, 67] }
@@ -11,6 +11,16 @@ describe('notes', () => {
     expect(isPitchedNote(pitched)).toBe(true)
     expect(noteRow(pitched)).toBe(61)
     expect(noteRow(fretted)).toBe(2)
+  })
+
+  it('should tell a drum note by its piece, which is the key it plays', () => {
+    const hit = { piece: 42, technique: null }
+    const drums = { instrument: 'Drums' as const, tuning: [] }
+    expect(isPercussionNote(hit)).toBe(true)
+    expect(isPitchedNote(hit)).toBe(false)
+    expect(noteRow(hit)).toBe(42)
+    expect(notePitch({ track: drums, note: hit })).toBe(42)
+    expect(notePitch({ track: drums, note: { piece: 90, technique: null } })).toBeNull()
   })
 
   it('should find the pitch of a fret as the model does, the short banjo string included', () => {

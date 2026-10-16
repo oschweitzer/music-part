@@ -9,7 +9,9 @@ the number of nodes and the expansion of entities; compressed files are read up 
 | In the file                         | In the score                                                        |
 | ----------------------------------- | ------------------------------------------------------------------- |
 | `work-title`, `movement-title`      | Title (the file name when there is none)                            |
-| Each `part` with pitched notes      | A track. Parts with only unpitched notes (drums) are left out       |
+| Each `part` with notes              | A track                                                             |
+| `unpitched` notes, `percussion`     | A drum track: see [`drums.md`](drums.md). The piece comes from the  |
+| clef, or MIDI channel 10            | `midi-unpitched` of the note's `instrument`, else from its place    |
 | `part-name`, `midi-program`         | Track name; the closest sound to the program, else from the name    |
 | Part of no string instrument        | A piano track (pitched): see below                                  |
 | `staff-tuning`                      | Tuning, highest string first. Else the standard tuning              |
@@ -58,4 +60,5 @@ importing the file gives the same music back. A test checks
 this on the demo score and on a score with ties, techniques, a second voice and a changing time
 signature. Hammer-ons and pull-offs are written as a start on the note before and a stop on the
 note, slides as a start and a stop; palm mute is written as `other-technical` text. The file is
-not compressed (no `.mxl`).
+not compressed (no `.mxl`). A drum track is a part on a `percussion` clef and MIDI channel 10, with
+`unpitched` notes at the place and with the head of their piece (see [`drums.md`](drums.md)).

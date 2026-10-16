@@ -1,3 +1,4 @@
+import type { NoteHead } from './drums'
 import type { Instrument, NoteValue } from './score-types'
 
 /**
@@ -26,8 +27,11 @@ export const STAFF_METRICS = {
   keyAccidentalWidth: 7,
 } as const
 
-/** A clef, with the octave transposition of instruments written an octave above how they sound. */
-export type Clef = 'treble' | 'treble8vb' | 'bass' | 'bass8vb'
+/**
+ * A clef, with the octave transposition of instruments written an octave above how they sound. The
+ * percussion clef holds no pitch: each drum piece has its own line or space (`drums.ts`).
+ */
+export type Clef = 'treble' | 'treble8vb' | 'bass' | 'bass8vb' | 'percussion'
 
 /** A key signature as a number of sharps (positive) or flats (negative); 0 is C major. */
 export type KeySignature = { fifths: number }
@@ -36,8 +40,12 @@ export const C_MAJOR: KeySignature = { fifths: 0 }
 
 export type Accidental = 'sharp' | 'flat' | 'natural'
 
-/** A note of a beat to engrave: its sounding pitch, its tie, and the row selecting it (pitch or string). */
-export type StaffNoteInput = { pitch: number; tied: boolean; row: number }
+/**
+ * A note of a beat to engrave: its sounding pitch, its tie, and the row selecting it (pitch, string
+ * or drum piece). A drum note gives its fixed `position` and `head` instead of being spelled from
+ * its pitch, and never has an accidental.
+ */
+export type StaffNoteInput = { pitch: number; tied: boolean; row: number; position?: number; head?: NoteHead }
 
 /** A beat of a measure to engrave on one staff. */
 export type StaffBeatInput = {
@@ -47,6 +55,8 @@ export type StaffBeatInput = {
   dots: number
   /** The notes of the beat that belong on this staff; none is a rest on this staff. */
   notes: StaffNoteInput[]
+  /** The way the stem must go, when it does not follow the heads (drums: up for hands, down for feet). */
+  stem?: 'up' | 'down'
 }
 
 export type StaffHead = {
@@ -55,6 +65,8 @@ export type StaffHead = {
   row: number
   /** Steps above the bottom line: 0 is the bottom line, 1 the space above, 8 the top line. */
   position: number
+  /** The shape of the head: an oval, or the head of a drum piece (an x for cymbals). */
+  shape: NoteHead
   x: number
   y: number
   isFilled: boolean
@@ -115,6 +127,8 @@ export function clefsFor(instrument: Instrument): Clef[] {
     case 'ElectricGuitar':
     case 'Banjo':
       return ['treble8vb']
+    case 'Drums':
+      return ['percussion']
   }
 }
 
@@ -134,6 +148,8 @@ function bottomLine(clef: Clef): number {
       return 18 // G2
     case 'bass8vb':
       return 11 // G1 sounding, written G2
+    case 'percussion':
+      return 30 // The lines of a treble staff, which the positions of `drums.ts` name.
   }
 }
 
@@ -291,14 +307,17 @@ export function engraveMeasure({
       return { x: beat.x, heads: [], ledgers: [], stem: null, isStemUp: true, flags: 0, dots: restDots, rest: { value: beat.value, x: beat.x, y: restY } }
     }
 
-    const notes = [...beat.notes].sort((a, b) => a.pitch - b.pitch)
+    const notes = [...beat.notes].sort((a, b) => (a.position ?? a.pitch) - (b.position ?? b.pitch) || a.pitch - b.pitch)
     const written = notes.map((note) => {
+      if (note.position !== undefined) {
+        return { note, diatonic: note.position + bottomLine(block.clef), alter: null, position: note.position }
+      }
       const { step, octave, alter } = spell({ pitch: note.pitch, key })
       const diatonic = octave * 7 + step
       return { note, diatonic, alter, position: diatonic - bottomLine(block.clef) }
     })
     const positions = written.map((w) => w.position)
-    const isStemUp = 4 - Math.min(...positions) > Math.max(...positions) - 4
+    const isStemUp = beat.stem ? beat.stem === 'up' : 4 - Math.min(...positions) > Math.max(...positions) - 4
     const hasStem = beat.value !== 'Whole'
     const isFilled = beat.value !== 'Whole' && beat.value !== 'Half'
 
@@ -319,15 +338,19 @@ export function engraveMeasure({
     const heads: StaffHead[] = written.map((w, i) => {
       const isTieShown = w.note.tied && previous.pitches.includes(w.note.pitch)
       let accidental: Accidental | null = null
-      if (!isTieShown && alterOf(w.diatonic) !== w.alter) {
-        accidental = w.alter > 0 ? 'sharp' : w.alter < 0 ? 'flat' : 'natural'
+      // A drum piece has no alteration to show or to keep in force.
+      if (w.alter !== null) {
+        if (!isTieShown && alterOf(w.diatonic) !== w.alter) {
+          accidental = w.alter > 0 ? 'sharp' : w.alter < 0 ? 'flat' : 'natural'
+        }
+        inForce.set(w.diatonic, w.alter)
       }
-      inForce.set(w.diatonic, w.alter)
       const y = positionY({ position: w.position, bottom })
       return {
         pitch: w.note.pitch,
         row: w.note.row,
         position: w.position,
+        shape: w.note.head ?? 'normal',
         x: headX(i),
         y,
         isFilled,
@@ -420,7 +443,14 @@ function beamGroups({ inputs, beats }: { inputs: StaffBeatInput[]; beats: StaffB
     const members = indexes.map((i) => beats[i]).filter((b): b is StaffBeat => b !== undefined)
     const heads = members.flatMap((b) => b.heads)
     const positions = heads.map((h) => h.position)
-    const isUp = 4 - Math.min(...positions) > Math.max(...positions) - 4
+    // A group with a stem that must go up (the hands of a drum part) goes up; one where every stem
+    // must go down (feet only), down.
+    const forced = indexes.map((i) => inputs[i]?.stem)
+    const isUp = forced.some((s) => s === 'up')
+      ? true
+      : forced.every((s) => s === 'down')
+        ? false
+        : 4 - Math.min(...positions) > Math.max(...positions) - 4
     const ys = heads.map((h) => h.y)
     const middle = members[0]?.stem ? (isUp ? Math.min(...members.map((b) => b.stem?.y2 ?? 0)) : Math.max(...members.map((b) => b.stem?.y2 ?? 0))) : 0
     const beamY = isUp

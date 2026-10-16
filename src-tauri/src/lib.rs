@@ -388,6 +388,38 @@ mod tests {
     }
 
     #[test]
+    fn a_drum_track_takes_the_pieces_the_ui_sends() {
+        let (_app, window) = app();
+        let add = json!({ "type": "addTrack", "instrument": "Drums", "sound": "drums/jazz" });
+        invoke(&window, "edit_score", json!({ "edit": add })).unwrap();
+        for edit in [
+            json!({ "type": "addPitch", "track": 2, "measure": 0, "beat": 0, "pitch": 36 }),
+            json!({ "type": "addPitch", "track": 2, "measure": 0, "beat": 0, "pitch": 42 }),
+            json!({ "type": "movePitch", "track": 2, "measure": 0, "beat": 0, "pitch": 42, "to": 46 }),
+        ] {
+            invoke(&window, "edit_score", json!({ "edit": edit })).unwrap();
+        }
+        let wrong = json!({ "type": "addPitch", "track": 2, "measure": 0, "beat": 0, "pitch": 90 });
+        let error = invoke(&window, "edit_score", json!({ "edit": wrong })).unwrap_err();
+        assert!(error.as_str().unwrap().contains("35 to 81"), "{error}");
+
+        let state = invoke(&window, "undo", json!({})).unwrap();
+        let track = &state["score"]["tracks"][2];
+        assert_eq!(
+            (&track["instrument"], &track["sound"], &track["tuning"]),
+            (&json!("Drums"), &json!("drums/jazz"), &json!([]))
+        );
+        let notes = &track["measures"][0]["voices"][0]["beats"][0]["notes"];
+        assert_eq!(
+            notes,
+            &json!([
+                { "piece": 36, "technique": null, "tied": false },
+                { "piece": 42, "technique": null, "tied": false }
+            ])
+        );
+    }
+
+    #[test]
     fn a_refused_edit_comes_back_as_the_message_the_ui_shows() {
         let (_app, window) = app();
         let edit = json!({ "type": "setFret", "track": 0, "measure": 0, "beat": 0, "string": 1, "fret": 99 });

@@ -6,8 +6,11 @@
 //! instrument (a tablature staff, a guitar, bass, violin or banjo program or name) keeps the
 //! string and fret its notes give, and the others are placed on the strings by pitch. Any other
 //! part becomes a pitched track (the piano for now): its staves and voices are merged into one
-//! voice of chords, notes held across the others being tied on, so no note is lost. Repeats and
-//! endings are not unrolled: every measure is read once.
+//! voice of chords, notes held across the others being tied on, so no note is lost. A part of
+//! unpitched notes (or on MIDI channel 10) becomes a drum track: each note's piece comes from its
+//! `instrument` and the `midi-unpitched` key of that instrument, else from where it is written
+//! (`display-step`, `display-octave`, `notehead`). Repeats and endings are not unrolled: every
+//! measure is read once.
 //!
 //! Like every importer, it never panics on a bad file: it returns an error, or leaves notes out
 //! and counts them in [`MusicXmlImport::skipped_notes`].
@@ -22,8 +25,9 @@ use std::io::{Cursor, Read};
 
 use roxmltree::{Document, Node, ParsingOptions};
 use score_model::{
-    decompose_ticks, fret_pitch, pitched_segments, place_chord, Beat, Duration, Instrument,
-    Measure, Note, NoteKind, Score, Sound, Span, Technique, TimeSignature, Track, Voice, MAX_FRET,
+    decompose_ticks, drum_piece_at, drum_segments, fret_pitch, pitched_segments, place_chord, Beat,
+    Duration, Instrument, Measure, Note, NoteHead, NoteKind, Score, Sound, Span, Technique,
+    TimeSignature, Track, Voice, MAX_FRET,
 };
 
 /// Notes are quantized to a 32nd note: 4 units of 1/128 of a whole note.
@@ -39,6 +43,8 @@ const MAX_XML_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_XML_NODES: u32 = 8_000_000;
 const DEFAULT_TEMPO: u16 = 120;
 const MAX_TEMPO: u16 = 999;
+/// MusicXML counts MIDI channels from 1: the percussion channel is 10.
+const PERCUSSION_CHANNEL: u32 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MusicXmlImportError {
@@ -173,6 +179,10 @@ fn decode(bytes: &[u8]) -> String {
 struct PartInfo {
     name: Option<String>,
     midi_program: Option<u8>,
+    /// The drum piece (MIDI key) of each instrument of the part that names one.
+    unpitched: HashMap<String, u8>,
+    /// Some instrument of the part plays on the percussion channel.
+    is_percussion: bool,
 }
 
 fn parse(bytes: &[u8]) -> Result<MusicXmlImport, MusicXmlImportError> {
@@ -252,12 +262,32 @@ fn part_infos(root: Node) -> HashMap<String, PartInfo> {
             .and_then(|t| t.trim().parse::<u32>().ok())
             // MusicXML counts programs from 1.
             .and_then(|p| u8::try_from(p.saturating_sub(1)).ok());
+        let instruments: Vec<Node> = part
+            .children()
+            .filter(|n| n.has_tag_name("midi-instrument"))
+            .collect();
+        let number = |n: Node, name: &str| -> Option<u32> {
+            child_text(n, name).and_then(|t| t.parse::<u32>().ok())
+        };
+        // MusicXML counts the keys of `midi-unpitched` from 1 too.
+        let unpitched = instruments
+            .iter()
+            .filter_map(|n| {
+                let key = u8::try_from(number(*n, "midi-unpitched")?.checked_sub(1)?).ok()?;
+                Some((n.attribute("id")?.to_string(), key))
+            })
+            .collect();
+        let is_percussion = instruments
+            .iter()
+            .any(|n| number(*n, "midi-channel") == Some(PERCUSSION_CHANNEL));
         infos.insert(
             id.to_string(),
             PartInfo {
                 name: child_text(part, "part-name")
                     .or_else(|| child_text(part, "part-abbreviation")),
                 midi_program,
+                unpitched,
+                is_percussion,
             },
         );
     }
@@ -291,6 +321,8 @@ struct PartSetup {
     /// The staff that is tablature, when the part has both notation and tablature staves.
     tab_staff: Option<u32>,
     tuning: Option<Vec<u8>>,
+    /// The part has a percussion clef.
+    has_percussion_clef: bool,
 }
 
 fn scan_setup(part: Node) -> PartSetup {
@@ -333,7 +365,15 @@ fn scan_setup(part: Node) -> PartSetup {
             lines.sort_by_key(|&(line, _)| line);
             Some(lines.into_iter().rev().map(|(_, pitch)| pitch).collect())
         });
-    PartSetup { tab_staff, tuning }
+    let has_percussion_clef = part
+        .descendants()
+        .filter(|n| n.has_tag_name("clef"))
+        .any(|n| child_text(n, "sign").as_deref() == Some("percussion"));
+    PartSetup {
+        tab_staff,
+        tuning,
+        has_percussion_clef,
+    }
 }
 
 fn pitch_of(step: &str, alter: i32, octave: i32) -> Option<i32> {
@@ -400,6 +440,10 @@ enum RawKind {
     Pitched {
         pitch: Option<u8>,
         fixed: Option<(u8, u8)>,
+    },
+    /// A drum note: the MIDI key of its piece, when the file says which.
+    Unpitched {
+        piece: Option<u8>,
     },
 }
 
@@ -505,10 +549,11 @@ fn read_part(
 
                     let kind = if child(element, "rest").is_some() {
                         RawKind::Rest
-                    } else if child(element, "unpitched").is_some() {
+                    } else if let Some(unpitched) = child(element, "unpitched") {
                         has_unpitched = true;
-                        *skipped += 1;
-                        RawKind::Rest
+                        RawKind::Unpitched {
+                            piece: piece_of(element, unpitched, info),
+                        }
                     } else {
                         let technical =
                             child(element, "notations").and_then(|n| child(n, "technical"));
@@ -562,15 +607,30 @@ fn read_part(
         });
     }
 
-    // Percussion parts (only unpitched notes) have no strings to play on.
-    if has_unpitched && !has_pitched {
-        return Ok(None);
-    }
     if raw_measures.is_empty() {
         return Ok(None);
     }
+    // A part of unpitched notes, or one that only says it is percussion, is a drum kit. The notes
+    // of the other kind in a part are left out.
+    let is_drums = !has_pitched
+        && (has_unpitched || setup.has_percussion_clef || info.is_some_and(|i| i.is_percussion));
+    for note in raw_measures.iter_mut().flat_map(|m| &mut m.notes) {
+        let is_other_kind = match note.kind {
+            RawKind::Rest => false,
+            RawKind::Pitched { .. } => is_drums,
+            RawKind::Unpitched { .. } => !is_drums,
+        };
+        if is_other_kind {
+            *skipped += 1;
+            note.kind = RawKind::Rest;
+        }
+    }
 
-    let sound = sound_for(info, setup.tab_staff.is_some());
+    let sound = if is_drums {
+        Sound::from_drum_kit(info.and_then(|i| i.midi_program))
+    } else {
+        sound_for(info, setup.tab_staff.is_some())
+    };
     let instrument = sound.instrument();
     let (tuning, voice_count) = match instrument.note_kind() {
         NoteKind::Fretted => (
@@ -580,7 +640,7 @@ fn read_part(
             voice_keys.len().max(1),
         ),
         // Every staff and voice goes into one.
-        NoteKind::Pitched => (Vec::new(), 1),
+        NoteKind::Pitched | NoteKind::Percussion => (Vec::new(), 1),
     };
 
     let mut measures = Vec::with_capacity(raw_measures.len());
@@ -605,6 +665,29 @@ fn read_part(
         tuning,
         measures,
     }))
+}
+
+/// The drum piece of an unpitched note: the `midi-unpitched` key of its instrument, else the piece
+/// written at its place with its head.
+fn piece_of(note: Node, unpitched: Node, info: Option<&PartInfo>) -> Option<u8> {
+    let from_instrument = child(note, "instrument")
+        .and_then(|i| i.attribute("id"))
+        .and_then(|id| info?.unpitched.get(id).copied());
+    from_instrument.or_else(|| {
+        let step = child_text(unpitched, "display-step")?.chars().next()?;
+        let octave = child_text(unpitched, "display-octave")?
+            .parse::<u8>()
+            .ok()?;
+        let head = child_text(note, "notehead").and_then(|h| match h.as_str() {
+            "normal" => Some(NoteHead::Normal),
+            "x" | "cross" => Some(NoteHead::Cross),
+            "circle-x" => Some(NoteHead::CircleCross),
+            "diamond" => Some(NoteHead::Diamond),
+            "triangle" | "inverted triangle" => Some(NoteHead::Triangle),
+            _ => None,
+        });
+        drum_piece_at(step.to_ascii_uppercase(), octave, head)
+    })
 }
 
 fn read_signature(time: Node) -> Option<TimeSignature> {
@@ -674,12 +757,22 @@ fn build_measure(
     }
     let measure_ticks = i64::from(signature.ticks());
 
-    if instrument.note_kind() == NoteKind::Pitched {
-        let beats = merge_voices(raw, measure_ticks, &to_ticks, skipped)?;
-        return Ok(Measure {
-            time_signature: signature,
-            voices: vec![Voice { beats }],
-        });
+    match instrument.note_kind() {
+        NoteKind::Pitched => {
+            let beats = merge_voices(raw, measure_ticks, &to_ticks, skipped)?;
+            return Ok(Measure {
+                time_signature: signature,
+                voices: vec![Voice { beats }],
+            });
+        }
+        NoteKind::Percussion => {
+            let beats = merge_drums(raw, measure_ticks, &to_ticks, skipped)?;
+            return Ok(Measure {
+                time_signature: signature,
+                voices: vec![Voice { beats }],
+            });
+        }
+        NoteKind::Fretted => {}
     }
     let mut voices = Vec::with_capacity(voice_count);
     for voice in 0..voice_count {
@@ -735,6 +828,49 @@ fn merge_voices(
     for (start, length, notes) in pitched_segments(&spans) {
         push_beat(&mut beats, i64::from(length), &notes)?;
         cursor = start + length;
+    }
+    push_rests(&mut beats, measure_ticks - i64::from(cursor))?;
+    Ok(beats)
+}
+
+/// Every drum note of a measure, whatever its staff and voice (hands and feet are often two
+/// voices), as one voice: the notes struck together are a beat, lasting until the next one.
+fn merge_drums(
+    raw: &RawMeasure,
+    measure_ticks: i64,
+    to_ticks: &dyn Fn(i64) -> i64,
+    skipped: &mut usize,
+) -> Result<Vec<Beat>, MusicXmlImportError> {
+    let at = |divisions: i64| -> u32 {
+        u32::try_from(to_ticks(divisions).clamp(0, measure_ticks)).unwrap_or(0)
+    };
+    let end_of_measure = u32::try_from(measure_ticks).unwrap_or(0);
+    let mut spans = Vec::new();
+    for note in &raw.notes {
+        let RawKind::Unpitched { piece } = note.kind else {
+            continue;
+        };
+        let start = at(note.start);
+        // A note with no piece, or pushed out by the end of the measure.
+        let (Some(piece), true) = (piece, start < end_of_measure) else {
+            *skipped += 1;
+            continue;
+        };
+        spans.push(Span {
+            start,
+            end: at(note.start.saturating_add(note.length)),
+            pitch: piece,
+            is_tie_end: note.is_tie_end,
+        });
+    }
+    let (segments, left_out) = drum_segments(&spans, GRID as u32);
+    *skipped += left_out;
+    let mut beats = Vec::new();
+    let mut cursor = 0;
+    for (start, length, notes) in segments {
+        let end = (start + length).min(end_of_measure);
+        push_beat(&mut beats, i64::from(end - start), &notes)?;
+        cursor = end;
     }
     push_rests(&mut beats, measure_ticks - i64::from(cursor))?;
     Ok(beats)

@@ -7,7 +7,7 @@
   import { createDocumentApi, type ExportFormat } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
-  import { INSTRUMENTS, instrumentLabel, isPitchedTrack, soundsOf } from './lib/instruments'
+  import { hasStrings, INSTRUMENTS, instrumentLabel, soundsOf } from './lib/instruments'
   import { interpretKey } from './lib/keymap'
   import type { Instrument, SoundId } from './lib/score-types'
   import type { Selection } from './lib/selection'
@@ -377,7 +377,7 @@
             <div class="track-tab" class:active={i === editor.track}>
               <button type="button" class="name" onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
                 {t.name}
-                <span class="strings">{isPitchedTrack(t) ? instrumentLabel(t.instrument) : `${t.tuning.length} strings`}</span>
+                <span class="strings">{hasStrings(t) ? `${t.tuning.length} strings` : instrumentLabel(t.instrument)}</span>
               </button>
               <button
                 type="button"
@@ -468,7 +468,7 @@
               {/each}
             </select>
           </label>
-          {#if !isPitchedTrack(track)}
+          {#if hasStrings(track)}
             <label class="tuning" title="Open strings from the highest to the lowest, e.g. E4 B3 G3 D3 A2 D2">
               Tuning
               <input

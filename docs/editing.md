@@ -29,11 +29,20 @@ split at middle C). See [`notation.md`](notation.md) for the design.
 - `Delete`, `L` (tie to the same pitch on the beat before), durations, dots, copy, cut and paste
   work as on a tablature. Digits and techniques are for strings: on a piano the app says so.
 
+## Writing drums
+
+A drum track is written on a percussion staff. Digits `1` to `0` strike the pieces of the palette
+(kick, snare, closed, open and pedal hi-hat, crash, ride, high, mid and floor tom) on the selected
+beat, or take them away; the palette in the toolbar does the same and lists every other piece.
+Double-click a line to strike its drum, Up and Down move a hit to the next line. See
+[`drums.md`](drums.md).
+
 ## Keyboard
 
 | Key                         | Does                                                                          |
 | --------------------------- | ----------------------------------------------------------------------------- |
 | `0`-`9`                     | Sets the fret on the selected string. Two digits typed quickly make one fret  |
+|                             | On a drum track: strikes a piece of the palette, or takes it away             |
 | `Delete` / `Backspace`      | Removes the note on the selected string (a beat left empty becomes a rest).   |
 |                             | With a selection, empties its notes. On a rest, takes the rest out (below)    |
 | `Shift+Left` / `Shift+Right`| Selects several beats                                                         |
@@ -54,6 +63,7 @@ split at middle C). See [`notation.md`](notation.md) for the design.
 | `Enter`                     | On a staff: writes a note at the selected pitch                               |
 | `Shift+A` to `Shift+G`      | On a staff: writes the note of that name nearest to the selected pitch        |
 | `Up` / `Down` on a staff    | Moves the selected note a semitone, or the selection a line or space          |
+| `Up` / `Down` on drums      | Moves the selected hit, or the selection, to the next line or space           |
 
 On macOS, `Cmd` replaces `Ctrl`. The same actions are in the toolbars.
 

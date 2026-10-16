@@ -3,12 +3,18 @@
 //! Each track of a string instrument is a part with one tablature staff (`TAB` clef, tuning,
 //! string and fret on every note), so other programs show the tablature and can play it. A
 //! pitched track (piano) is a part with one standard staff, in the treble or bass clef that suits
-//! its notes best. Durations are written in divisions of 32 per quarter note, which is exactly the
-//! unit of the score: nothing is rounded.
+//! its notes best. A drum track is a part on a percussion staff and MIDI channel 10, with an
+//! instrument for each piece it plays (`midi-unpitched`), and `unpitched` notes written at the
+//! place and with the head of their piece (`display-step`, `display-octave`, `notehead`).
+//! Durations are written in divisions of 32 per quarter note, which is exactly the unit of the
+//! score: nothing is rounded.
 
 use std::fmt::Write;
 
-use score_model::{Beat, Note, NoteKind, Score, Technique, Track};
+use score_model::{
+    drum_piece, is_played_by_foot, Beat, Note, NoteHead, NoteKind, Score, Technique, Track,
+    DRUM_PIECES,
+};
 
 const DIVISIONS: u32 = 32;
 const PERCUSSION_CHANNEL: usize = 9;
@@ -64,6 +70,10 @@ fn write_score(out: &mut String, score: &Score) -> std::fmt::Result {
         };
         // MusicXML counts programs from 1.
         let program = track.sound.midi_program() + 1;
+        if track.sound.is_drum_kit() {
+            write_drum_part_info(out, track, index + 1, program)?;
+            continue;
+        }
         writeln!(
             out,
             r#"    <score-part id="P{n}"><part-name>{name}</part-name><score-instrument id="P{n}-I1"><instrument-name>{name}</instrument-name></score-instrument><midi-instrument id="P{n}-I1"><midi-channel>{channel}</midi-channel><midi-program>{program}</midi-program></midi-instrument></score-part>"#,
@@ -78,6 +88,55 @@ fn write_score(out: &mut String, score: &Score) -> std::fmt::Result {
         write_part(out, score, track, index)?;
     }
     writeln!(out, "</score-partwise>")
+}
+
+/// The part of a drum track in the part list: the kit on channel 10 (its program), then an
+/// instrument for each piece the track plays, which its notes name.
+fn write_drum_part_info(
+    out: &mut String,
+    track: &Track,
+    n: usize,
+    program: u8,
+) -> std::fmt::Result {
+    let name = escape(&track.name);
+    let mut pieces: Vec<u8> = notes_of(track)
+        .filter_map(|note| track.pitch(note))
+        .collect();
+    pieces.sort_unstable();
+    pieces.dedup();
+    write!(
+        out,
+        r#"    <score-part id="P{n}"><part-name>{name}</part-name><score-instrument id="P{n}-I1"><instrument-name>{name}</instrument-name></score-instrument>"#
+    )?;
+    for &key in &pieces {
+        let piece = drum_piece(key).map_or("", |p| p.name);
+        write!(
+            out,
+            r#"<score-instrument id="P{n}-I{key}"><instrument-name>{piece}</instrument-name></score-instrument>"#
+        )?;
+    }
+    write!(
+        out,
+        r#"<midi-instrument id="P{n}-I1"><midi-channel>10</midi-channel><midi-program>{program}</midi-program></midi-instrument>"#
+    )?;
+    for &key in &pieces {
+        write!(
+            out,
+            r#"<midi-instrument id="P{n}-I{key}"><midi-channel>10</midi-channel><midi-program>{program}</midi-program><midi-unpitched>{unpitched}</midi-unpitched></midi-instrument>"#,
+            unpitched = key + 1,
+        )?;
+    }
+    writeln!(out, "</score-part>")
+}
+
+/// Every note of every voice of a track.
+fn notes_of(track: &Track) -> impl Iterator<Item = &Note> {
+    track
+        .measures
+        .iter()
+        .flat_map(|m| &m.voices)
+        .flat_map(|v| &v.beats)
+        .flat_map(|b| &b.notes)
 }
 
 fn write_part(out: &mut String, score: &Score, track: &Track, index: usize) -> std::fmt::Result {
@@ -106,8 +165,11 @@ fn write_part(out: &mut String, score: &Score, track: &Track, index: usize) -> s
                 "<time><beats>{}</beats><beat-type>{}</beat-type></time>",
                 signature.numerator, signature.denominator
             )?;
-            if m == 0 && track.instrument.note_kind() == NoteKind::Pitched {
+            let kind = track.instrument.note_kind();
+            if m == 0 && kind == NoteKind::Pitched {
                 write!(out, "{}", clef_for(track))?;
+            } else if m == 0 && kind == NoteKind::Percussion {
+                write!(out, "<clef><sign>percussion</sign></clef>")?;
             } else if m == 0 {
                 write!(out, "<clef><sign>TAB</sign><line>5</line></clef>")?;
                 write!(
@@ -158,7 +220,8 @@ fn write_part(out: &mut String, score: &Score, track: &Track, index: usize) -> s
                     before: previous_beat(track, m, voice, b),
                     after: next_beat(track, m, voice, b),
                 };
-                write_beat(out, track, beat, voice + 1, &around)?;
+                let part = index + 1;
+                write_beat(out, track, beat, (part, voice + 1), &around)?;
             }
         }
         writeln!(out, "    </measure>")?;
@@ -204,7 +267,7 @@ fn write_beat(
     out: &mut String,
     track: &Track,
     beat: &Beat,
-    voice: usize,
+    (part, voice): (usize, usize),
     around: &Around,
 ) -> std::fmt::Result {
     let duration = beat.duration.ticks();
@@ -223,7 +286,6 @@ fn write_beat(
         let Some(pitch) = track.pitch(note) else {
             continue;
         };
-        let (step, alter, octave) = spell(pitch);
         let next = same_note(around.after, note);
         let previous = same_note(around.before, note);
 
@@ -243,14 +305,42 @@ fn write_beat(
         if i > 0 {
             write!(out, "<chord/>")?;
         }
-        write!(out, "<pitch><step>{step}</step>")?;
-        if alter != 0 {
-            write!(out, "<alter>{alter}</alter>")?;
+        if let Some(piece) = DRUM_PIECES
+            .contains(&pitch)
+            .then(|| drum_piece(pitch))
+            .flatten()
+            .filter(|_| track.instrument.note_kind() == NoteKind::Percussion)
+        {
+            // Stems up for the hands, down for a beat of feet only, as drummers read them.
+            let stem = if beat.notes.iter().all(|n| is_played_by_foot(n.key())) {
+                "down"
+            } else {
+                "up"
+            };
+            let head = match piece.head {
+                NoteHead::Normal => "",
+                NoteHead::Cross => "<notehead>x</notehead>",
+                NoteHead::CircleCross => "<notehead>circle-x</notehead>",
+                NoteHead::Diamond => "<notehead>diamond</notehead>",
+                NoteHead::Triangle => "<notehead>triangle</notehead>",
+            };
+            write!(
+                out,
+                r#"<unpitched><display-step>{step}</display-step><display-octave>{octave}</display-octave></unpitched><duration>{duration}</duration>{ties}<instrument id="P{part}-I{pitch}"/><voice>{voice}</voice><type>{kind}</type>{dots}<stem>{stem}</stem>{head}"#,
+                step = piece.step,
+                octave = piece.octave,
+            )?;
+        } else {
+            let (step, alter, octave) = spell(pitch);
+            write!(out, "<pitch><step>{step}</step>")?;
+            if alter != 0 {
+                write!(out, "<alter>{alter}</alter>")?;
+            }
+            write!(
+                out,
+                "<octave>{octave}</octave></pitch><duration>{duration}</duration>{ties}<voice>{voice}</voice><type>{kind}</type>{dots}"
+            )?;
         }
-        write!(
-            out,
-            "<octave>{octave}</octave></pitch><duration>{duration}</duration>{ties}<voice>{voice}</voice><type>{kind}</type>{dots}"
-        )?;
         write!(out, "<notations>{tied}")?;
         write_slide(out, note, previous)?;
         if let (Some(string), Some(fret)) = (note.string(), note.fret()) {
@@ -273,19 +363,13 @@ fn same_note<'a>(beat: Option<&'a Beat>, note: &Note) -> Option<&'a Note> {
 
 /// The treble clef, or the bass clef when most notes of the track are below middle C.
 fn clef_for(track: &Track) -> &'static str {
-    let (low, high) = track
-        .measures
-        .iter()
-        .flat_map(|m| &m.voices)
-        .flat_map(|v| &v.beats)
-        .flat_map(|b| &b.notes)
-        .fold((0usize, 0usize), |(low, high), n| {
-            if n.key() < 60 {
-                (low + 1, high)
-            } else {
-                (low, high + 1)
-            }
-        });
+    let (low, high) = notes_of(track).fold((0usize, 0usize), |(low, high), n| {
+        if n.key() < 60 {
+            (low + 1, high)
+        } else {
+            (low, high + 1)
+        }
+    });
     if low > high {
         "<clef><sign>F</sign><line>4</line></clef>"
     } else {
@@ -646,6 +730,121 @@ mod tests {
             xml.contains(r#"<hammer-on type="start""#) && xml.contains(r#"<hammer-on type="stop""#)
         );
         assert!(xml.contains(r#"<slide type="start""#) && xml.contains(r#"<slide type="stop""#));
+    }
+
+    /// A drum track with one quarter note on each piece, on the given kit.
+    fn every_piece(sound: Sound) -> Score {
+        let mut score = blank_score("Drums");
+        apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Drums,
+            },
+        )
+        .unwrap();
+        apply_edit(&mut score, &Edit::SetSound { track: 0, sound }).unwrap();
+        let pieces: Vec<u8> = score_model::DRUM_PIECES.collect();
+        let measures = pieces.len().div_ceil(4);
+        for at in score.tracks[0].measures.len()..measures {
+            apply_edit(&mut score, &Edit::InsertMeasure { at }).unwrap();
+        }
+        let quarter = score_model::Duration {
+            value: score_model::NoteValue::Quarter,
+            dots: 0,
+        };
+        for measure in 0..measures {
+            for beat in 0..4 {
+                let duration = quarter;
+                let edit = Edit::SetDuration {
+                    track: 0,
+                    measure,
+                    beat,
+                    duration,
+                };
+                apply_edit(&mut score, &edit).unwrap();
+            }
+        }
+        for (i, &pitch) in pieces.iter().enumerate() {
+            let (measure, beat) = (i / 4, i % 4);
+            let edit = Edit::AddPitch {
+                track: 0,
+                measure,
+                beat,
+                pitch,
+            };
+            apply_edit(&mut score, &edit).unwrap();
+        }
+        score
+    }
+
+    #[test]
+    fn every_drum_piece_survives_a_round_trip() {
+        let original = every_piece(Sound::DrumsElectronic);
+        let xml = export_musicxml(&original);
+        assert!(xml.contains("<sign>percussion</sign>"));
+        assert!(xml.contains("<midi-channel>10</midi-channel><midi-program>25</midi-program>"));
+        assert!(
+            xml.contains(r#"<midi-unpitched>37</midi-unpitched>"#),
+            "kick"
+        );
+        assert!(xml.contains(
+            r#"<unpitched><display-step>G</display-step><display-octave>5</display-octave></unpitched>"#
+        ));
+        assert_same_music(&roundtrip(&original), &original);
+    }
+
+    #[test]
+    fn drum_notes_are_read_back_from_their_place_when_no_instrument_says_which() {
+        let original = every_piece(Sound::DrumsStandard);
+        let xml = export_musicxml(&original);
+        // Another program may write the place and head but no instrument.
+        let without: String = xml
+            .lines()
+            .map(|line| {
+                let mut line = line.to_string();
+                while let Some(start) = line.find("<instrument id=") {
+                    let end = start + line[start..].find("/>").unwrap() + 2;
+                    line.replace_range(start..end, "");
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!without.contains("<instrument id="));
+        let imported = import_musicxml(without.as_bytes()).unwrap();
+        assert_eq!(imported.skipped_notes, 0);
+        assert_same_music(&imported.score, &original);
+    }
+
+    #[test]
+    fn a_beat_of_feet_only_has_its_stem_down() {
+        let mut score = every_piece(Sound::DrumsStandard);
+        // Beat 2 holds the kick (36) alone; add the hi-hat to beat 1, with the acoustic kick.
+        apply_edit(
+            &mut score,
+            &Edit::AddPitch {
+                track: 0,
+                measure: 0,
+                beat: 0,
+                pitch: 42,
+            },
+        )
+        .unwrap();
+        let xml = export_musicxml(&score);
+        let stems: Vec<&str> = xml
+            .lines()
+            .filter(|l| l.contains("<unpitched>"))
+            .take(3)
+            .map(|l| {
+                if l.contains("<stem>down</stem>") {
+                    "down"
+                } else {
+                    "up"
+                }
+            })
+            .collect();
+        assert_eq!(stems, ["up", "up", "down"]);
     }
 
     #[test]

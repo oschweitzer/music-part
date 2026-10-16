@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INSTRUMENTS, SOUNDS, instrumentLabel, isPitchedTrack, noteKindOf, soundLabel, soundsOf } from './instruments'
+import { hasStrings, INSTRUMENTS, SOUNDS, instrumentLabel, isPercussionTrack, isPitchedTrack, noteKindOf, soundLabel, soundsOf } from './instruments'
 
 describe('instruments', () => {
   it('should give every instrument a distinct label', () => {
@@ -31,10 +31,20 @@ describe('sounds', () => {
     expect(soundLabel('banjo/standard')).toBe('Banjo: Standard')
   })
 
-  it('should give distinct General MIDI programs to distinct sounds', () => {
-    const programs = SOUNDS.map((s) => s.program)
-    expect(new Set(programs).size).toBe(SOUNDS.length)
-    expect(programs.every((p) => p >= 0 && p <= 127)).toBe(true)
+  it('should give distinct General MIDI programs to distinct sounds, kits among kits', () => {
+    for (const isKit of [false, true]) {
+      const programs = SOUNDS.filter((s) => (s.instrument === 'Drums') === isKit).map((s) => s.program)
+      expect(new Set(programs).size).toBe(programs.length)
+      expect(programs.every((p) => p >= 0 && p <= 127)).toBe(true)
+    }
+  })
+
+  it('should store drum notes as pieces, on a track without strings', () => {
+    expect(INSTRUMENTS.filter((i) => noteKindOf(i) === 'percussion')).toEqual(['Drums'])
+    expect(isPercussionTrack({ instrument: 'Drums' })).toBe(true)
+    expect(hasStrings({ instrument: 'Drums' })).toBe(false)
+    expect(hasStrings({ instrument: 'Banjo' })).toBe(true)
+    expect(soundsOf('Drums')[0]?.id).toBe('drums/standard')
   })
 
   it('should store the notes of the piano as pitches, those of string instruments on strings', () => {

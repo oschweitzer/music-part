@@ -168,3 +168,29 @@ describe('key signatures', () => {
     expect(low).toEqual([{ kind: 'flat', x: 10, y: positionY({ position: 2, bottom: bass.bottom }) }])
   })
 })
+
+describe('percussion staff', () => {
+  const percussion = staffBlock({ clef: 'percussion', top: 100 })
+
+  it('should give drums the percussion clef', () => {
+    expect(clefsFor('Drums')).toEqual(['percussion'])
+  })
+
+  it('should place a drum note at its given position and keep its head, whatever its key', () => {
+    const [beat] = engrave(
+      [{ x: 50, startTick: 0, value: 'Quarter', dots: 0, notes: [{ pitch: 49, tied: false, row: 49, position: 10, head: 'cross' }] }],
+      percussion,
+    ).beats
+    expect(beat!.heads[0]!).toMatchObject({ position: 10, shape: 'cross', accidental: null, row: 49 })
+    // The first ledger line above the staff.
+    expect(beat!.ledgers).toHaveLength(1)
+  })
+
+  it('should follow a stem direction that is given', () => {
+    const low = { pitch: 36, tied: false, row: 36, position: 1, head: 'normal' as const }
+    const [up] = engrave([{ x: 50, startTick: 0, value: 'Quarter', dots: 0, notes: [low], stem: 'up' }], percussion).beats
+    const [down] = engrave([{ x: 50, startTick: 0, value: 'Quarter', dots: 0, notes: [low], stem: 'down' }], percussion).beats
+    expect(up!.isStemUp).toBe(true)
+    expect(down!.isStemUp).toBe(false)
+  })
+})

@@ -130,7 +130,7 @@ pub fn write_file(path: &Path, score: &Score) -> Result<(), NativeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use score_model::{apply_edit, blank_score, demo_score, Edit, Sound};
+    use score_model::{apply_edit, blank_score, demo_score, Edit, Instrument, Sound, DRUM_PIECES};
 
     #[test]
     fn a_score_survives_a_round_trip() {
@@ -152,6 +152,35 @@ mod tests {
         let back = from_str(&to_string(&score)).unwrap();
         let sounds: Vec<Sound> = back.tracks.iter().skip(1).map(|t| t.sound).collect();
         assert_eq!(sounds, Sound::ALL);
+        assert_eq!(back, score);
+    }
+
+    #[test]
+    fn every_drum_piece_survives_a_round_trip() {
+        let mut score = blank_score("Drums");
+        let to_drums = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Drums,
+        };
+        apply_edit(&mut score, &to_drums).unwrap();
+        for pitch in DRUM_PIECES {
+            let hit = Edit::AddPitch {
+                track: 0,
+                measure: 0,
+                beat: 0,
+                pitch,
+            };
+            apply_edit(&mut score, &hit).unwrap();
+        }
+        let text = to_string(&score);
+        assert!(text.contains(r#"{"piece":35,"technique":null,"tied":false}"#));
+        let back = from_str(&text).unwrap();
+        let keys: Vec<u8> = back.tracks[0].measures[0].voices[0].beats[0]
+            .notes
+            .iter()
+            .map(|n| n.key())
+            .collect();
+        assert_eq!(keys, DRUM_PIECES.collect::<Vec<u8>>());
         assert_eq!(back, score);
     }
 

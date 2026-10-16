@@ -512,3 +512,58 @@ describe('staves', () => {
     expect(rows.rows[1]!.height).toBeGreaterThan(ROW_METRICS.minHeight)
   })
 })
+
+describe('drum staff', () => {
+  const eighth = { value: 'Eighth' as const, dots: 0 }
+  const hit = (piece: number) => ({ piece, technique: null })
+  // A rock beat: hi-hat eighths, the kick on 1 and 3, the snare on 2; and a kick alone.
+  const groove: Beat[] = [
+    { duration: eighth, notes: [hit(36), hit(42)] },
+    { duration: eighth, notes: [hit(42)] },
+    { duration: eighth, notes: [hit(38), hit(42)] },
+    { duration: eighth, notes: [hit(42)] },
+    { duration: eighth, notes: [hit(36), hit(42)] },
+    { duration: eighth, notes: [hit(42)] },
+    { duration: { value: 'Quarter', dots: 0 }, notes: [hit(36)] },
+  ]
+  const drums: Track = { name: 'Drums', instrument: 'Drums', sound: 'drums/standard', tuning: [], measures: [measureOf(groove)] }
+  const layout = layoutTab({ track: drums, width: 900 })
+  const system = layout.systems[0]!
+  const staff = system.measures[0]!.staves[0]!
+
+  it('should write drums on one percussion staff, without tablature', () => {
+    expect(notationOf({ track: drums, fretted: 'both' })).toEqual({ clefs: ['percussion'], hasTab: false })
+    expect(system.staves.map((s) => s.clef)).toEqual(['percussion'])
+    expect(system.stringYs).toEqual([])
+    expect(layout.rowKind).toBe('piece')
+  })
+
+  it('should put each piece on its line with its head, and no accidental', () => {
+    const first = staff.beats[0]!.heads
+    expect(first.map((h) => [h.row, h.position, h.shape])).toEqual([
+      [36, 1, 'normal'],
+      [42, 9, 'cross'],
+    ])
+    expect(staff.beats[2]!.heads.map((h) => h.position)).toEqual([5, 9])
+    expect(staff.beats.flatMap((b) => b.heads).every((h) => h.accidental === null)).toBe(true)
+  })
+
+  it('should beam the hands with stems up, and give the feet alone a stem down', () => {
+    expect(staff.beats.slice(0, 6).every((b) => b.isStemUp)).toBe(true)
+    expect(staff.beams.length).toBeGreaterThan(0)
+    const kick = staff.beats[6]!
+    expect(kick.isStemUp).toBe(false)
+    expect(kick.stem!.y2).toBeGreaterThan(kick.stem!.y1)
+  })
+
+  it('should find the piece under a click: the hit there, else the drum of that line', () => {
+    const beat = system.measures[0]!.beats[1]!
+    const head = staff.beats[1]!.heads[0]!
+    expect(hitTest({ layout, x: beat.x, y: head.y })).toMatchObject({ area: 'staff', row: 42, pitch: 42 })
+    const block = system.staves[0]!
+    // The third space (C5) is the snare, the bottom space (F4) the kick.
+    const space = (position: number) => block.bottom - (position * 8) / 2
+    expect(hitTest({ layout, x: beat.x, y: space(5) })).toMatchObject({ row: 38, pitch: 38 })
+    expect(hitTest({ layout, x: beat.x, y: space(1) })).toMatchObject({ row: 36, pitch: 36 })
+  })
+})

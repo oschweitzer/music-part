@@ -183,6 +183,42 @@ describe('moveToTrack', () => {
   })
 })
 
+describe('on a drum track', () => {
+  const withDrums: Score = {
+    ...score,
+    tracks: [
+      ...score.tracks,
+      {
+        name: 'Drums',
+        instrument: 'Drums',
+        sound: 'drums/standard',
+        tuning: [],
+        measures: score.tracks[0]!.measures.map((m) => ({ time_signature: m.time_signature, voices: [{ beats: [{ duration: { value: 'Whole', dots: 0 }, notes: [] }] }] })),
+      },
+    ],
+  }
+
+  it('should start on the snare and keep the selection on drum pieces', () => {
+    expect(firstSelection({ score: withDrums, track: 2 })).toEqual({ measure: 0, beat: 0, row: 38 })
+    expect(clampSelection({ score: withDrums, track: 2, selection: { measure: 0, beat: 0, row: 3 } }).row).toBe(35)
+    expect(clampSelection({ score: withDrums, track: 2, selection: { measure: 0, beat: 0, row: 100 } }).row).toBe(81)
+  })
+
+  it('should move up and down to the next piece on the staff', () => {
+    const at = (row: number, direction: 'up' | 'down') =>
+      moveSelection({ score: withDrums, track: 2, selection: { measure: 0, beat: 0, row }, direction }).row
+    expect(at(36, 'down')).toBe(35)
+    expect(at(36, 'up')).toBe(41)
+    expect(at(42, 'up')).toBe(49)
+    expect(at(44, 'down')).toBe(44)
+  })
+
+  it('should land on the snare when moving from a string to a drum track', () => {
+    const down = moveToTrack({ score: withDrums, track: 1, selection: { measure: 0, beat: 0, row: 3 }, step: 1 })
+    expect(down).toEqual({ track: 2, selection: { measure: 0, beat: 0, row: 38 } })
+  })
+})
+
 describe('on a pitched track', () => {
   const withPiano: Score = {
     ...score,

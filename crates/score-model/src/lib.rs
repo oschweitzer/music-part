@@ -4,13 +4,17 @@ mod chords;
 mod demo;
 mod edit;
 mod fretting;
+mod percussion;
 mod sound;
 mod validate;
 
-pub use chords::{pitched_segments, Segment, Span};
+pub use chords::{drum_segments, pitched_segments, Segment, Span};
 pub use demo::{blank_score, demo_score};
 pub use edit::{apply_edit, Edit, EditError};
 pub use fretting::{place_chord, place_pitch};
+pub use percussion::{
+    drum_piece, drum_piece_at, is_played_by_foot, DrumPiece, NoteHead, DRUM_PIECES, PIECES,
+};
 pub use sound::Sound;
 pub use validate::ScoreError;
 
@@ -32,7 +36,7 @@ pub struct Track {
     pub sound: Sound,
     /// MIDI pitches of the open strings, from string 1 to the last. String 1 is the highest
     /// except on a banjo, whose short fifth string is tuned higher (see `Instrument::first_fret`).
-    /// Empty for an instrument without strings (`NoteKind::Pitched`).
+    /// Empty for an instrument without strings (`NoteKind::Pitched`, `NoteKind::Percussion`).
     pub tuning: Vec<u8>,
     pub measures: Vec<Measure>,
 }
@@ -76,6 +80,8 @@ pub enum Instrument {
     Banjo,
     /// A keyboard: notes are pitches, written on a grand staff. See `docs/notation.md`.
     Piano,
+    /// A drum kit: notes are percussion pieces, played on MIDI channel 10. See `docs/drums.md`.
+    Drums,
 }
 
 /// How the notes of an instrument are stored, and so how they are entered and written.
@@ -85,6 +91,9 @@ pub enum NoteKind {
     Fretted,
     /// At a MIDI pitch (`Place::Pitched`), written on a staff. The track has no strings.
     Pitched,
+    /// A piece of a drum kit (`Place::Percussion`), written on a percussion staff. The track has
+    /// no strings.
+    Percussion,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,6 +163,10 @@ pub enum Place {
         /// MIDI pitch, 60 = middle C (C4).
         pitch: u8,
     },
+    Percussion {
+        /// General MIDI percussion key of the piece, 35 (acoustic kick) to 81 (open triangle).
+        piece: u8,
+    },
 }
 
 impl Place {
@@ -161,6 +174,7 @@ impl Place {
         match self {
             Place::Fretted { .. } => NoteKind::Fretted,
             Place::Pitched { .. } => NoteKind::Pitched,
+            Place::Percussion { .. } => NoteKind::Percussion,
         }
     }
 }
@@ -184,11 +198,20 @@ impl Note {
         }
     }
 
+    /// A hit on a piece of a drum kit (its General MIDI percussion key), untied.
+    pub fn percussion(piece: u8) -> Note {
+        Note {
+            place: Place::Percussion { piece },
+            technique: None,
+            tied: false,
+        }
+    }
+
     /// The string of a fretted note.
     pub fn string(&self) -> Option<u8> {
         match self.place {
             Place::Fretted { string, .. } => Some(string),
-            Place::Pitched { .. } => None,
+            Place::Pitched { .. } | Place::Percussion { .. } => None,
         }
     }
 
@@ -196,16 +219,17 @@ impl Note {
     pub fn fret(&self) -> Option<u8> {
         match self.place {
             Place::Fretted { fret, .. } => Some(fret),
-            Place::Pitched { .. } => None,
+            Place::Pitched { .. } | Place::Percussion { .. } => None,
         }
     }
 
-    /// What tells the note apart from the others of its beat: its string, or its pitch. Beats
-    /// keep their notes sorted by it, with no two notes sharing one.
+    /// What tells the note apart from the others of its beat: its string, its pitch, or its drum
+    /// piece. Beats keep their notes sorted by it, with no two notes sharing one.
     pub fn key(&self) -> u8 {
         match self.place {
             Place::Fretted { string, .. } => string,
             Place::Pitched { pitch } => pitch,
+            Place::Percussion { piece } => piece,
         }
     }
 }
@@ -303,13 +327,15 @@ pub fn decompose_ticks(mut len: u32) -> Option<Vec<Duration>> {
 
 impl Track {
     /// MIDI pitch of a note, or `None` if the string or the fret does not exist, or the pitch is
-    /// above 127.
+    /// above 127. A drum note gives the key of its piece, which is what the percussion channel
+    /// plays, and `None` for a key that is no piece.
     pub fn pitch(&self, note: &Note) -> Option<u8> {
         match note.place {
             Place::Fretted { string, fret } => {
                 fret_pitch(self.instrument, &self.tuning, string, fret)
             }
             Place::Pitched { pitch } => (pitch <= MAX_PITCH).then_some(pitch),
+            Place::Percussion { piece } => DRUM_PIECES.contains(&piece).then_some(piece),
         }
     }
 }
@@ -373,13 +399,14 @@ pub const BANJO_STANDARD: [u8; 5] = [62, 59, 55, 50, 67];
 const BANJO_FIFTH_STRING_START: u8 = 5;
 
 impl Instrument {
-    pub const ALL: [Instrument; 6] = [
+    pub const ALL: [Instrument; 7] = [
         Instrument::Guitar,
         Instrument::ElectricGuitar,
         Instrument::Bass,
         Instrument::Violin,
         Instrument::Banjo,
         Instrument::Piano,
+        Instrument::Drums,
     ];
 
     /// How the notes of a track of this instrument are stored.
@@ -391,6 +418,7 @@ impl Instrument {
             | Instrument::Violin
             | Instrument::Banjo => NoteKind::Fretted,
             Instrument::Piano => NoteKind::Pitched,
+            Instrument::Drums => NoteKind::Percussion,
         }
     }
 
@@ -401,7 +429,7 @@ impl Instrument {
             Instrument::Bass => &BASS_STANDARD,
             Instrument::Violin => &VIOLIN_STANDARD,
             Instrument::Banjo => &BANJO_STANDARD,
-            Instrument::Piano => &[],
+            Instrument::Piano | Instrument::Drums => &[],
         }
     }
 
@@ -415,7 +443,8 @@ impl Instrument {
         }
     }
 
-    /// The instrument for a General MIDI program, when a file names one.
+    /// The instrument for a General MIDI program, when a file names one. A drum kit is not chosen
+    /// by a program but by the percussion channel (MIDI channel 10), so this is never `Drums`.
     pub fn from_midi_program(program: Option<u8>) -> Instrument {
         Sound::from_midi_program(program).instrument()
     }
@@ -445,7 +474,7 @@ mod tests {
     #[test]
     fn standard_tunings_are_listed_highest_full_length_string_first() {
         for instrument in Instrument::ALL {
-            if instrument.note_kind() == NoteKind::Pitched {
+            if instrument.note_kind() != NoteKind::Fretted {
                 continue;
             }
             let tuning = instrument.standard_tuning();
@@ -687,9 +716,39 @@ mod tests {
     }
 
     #[test]
+    fn a_drum_note_is_written_with_its_piece_and_read_back() {
+        let note = Note::percussion(42);
+        let json = serde_json::to_string(&note).unwrap();
+        assert_eq!(json, r#"{"piece":42,"technique":null,"tied":false}"#);
+        assert_eq!(serde_json::from_str::<Note>(&json).unwrap(), note);
+        assert_eq!(note.key(), 42);
+        assert_eq!((note.string(), note.fret()), (None, None));
+    }
+
+    #[test]
+    fn a_drum_note_sounds_at_the_key_of_its_piece() {
+        let drums = Track {
+            name: "Drums".into(),
+            instrument: Instrument::Drums,
+            sound: Sound::DrumsStandard,
+            tuning: vec![],
+            measures: vec![],
+        };
+        assert_eq!(drums.pitch(&Note::percussion(36)), Some(36));
+        assert_eq!(drums.pitch(&Note::percussion(34)), None);
+        assert_eq!(drums.pitch(&Note::percussion(82)), None);
+        assert_eq!(Instrument::Drums.note_kind(), NoteKind::Percussion);
+    }
+
+    #[test]
     fn only_the_piano_stores_pitches() {
         for instrument in Instrument::ALL {
             let has_strings = !instrument.standard_tuning().is_empty();
+            // Drums have no strings either: they store pieces.
+            if instrument.note_kind() == NoteKind::Percussion {
+                assert!(!has_strings);
+                continue;
+            }
             assert_eq!(
                 instrument.note_kind() == NoteKind::Fretted,
                 has_strings,

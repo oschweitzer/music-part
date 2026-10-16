@@ -106,6 +106,7 @@ beat. `TabView.svelte` only draws; the glyphs (clefs, accidentals, rests, flags)
 | Guitar, electric guitar, banjo | Treble clef, an octave down    | `Tab` / `Both` view |
 | Bass                           | Bass clef, an octave down      | `Tab` / `Both` view |
 | Violin                         | Treble clef                    | `Tab` / `Both` view |
+| Drums                          | Percussion clef (`drums.md`)   | None                |
 
 - **Fretted tracks** show their tablature, their staff, or both (staff above), as the
   `Tab` / `Staff` / `Both` switch says (`FrettedView` in `track-view.ts`, kept like the view mode).
@@ -142,23 +143,14 @@ catch-all piano branch of `Sound::from_midi_program` (16 to 23 organs, 80 to 103
 1 to 7 other pianos as sounds of the piano), and the matching part names in `sound_for` of
 `io-musicxml`.
 
-### Drums (issue #10)
+### Drums (issue #10): done
 
-A drum note is a percussion piece, not a pitch: add `Place::Percussion { piece: u8 }`, the General
-MIDI key of the piece (35 to 81), `NoteKind::Percussion`, and `Instrument::Drums`.
-
-- Untagged JSON tells it apart by its field: `{"piece": 38, ...}`. `Note::key()` returns the piece,
-  so beats, selection rows, `ClearNotes` spans and paste keep working; `Track::pitch` returns the
-  key the percussion channel needs.
-- `validate`: pieces 35 to 81, one of each per beat, no tuning. Edits: either a set of
-  `AddPiece` / `RemovePiece` edits, or generalize the pitched ones to take the key; `MovePitch`
-  has no meaning for a piece.
-- Playback: the track plays on MIDI channel 10 with a drum kit (bank 128 in the SoundFont), not by
-  program; the sequencer and `Player` need to know the track is percussion.
-- Import: MIDI channel 10 (skipped today) and MusicXML `unpitched` notes with their `instrument`
-  become drum tracks. Export: channel 10, and `unpitched` with `display-step`/`display-octave`.
-- Staff: a percussion clef and a table from piece to staff position and head shape (cross heads for
-  cymbals) in the UI, stems up, one voice to start with.
+Done, see [`drums.md`](drums.md). A drum note is a third kind of place,
+`Place::Percussion { piece }` (the General MIDI key, 35 to 81), of `Instrument::Drums`
+(`NoteKind::Percussion`). The pitched edits take the key of the piece, so `Note::key()`,
+selection rows, `ClearNotes` spans and paste work unchanged; the track plays a kit of bank 128 on
+MIDI channel 10, and is written on a percussion staff with a head shape per piece, stems up for
+the hands and down for the feet alone, in one voice.
 
 ### Voice (issue #11)
 

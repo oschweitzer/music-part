@@ -34,22 +34,30 @@ without changing the file format.
 
 ### The sounds
 
-| Id                           | Name          | GM program | Instrument      | Sound pack file       |
-| ---------------------------- | ------------- | ---------- | --------------- | --------------------- |
-| `guitar/nylon`               | Nylon strings | 24         | Acoustic guitar | `nylon-guitar.sf2`    |
-| `guitar/steel`               | Steel strings | 25         | Acoustic guitar |                       |
-| `electric-guitar/clean`      | Clean         | 27         | Electric guitar | `electric-guitar.sf2` |
-| `electric-guitar/muted`      | Muted         | 28         | Electric guitar |                       |
-| `electric-guitar/overdrive`  | Overdrive     | 29         | Electric guitar |                       |
-| `electric-guitar/distortion` | Distortion    | 30         | Electric guitar |                       |
-| `bass/finger`                | Finger        | 33         | Electric bass   | `electric-bass.sf2`   |
-| `bass/pick`                  | Pick          | 34         | Electric bass   |                       |
-| `bass/slap`                  | Slap          | 36         | Electric bass   |                       |
-| `violin/standard`            | Standard      | 40         | Violin          |                       |
-| `banjo/standard`             | Standard      | 105        | Banjo           |                       |
-| `piano/grand`                | Grand piano   | 0          | Piano           |                       |
+| Id                           | Name           | GM program | Instrument      | Sound pack file       |
+| ---------------------------- | -------------- | ---------- | --------------- | --------------------- |
+| `guitar/nylon`               | Nylon strings  | 24         | Acoustic guitar | `nylon-guitar.sf2`    |
+| `guitar/steel`               | Steel strings  | 25         | Acoustic guitar |                       |
+| `electric-guitar/clean`      | Clean          | 27         | Electric guitar | `electric-guitar.sf2` |
+| `electric-guitar/muted`      | Muted          | 28         | Electric guitar |                       |
+| `electric-guitar/overdrive`  | Overdrive      | 29         | Electric guitar |                       |
+| `electric-guitar/distortion` | Distortion     | 30         | Electric guitar |                       |
+| `bass/finger`                | Finger         | 33         | Electric bass   | `electric-bass.sf2`   |
+| `bass/pick`                  | Pick           | 34         | Electric bass   |                       |
+| `bass/slap`                  | Slap           | 36         | Electric bass   |                       |
+| `violin/standard`            | Standard       | 40         | Violin          |                       |
+| `banjo/standard`             | Standard       | 105        | Banjo           |                       |
+| `piano/grand`                | Grand piano    | 0          | Piano           |                       |
+| `drums/standard`             | Standard kit   | 0 (kit)    | Drums           |                       |
+| `drums/room`                 | Room kit       | 8 (kit)    | Drums           |                       |
+| `drums/power`                | Power kit      | 16 (kit)   | Drums           |                       |
+| `drums/electronic`           | Electronic kit | 24 (kit)   | Drums           |                       |
+| `drums/jazz`                 | Jazz kit       | 32 (kit)   | Drums           |                       |
+| `drums/brush`                | Brush kit      | 40 (kit)   | Drums           |                       |
 
-Programs are General MIDI, counted from 0. The first sound of each instrument is its default.
+Programs are General MIDI, counted from 0. The first sound of each instrument is its default. A
+drum kit's program is the kit on the percussion channel (bank 128 of the SoundFont), not a melodic
+program, and sound packs never play kits (see [`drums.md`](drums.md)).
 `ui/src/lib/instruments.ts` mirrors this table by hand, and a Rust test
 (`every_sound_is_listed_in_the_ui`) fails when a sound is missing there.
 
@@ -100,8 +108,10 @@ Both importers map a General MIDI program to the closest sound (`Sound::from_mid
   instrument wins; otherwise the part name decides ("electric guitar", "bass", "violin", "banjo",
   "steel", "guitar"), then a tablature staff (the nylon guitar), else the piano.
 - A program that is not a string instrument gives a pitched track, the piano, which keeps every
-  note (see [`notation.md`](notation.md)). Organ, synthesizers, drums and voice get their own
+  note (see [`notation.md`](notation.md)). Organ, synthesizers and voice get their own
   instruments and sounds later; the mapping then sends their programs there.
+- Drums are not chosen by a program but by the percussion channel (MIDI channel 10); the program
+  on that channel picks the kit (`Sound::from_drum_kit`). See [`drums.md`](drums.md).
 - Tests export a track of every sound to MIDI, MusicXML and `.mpart` and check that the sound comes
   back.
 

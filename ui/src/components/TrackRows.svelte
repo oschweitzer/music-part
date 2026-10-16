@@ -1,7 +1,7 @@
 <script lang="ts">
   import TabView from './TabView.svelte'
   import type { Editor } from '../lib/editor.svelte'
-  import { isPitchedTrack, soundLabel } from '../lib/instruments'
+  import { hasStrings, soundLabel } from '../lib/instruments'
   import type { Playback } from '../lib/playback.svelte'
   import type { Score } from '../lib/score-types'
   import type { Selection } from '../lib/selection'
@@ -131,7 +131,7 @@
               >
             </div>
             {#if row.layout}
-              <p class="instrument">{soundLabel(track.sound)}{isPitchedTrack(track) ? '' : ` · ${track.tuning.length} strings`}</p>
+              <p class="instrument">{soundLabel(track.sound)}{hasStrings(track) ? ` · ${track.tuning.length} strings` : ''}</p>
             {/if}
             <div class="buttons">
               <button

@@ -35,12 +35,26 @@ pub enum Sound {
     Banjo,
     #[serde(rename = "piano/grand")]
     Piano,
+    // Drum kits: their `midi_program` is the kit number on the percussion channel, not a melodic
+    // program (see `docs/drums.md`).
+    #[serde(rename = "drums/standard")]
+    DrumsStandard,
+    #[serde(rename = "drums/room")]
+    DrumsRoom,
+    #[serde(rename = "drums/power")]
+    DrumsPower,
+    #[serde(rename = "drums/electronic")]
+    DrumsElectronic,
+    #[serde(rename = "drums/jazz")]
+    DrumsJazz,
+    #[serde(rename = "drums/brush")]
+    DrumsBrush,
 }
 
 impl Sound {
     /// Every sound, grouped by instrument in the order of `Instrument::ALL`, the default sound of
     /// each instrument first.
-    pub const ALL: [Sound; 12] = [
+    pub const ALL: [Sound; 18] = [
         Sound::GuitarNylon,
         Sound::GuitarSteel,
         Sound::ElectricGuitarClean,
@@ -53,6 +67,12 @@ impl Sound {
         Sound::Violin,
         Sound::Banjo,
         Sound::Piano,
+        Sound::DrumsStandard,
+        Sound::DrumsRoom,
+        Sound::DrumsPower,
+        Sound::DrumsElectronic,
+        Sound::DrumsJazz,
+        Sound::DrumsBrush,
     ];
 
     /// The id written in files, `"<instrument>/<sound>"`.
@@ -70,6 +90,12 @@ impl Sound {
             Sound::Violin => "violin/standard",
             Sound::Banjo => "banjo/standard",
             Sound::Piano => "piano/grand",
+            Sound::DrumsStandard => "drums/standard",
+            Sound::DrumsRoom => "drums/room",
+            Sound::DrumsPower => "drums/power",
+            Sound::DrumsElectronic => "drums/electronic",
+            Sound::DrumsJazz => "drums/jazz",
+            Sound::DrumsBrush => "drums/brush",
         }
     }
 
@@ -87,6 +113,12 @@ impl Sound {
             Sound::BassSlap => "Slap",
             Sound::Violin | Sound::Banjo => "Standard",
             Sound::Piano => "Grand piano",
+            Sound::DrumsStandard => "Standard kit",
+            Sound::DrumsRoom => "Room kit",
+            Sound::DrumsPower => "Power kit",
+            Sound::DrumsElectronic => "Electronic kit",
+            Sound::DrumsJazz => "Jazz kit",
+            Sound::DrumsBrush => "Brush kit",
         }
     }
 
@@ -102,10 +134,18 @@ impl Sound {
             Sound::Violin => Instrument::Violin,
             Sound::Banjo => Instrument::Banjo,
             Sound::Piano => Instrument::Piano,
+            Sound::DrumsStandard
+            | Sound::DrumsRoom
+            | Sound::DrumsPower
+            | Sound::DrumsElectronic
+            | Sound::DrumsJazz
+            | Sound::DrumsBrush => Instrument::Drums,
         }
     }
 
-    /// The General MIDI program (0 to 127) that plays the sound.
+    /// The General MIDI program (0 to 127) that plays the sound. For a drum kit it is the kit
+    /// (the program of the percussion channel): 0 standard, 8 room, 16 power, 24 electronic, 32
+    /// jazz, 40 brush.
     pub fn midi_program(self) -> u8 {
         match self {
             Sound::GuitarNylon => 24,
@@ -120,6 +160,31 @@ impl Sound {
             Sound::Violin => 40,
             Sound::Banjo => 105,
             Sound::Piano => 0,
+            Sound::DrumsStandard => 0,
+            Sound::DrumsRoom => 8,
+            Sound::DrumsPower => 16,
+            Sound::DrumsElectronic => 24,
+            Sound::DrumsJazz => 32,
+            Sound::DrumsBrush => 40,
+        }
+    }
+
+    /// True for a drum kit, which plays on the percussion channel.
+    pub fn is_drum_kit(self) -> bool {
+        self.instrument() == Instrument::Drums
+    }
+
+    /// The drum kit for the program of a percussion channel, when a file names one. The kits of
+    /// the General MIDI 2 and GS sets come in groups of eight from the standard one (the TR-808 is
+    /// electronic); any other program, or none, gives the standard kit.
+    pub fn from_drum_kit(program: Option<u8>) -> Sound {
+        match program {
+            Some(8..=15) => Sound::DrumsRoom,
+            Some(16..=23) => Sound::DrumsPower,
+            Some(24..=31) => Sound::DrumsElectronic,
+            Some(32..=39) => Sound::DrumsJazz,
+            Some(40..=47) => Sound::DrumsBrush,
+            _ => Sound::DrumsStandard,
         }
     }
 
@@ -158,6 +223,7 @@ impl Instrument {
             Instrument::Violin => Sound::Violin,
             Instrument::Banjo => Sound::Banjo,
             Instrument::Piano => Sound::Piano,
+            Instrument::Drums => Sound::DrumsStandard,
         }
     }
 
@@ -176,12 +242,22 @@ mod tests {
     #[test]
     fn every_sound_survives_a_midi_program_round_trip() {
         for sound in Sound::ALL {
-            assert_eq!(
-                Sound::from_midi_program(Some(sound.midi_program())),
-                sound,
-                "{sound:?}"
-            );
+            let back = if sound.is_drum_kit() {
+                Sound::from_drum_kit(Some(sound.midi_program()))
+            } else {
+                Sound::from_midi_program(Some(sound.midi_program()))
+            };
+            assert_eq!(back, sound, "{sound:?}");
         }
+    }
+
+    #[test]
+    fn a_kit_without_a_sound_of_its_own_gets_the_closest_one() {
+        assert_eq!(Sound::from_drum_kit(Some(25)), Sound::DrumsElectronic);
+        assert_eq!(Sound::from_drum_kit(Some(1)), Sound::DrumsStandard);
+        assert_eq!(Sound::from_drum_kit(Some(48)), Sound::DrumsStandard);
+        assert_eq!(Sound::from_drum_kit(None), Sound::DrumsStandard);
+        assert!(!Sound::from_midi_program(Some(0)).is_drum_kit());
     }
 
     #[test]

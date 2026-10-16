@@ -2,7 +2,8 @@ import type { DocumentApi, DocumentState, Edit, ExportFormat, OpenedDocument } f
 import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
-import { isPitchedTrack, noteKindOf } from './instruments'
+import { DEFAULT_PIECE, pieceOfDigit, stepPiece } from './drums'
+import { isPercussionTrack, isPitchedTrack, noteKindOf } from './instruments'
 import { notePitch, noteRow } from './notes'
 import type { Beat, Instrument, Note, NoteValue, SoundId, TimeSignature } from './score-types'
 import {
@@ -27,7 +28,9 @@ export type Message = { tone: 'error' | 'info'; text: string }
 
 const STAFF_HINT = 'This track is written on a staff: press Enter, Shift and a note name, or double-click the staff to write a note.'
 
-/** The selected spot with its track. `row` is a string on a fretted track, a pitch on a pitched one. */
+const DRUM_HINT = 'This is a drum track: press 1 to 0 or pick a piece in the toolbar, or double-click the staff, to write a hit.'
+
+/** The selected spot with its track. `row` is a string on a fretted track, a pitch on a pitched one, a drum piece on drums. */
 type Where = { track: number; measure: number; beat: number; row: number }
 
 /**
@@ -92,6 +95,23 @@ export class Editor {
     return track !== undefined && isPitchedTrack(track)
   }
 
+  /** True when the track of the selection is a drum kit: rows are pieces, hits go on a percussion staff. */
+  get isPercussion(): boolean {
+    const track = this.document?.score.tracks[this.track]
+    return track !== undefined && isPercussionTrack(track)
+  }
+
+  /** True when the rows of the track are the keys of its notes on a staff (pitches or drum pieces), not strings. */
+  get #hasStaffRows(): boolean {
+    return this.isPitched || this.isPercussion
+  }
+
+  /** What the rows of the current track are, to tell when a change of track changes their meaning. */
+  get #rowKind(): string | null {
+    const track = this.document?.score.tracks[this.track]
+    return track ? noteKindOf(track.instrument) : null
+  }
+
   /** The beat under the selection, to show its duration. */
   get currentBeat(): Beat | null {
     const { document, selection, track } = this
@@ -136,10 +156,10 @@ export class Editor {
   }
 
   selectTrack(track: number): void {
-    const wasPitched = this.isPitched
+    const rows = this.#rowKind
     this.track = track
-    // A string number means nothing as a pitch, and the other way round.
-    if (this.document && this.selection && wasPitched !== this.isPitched) {
+    // A string number means nothing as a pitch or a drum piece, and the other way round.
+    if (this.document && this.selection && rows !== this.#rowKind) {
       this.selection = { ...firstSelection({ score: this.document.score, track }), measure: this.selection.measure }
     }
     this.#reselect()
@@ -162,6 +182,28 @@ export class Editor {
     })
   }
 
+  /**
+   * Strikes a drum piece on the selected beat, or takes it away when the beat has it already, and
+   * selects it: the palette of the toolbar and the digit keys. Decided when its turn comes, so a
+   * hit written just before is seen.
+   */
+  togglePiece(piece: number): Promise<void> {
+    if (!this.#api.canEdit) {
+      this.message = { tone: 'error', text: 'Editing needs the desktop app.' }
+      return Promise.resolve()
+    }
+    return this.#enqueue(async () => {
+      const at = this.#where()
+      if (!at || !this.isPercussion) return
+      const { row: _row, ...spot } = at
+      const hasPiece = this.currentBeat?.notes.some((n) => noteRow(n) === piece) ?? false
+      const state = await this.#api.edit({ type: hasPiece ? 'removePitch' : 'addPitch', ...spot, pitch: piece })
+      this.selection = { measure: at.measure, beat: at.beat, row: piece }
+      this.#typed = null
+      await this.#apply(state)
+    })
+  }
+
   setTempo(bpm: number): Promise<void> {
     return this.#send({ type: 'setTempo', bpm })
   }
@@ -174,6 +216,10 @@ export class Editor {
       case 'enterNote':
         return this.#enterSelectedPitch(() => this.selection?.row ?? null)
       case 'noteName':
+        if (this.isPercussion) {
+          this.message = { tone: 'info', text: DRUM_HINT }
+          return Promise.resolve()
+        }
         return this.#enterSelectedPitch(() => pitchOfLetter({ letter: command.letter, near: this.selection?.row ?? DEFAULT_PITCH }))
       case 'move':
         return this.#move(command.direction)
@@ -195,10 +241,10 @@ export class Editor {
         return this.#setDuration((beat) => ({ value: beat.duration.value, dots: beat.duration.dots === 0 ? 1 : 0 }))
       case 'tie':
         return this.#withNote(({ row, ...at }, note) =>
-          this.isPitched ? { type: 'setPitchTied', ...at, pitch: row, tied: !note.tied } : { type: 'setTied', ...at, string: row, tied: !note.tied },
+          this.#hasStaffRows ? { type: 'setPitchTied', ...at, pitch: row, tied: !note.tied } : { type: 'setTied', ...at, string: row, tied: !note.tied },
         )
       case 'technique':
-        if (this.isPitched) {
+        if (this.#hasStaffRows) {
           this.message = { tone: 'info', text: 'Techniques are for notes played on strings.' }
           return Promise.resolve()
         }
@@ -331,7 +377,8 @@ export class Editor {
     const index = this.document?.score.tracks.length ?? 0
     return this.#send(sound ? { type: 'addTrack', instrument, sound } : { type: 'addTrack', instrument }, () => {
       this.track = index
-      this.selection = noteKindOf(instrument) === 'pitched' ? { ...FIRST_NOTE, row: DEFAULT_PITCH } : FIRST_NOTE
+      const kind = noteKindOf(instrument)
+      this.selection = kind === 'pitched' ? { ...FIRST_NOTE, row: DEFAULT_PITCH } : kind === 'percussion' ? { ...FIRST_NOTE, row: DEFAULT_PIECE } : FIRST_NOTE
     })
   }
 
@@ -461,7 +508,7 @@ export class Editor {
   #rowSpans(selection: Selection): { strings: { first: number; last: number } | null; pitches: { low: number; high: number } | null } {
     const rows = selectedRows(selection)
     if (!rows) return { strings: null, pitches: null }
-    return this.isPitched ? { strings: null, pitches: { low: rows.first, high: rows.last } } : { strings: rows, pitches: null }
+    return this.#hasStaffRows ? { strings: null, pitches: { low: rows.first, high: rows.last } } : { strings: rows, pitches: null }
   }
 
   /**
@@ -491,7 +538,7 @@ export class Editor {
         await this.#apply(state)
       } else if (range) {
         await this.#apply(await this.#api.edit({ type: 'clearNotes', track: this.track, from, to, ...this.#rowSpans(selection) }))
-      } else if (this.isPitched) {
+      } else if (this.#hasStaffRows) {
         await this.#apply(await this.#api.edit({ type: 'removePitch', track: this.track, ...from, pitch: selection.row }))
       } else {
         await this.#apply(await this.#api.edit({ type: 'removeNote', track: this.track, ...from, string: selection.row }))
@@ -557,6 +604,10 @@ export class Editor {
   #typeFret(digit: number): Promise<void> {
     const at = this.#where()
     if (!at) return Promise.resolve()
+    if (this.isPercussion) {
+      const piece = pieceOfDigit(digit)
+      return piece === null ? Promise.resolve() : this.togglePiece(piece)
+    }
     if (this.isPitched) {
       this.message = { tone: 'info', text: STAFF_HINT }
       return Promise.resolve()
@@ -571,21 +622,32 @@ export class Editor {
     return this.#send({ type: 'setFret', ...beat, string: row, fret })
   }
 
-  /** Writes a note at a pitch on the selected beat of a pitched track, and selects it. */
+  /** Writes a note at a pitch (a drum piece on drums) on the selected beat of a staff-only track, and selects it. */
   #enterSelectedPitch(pitchOf: () => number | null): Promise<void> {
     const at = this.#where()
     if (!at) return Promise.resolve()
     const pitch = pitchOf()
-    if (!this.isPitched || pitch === null) return Promise.resolve()
+    if (!this.#hasStaffRows || pitch === null) return Promise.resolve()
     return this.enterPitch({ track: at.track, measure: at.measure, beat: at.beat, pitch })
   }
 
   /**
-   * Up and down on a note of a pitched track move it a semitone (the selection follows it); on an
+   * Up and down on a note of a pitched track move it a semitone (the selection follows it), on a
+   * hit of a drum track to the next piece up or down the staff that the beat does not have; on an
    * empty spot they move the selection a step of the staff. Elsewhere the arrows move the selection.
    */
   #move(direction: 'left' | 'right' | 'up' | 'down'): Promise<void> {
     const at = this.#where()
+    if (at && this.isPercussion && (direction === 'up' || direction === 'down') && this.currentNote) {
+      const taken = this.currentBeat?.notes.map(noteRow) ?? []
+      const to = stepPiece({ piece: at.row, direction: direction === 'up' ? 1 : -1, taken })
+      if (to === null) return Promise.resolve()
+      const { row, ...beat } = at
+      this.#typed = null
+      return this.#send({ type: 'movePitch', ...beat, pitch: row, to }, () => {
+        if (this.selection) this.selection = { ...this.selection, row: to }
+      })
+    }
     if (at && this.isPitched && (direction === 'up' || direction === 'down') && this.currentNote) {
       const to = at.row + (direction === 'up' ? 1 : -1)
       if (to < 0 || to > 127) return Promise.resolve()

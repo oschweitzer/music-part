@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { DRUM_PIECES, PALETTE, pieceName } from '../lib/drums'
   import type { Editor } from '../lib/editor.svelte'
+  import { noteRow } from '../lib/notes'
   import type { NoteValue, Technique } from '../lib/score-types'
 
   let { editor }: { editor: Editor } = $props()
@@ -23,6 +25,17 @@
   ]
 
   const beat = $derived(editor.currentBeat)
+  const isDrums = $derived(editor.isPercussion)
+  const struck = $derived(new Set(beat?.notes.map(noteRow) ?? []))
+  const inPalette = new Set(PALETTE.map((p) => p.key))
+  const otherPieces = DRUM_PIECES.filter((p) => !inPalette.has(p.key))
+
+  function strikeOther(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement
+    const piece = Number(select.value)
+    select.value = ''
+    if (Number.isInteger(piece) && piece > 0) void editor.togglePiece(piece)
+  }
   const note = $derived(editor.currentNote)
   const canEdit = $derived(editor.canEdit)
 
@@ -105,6 +118,31 @@
     </button>
   </div>
 
+  {#if isDrums}
+    <div class="group drum-palette" role="group" aria-label="Drum pieces">
+      {#each PALETTE as p (p.key)}
+        <button
+          type="button"
+          class="tool text"
+          class:active={struck.has(p.key)}
+          aria-pressed={struck.has(p.key)}
+          title="{pieceName(p.key)} ({p.digit}): strike it on the selected beat, or take it away"
+          disabled={!canEdit}
+          onmousedown={keepFocus}
+          onclick={() => editor.togglePiece(p.key)}
+        >
+          {p.label}
+        </button>
+      {/each}
+      <select class="more-pieces" aria-label="Other drum piece" title="Strike another piece on the selected beat" disabled={!canEdit} value="" onchange={strikeOther}>
+        <option value="">More…</option>
+        {#each otherPieces as p (p.key)}
+          <option value={p.key}>{struck.has(p.key) ? '✓ ' : ''}{p.name}</option>
+        {/each}
+      </select>
+    </div>
+  {/if}
+
   <div class="group" role="group" aria-label="Note effects">
     <button
       type="button"
@@ -118,7 +156,7 @@
     >
       Tie
     </button>
-    {#each techniques as t (t.value)}
+    {#each isDrums ? [] : techniques as t (t.value)}
       <button
         type="button"
         class="tool text"
@@ -228,6 +266,11 @@
     color: var(--ink-muted);
   }
 
+  .drum-palette {
+    flex-wrap: wrap;
+  }
+
+  .more-pieces,
   .time-signature input,
   .time-signature select {
     height: 28px;

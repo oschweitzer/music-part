@@ -870,6 +870,107 @@ describe('Editor', () => {
     })
   })
 
+  describe('a drum track', () => {
+    const quarter = { value: 'Quarter' as const, dots: 0 }
+    /** The demo with a third track, drums: the kick and the hi-hat on the first beat, then rests. */
+    const withDrums: Score = {
+      ...score,
+      tracks: [
+        ...score.tracks,
+        {
+          name: 'Drums',
+          instrument: 'Drums',
+          sound: 'drums/standard',
+          tuning: [],
+          measures: score.tracks[0]!.measures.map((m, i) => ({
+            time_signature: m.time_signature,
+            voices: [
+              {
+                beats: [
+                  { duration: quarter, notes: i === 0 ? [{ piece: 36, technique: null }, { piece: 42, technique: null }] : [] },
+                  { duration: quarter, notes: [] },
+                  { duration: { value: 'Half' as const, dots: 0 }, notes: [] },
+                ],
+              },
+            ],
+          })),
+        },
+      ],
+    }
+
+    async function onDrums(selection: { measure: number; beat: number; row: number }) {
+      const { api, edits } = fakeApi({
+        startup: async () => opened({ document: state({ score: withDrums }) }),
+        edit: async (edit) => {
+          edits.push(edit)
+          return state({ score: withDrums, isDirty: true })
+        },
+      })
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.select(selection, { track: 2 })
+      return { editor, edits }
+    }
+
+    it('should strike a piece of the palette with its digit, or take it away when the beat has it', async () => {
+      const { editor, edits } = await onDrums({ measure: 0, beat: 0, row: 38 })
+      expect(editor.isPercussion).toBe(true)
+      await editor.run({ type: 'digit', digit: 2 })
+      await editor.run({ type: 'digit', digit: 1 })
+      expect(edits).toEqual([
+        { type: 'addPitch', track: 2, measure: 0, beat: 0, pitch: 38 },
+        { type: 'removePitch', track: 2, measure: 0, beat: 0, pitch: 36 },
+      ])
+      expect(editor.selection).toEqual({ measure: 0, beat: 0, row: 36 })
+    })
+
+    it('should strike the selected piece with Enter and a piece of the toolbar on the selected beat', async () => {
+      const { editor, edits } = await onDrums({ measure: 0, beat: 1, row: 49 })
+      await editor.run({ type: 'enterNote' })
+      await editor.togglePiece(46)
+      expect(edits).toEqual([
+        { type: 'addPitch', track: 2, measure: 0, beat: 1, pitch: 49 },
+        { type: 'addPitch', track: 2, measure: 0, beat: 1, pitch: 46 },
+      ])
+    })
+
+    it('should move a hit to the next free piece up or down the staff', async () => {
+      const { editor, edits } = await onDrums({ measure: 0, beat: 0, row: 42 })
+      await editor.run({ type: 'move', direction: 'down' })
+      // Below the closed hi-hat (G5, a cross) is the high tom's line, F5, its drum first.
+      expect(edits).toEqual([{ type: 'movePitch', track: 2, measure: 0, beat: 0, pitch: 42, to: 50 }])
+      expect(editor.selection?.row).toBe(50)
+    })
+
+    it('should move an empty spot from piece to piece without editing', async () => {
+      const { editor, edits } = await onDrums({ measure: 0, beat: 1, row: 38 })
+      await editor.run({ type: 'move', direction: 'down' })
+      expect(editor.selection?.row).toBe(45)
+      expect(edits).toEqual([])
+    })
+
+    it('should delete and tie a hit by its piece, and explain what note names and techniques do not do', async () => {
+      const { editor, edits } = await onDrums({ measure: 0, beat: 0, row: 42 })
+      await editor.run({ type: 'tie' })
+      await editor.run({ type: 'remove' })
+      await editor.run({ type: 'noteName', letter: 'C' })
+      expect(editor.message?.text).toMatch(/drum track/)
+      await editor.run({ type: 'technique', technique: 'Bend' })
+      expect(editor.message?.text).toMatch(/strings/)
+      expect(edits).toEqual([
+        { type: 'setPitchTied', track: 2, measure: 0, beat: 0, pitch: 42, tied: true },
+        { type: 'removePitch', track: 2, measure: 0, beat: 0, pitch: 42 },
+      ])
+    })
+
+    it('should start on the snare when moving from a piano or a guitar to the drums', async () => {
+      const { editor } = await onDrums({ measure: 0, beat: 0, row: 42 })
+      editor.select({ measure: 1, beat: 0, row: 3 }, { track: 0 })
+      editor.selectTrack(2)
+      expect(editor.selection).toEqual({ measure: 1, beat: 0, row: 38 })
+    })
+  })
+
   describe('a pitched track', () => {
     const whole = { value: 'Whole' as const, dots: 0 }
     const half = { value: 'Half' as const, dots: 0 }
@@ -975,6 +1076,13 @@ describe('Editor', () => {
       editor.select({ measure: 1, beat: 0, row: 3 }, { track: 0 })
       editor.selectTrack(2)
       expect(editor.selection).toEqual({ measure: 1, beat: 0, row: 60 })
+    })
+
+    it('should keep the meaning of a row when moving to a drum track: the snare', async () => {
+      const { editor } = await onPiano({ measure: 0, beat: 0, row: 60 })
+      editor.select({ measure: 0, beat: 0, row: 3 }, { track: 0 })
+      await editor.addTrack('Drums')
+      expect(editor.selection?.row).toBe(38)
     })
 
     it('should select the string a pitch written on a guitar staff went to', async () => {
