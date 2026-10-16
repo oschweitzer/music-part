@@ -1296,6 +1296,96 @@ export const scenarios = [
   ],
 
   [
+    'writes a drum pattern with the digit keys and the palette, and plays it',
+    async (context) => {
+      const { page } = context
+      await clickButton(page, 'Drums: Standard kit')
+      await page.waitFor(`document.querySelector('svg.tab g.staff[data-clef="percussion"]')`, { what: 'the percussion staff' })
+      assert.ok(await exists(page, '[aria-label="Drum pieces"]'), 'the palette shows for a drum track')
+      // Eight eighths: the hi-hat on each (3), the kick on 1 and 3 (1), the snare on 2 and 4 from
+      // the palette.
+      for (let i = 0; i < 8; i++) {
+        await page.press('e')
+        await page.press('3')
+        if (i % 4 === 0) await page.press('1')
+        await settle()
+        if (i % 4 === 2) await clickButton(page, 'Snare')
+        await page.press('ArrowRight')
+      }
+      await settle()
+      const doc = await document_(context)
+      const drums = doc.score.tracks[2]
+      assert.equal(drums.instrument, 'Drums')
+      const hits = drums.measures[0].voices[0].beats.map((b) => b.notes.map((n) => n.piece))
+      assert.deepEqual(hits, [[36, 42], [42], [38, 42], [42], [36, 42], [42], [38, 42], [42]])
+      assert.ok((await page.eval(`document.querySelectorAll('svg.tab .cross-head').length`)) >= 8, 'hi-hats have cross heads')
+
+      // Up on the selected hi-hat of beat 7 moves it a line up, to the crash.
+      await page.press('ArrowLeft')
+      await page.press('ArrowLeft')
+      await settle()
+      await page.press('ArrowUp')
+      await settle()
+      const moved = (await document_(context)).score.tracks[2].measures[0].voices[0].beats[6].notes.map((n) => n.piece)
+      assert.deepEqual(moved, [38, 49])
+
+      await page.press(' ')
+      await settle()
+      assert.ok(await page.eval(`window.__e2e.audio.some(c => c.command === 'play')`), 'playback started')
+      await clickButton(page, 'Mute Drums')
+      const audible = await page.eval(`window.__e2e.audio.filter(c => c.command === 'set_audible').at(-1)?.args.audible`)
+      assert.deepEqual(audible, [true, true, false], 'the drum track can be muted')
+    },
+  ],
+
+  [
+    'draws a drum staff that reads well (drums.png in target/e2e)',
+    async (context) => {
+      const { page, backend, out } = context
+      const beat = (value, pieces, dots = 0) => ({
+        duration: { value, dots },
+        notes: pieces.map((piece) => ({ piece, technique: null, tied: false })),
+      })
+      await backend.request('edit_score', { edit: { type: 'addTrack', instrument: 'Drums', sound: 'drums/jazz' } })
+      const groove = [
+        beat('Eighth', [36, 49]),
+        beat('Eighth', [42]),
+        beat('Eighth', [38, 42]),
+        beat('Eighth', [42]),
+        beat('Eighth', [36, 42]),
+        beat('Eighth', [36, 46]),
+        beat('Eighth', [38, 42]),
+        beat('Eighth', [44]),
+      ]
+      const fill = [
+        beat('Sixteenth', [38]),
+        beat('Sixteenth', [38]),
+        beat('Sixteenth', [48]),
+        beat('Sixteenth', [47]),
+        beat('Sixteenth', [45]),
+        beat('Sixteenth', [43]),
+        beat('Sixteenth', [41]),
+        beat('Sixteenth', [41]),
+        beat('Quarter', [51, 36]),
+        beat('Quarter', [53, 44]),
+        beat('Quarter', [57, 35]),
+        beat('Quarter', [52, 37, 39, 54, 56]),
+        beat('Half', [55, 40]),
+        beat('Quarter', [62, 63, 64]),
+        beat('Quarter', []),
+      ]
+      await backend.request('edit_score', { edit: { type: 'paste', track: 2, measure: 0, beat: 0, beats: [...groove, ...fill] } })
+      await reload(page, `document.querySelector('svg.tab line.string')`, 'the score to appear')
+      await pickTrack(page, 2)
+      await page.waitFor(`document.querySelector('svg.tab g.staff[data-clef="percussion"]')`, { what: 'the percussion staff' })
+      await settle()
+      await page.screenshot(join(out, 'drums.png'))
+      const heads = await page.eval(`document.querySelectorAll('svg.tab .staff-notes .head').length`)
+      assert.ok(heads >= 30, `${heads} note heads drawn`)
+    },
+  ],
+
+  [
     'draws staves that read well (screenshots in target/e2e)',
     async (context) => {
       const { page, backend, out } = context
