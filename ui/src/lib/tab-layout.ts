@@ -4,6 +4,7 @@ import type { Beat, Duration, Measure, NoteValue, Technique, TimeSignature, Trac
 import {
   C_MAJOR,
   clefsFor,
+  clefsOf,
   engraveMeasure,
   keySignatureWidth,
   pitchAtPosition,
@@ -134,8 +135,8 @@ export type Notation = { clefs: Clef[]; hasTab: boolean }
  * A pitched track is written on its staves only. A fretted track shows its tablature, its staff
  * or both, as the view asks (`FrettedView`).
  */
-export function notationOf({ track, fretted = 'tab' }: { track: Pick<Track, 'instrument'>; fretted?: FrettedView }): Notation {
-  if (isPitchedTrack(track)) return { clefs: clefsFor(track.instrument), hasTab: false }
+export function notationOf({ track, fretted = 'tab' }: { track: Pick<Track, 'instrument' | 'clef'>; fretted?: FrettedView }): Notation {
+  if (isPitchedTrack(track)) return { clefs: clefsOf(track), hasTab: false }
   return { clefs: fretted === 'tab' ? [] : clefsFor(track.instrument), hasTab: fretted !== 'staff' }
 }
 

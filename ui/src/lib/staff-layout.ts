@@ -1,4 +1,4 @@
-import type { Instrument, NoteValue } from './score-types'
+import type { Instrument, NoteValue, Track } from './score-types'
 
 /**
  * Engraving of standard notation on five-line staves, as plain geometry: where note heads,
@@ -102,11 +102,15 @@ const FLAT_ORDER = [6, 2, 5, 1, 4, 0, 3] as const
 const SHARP_POSITIONS = [8, 5, 9, 6, 3, 7, 4] as const
 const FLAT_POSITIONS = [4, 7, 3, 6, 2, 5, 1] as const
 
-/** The staves of an instrument: a grand staff for the piano, else one staff in the clef it is written in. */
+/** The staves of an instrument: a grand staff for the piano and the organ, else one staff in the clef it is written in. */
 export function clefsFor(instrument: Instrument): Clef[] {
   switch (instrument) {
     case 'Piano':
+    case 'Organ':
       return ['treble', 'bass']
+    case 'Synth':
+    case 'Voice':
+      return ['treble']
     case 'Bass':
       return ['bass8vb']
     case 'Violin':
@@ -116,6 +120,11 @@ export function clefsFor(instrument: Instrument): Clef[] {
     case 'Banjo':
       return ['treble8vb']
   }
+}
+
+/** The staves of a track: the clef it chose (a voice), else those of its instrument. */
+export function clefsOf(track: Pick<Track, 'instrument' | 'clef'>): Clef[] {
+  return track.clef ? [track.clef] : clefsFor(track.instrument)
 }
 
 /** The staff of a grand staff a pitch goes on: middle C and above on the treble staff. */

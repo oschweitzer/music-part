@@ -388,6 +388,30 @@ mod tests {
     }
 
     #[test]
+    fn a_voice_track_takes_the_clef_the_ui_sends_and_an_organ_refuses_it() {
+        let (_app, window) = app();
+        for instrument in ["Voice", "Organ"] {
+            let add = json!({ "type": "addTrack", "instrument": instrument });
+            invoke(&window, "edit_score", json!({ "edit": add })).unwrap();
+        }
+        let clef = json!({ "type": "setClef", "track": 2, "clef": "treble8vb" });
+        let state = invoke(&window, "edit_score", json!({ "edit": clef })).unwrap();
+
+        let voice = &state["score"]["tracks"][2];
+        assert_eq!(
+            (&voice["sound"], &voice["clef"]),
+            (&json!("voice/aahs"), &json!("treble8vb"))
+        );
+        let organ = &state["score"]["tracks"][3];
+        assert_eq!(organ["sound"], json!("organ/drawbar"));
+        assert!(organ.get("clef").is_none(), "{organ}");
+
+        let refused = json!({ "type": "setClef", "track": 3, "clef": "bass" });
+        let error = invoke(&window, "edit_score", json!({ "edit": refused })).unwrap_err();
+        assert!(error.as_str().unwrap().contains("only a voice"), "{error}");
+    }
+
+    #[test]
     fn a_refused_edit_comes_back_as_the_message_the_ui_shows() {
         let (_app, window) = app();
         let edit = json!({ "type": "setFret", "track": 0, "measure": 0, "beat": 0, "string": 1, "fret": 99 });

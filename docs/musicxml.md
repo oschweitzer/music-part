@@ -6,23 +6,24 @@ the number of nodes and the expansion of entities; compressed files are read up 
 
 ## What is read
 
-| In the file                         | In the score                                                        |
-| ----------------------------------- | ------------------------------------------------------------------- |
-| `work-title`, `movement-title`      | Title (the file name when there is none)                            |
-| Each `part` with pitched notes      | A track. Parts with only unpitched notes (drums) are left out       |
-| `part-name`, `midi-program`         | Track name; the closest sound to the program, else from the name    |
-| Part of no string instrument        | A piano track (pitched): see below                                  |
-| `staff-tuning`                      | Tuning, highest string first. Else the standard tuning              |
-| `divisions`, `time`                 | Positions; time signature of each measure ("3+2" beats are summed)  |
-| `sound tempo`, quarter `metronome`  | Tempo of the score (the first one found), else 120                  |
-| `transpose`                         | Notes are read at sounding pitch                                    |
-| `string` and `fret` (technical)     | Kept as given. Other notes are placed on strings by pitch           |
-| `chord`                             | Notes on distinct strings, low frets first                          |
-| `tie type="stop"`                   | The note is tied to the one before                                  |
-| `voice`, `backup`, `forward`        | One voice per (staff, voice), up to 16 per part; one for a piano    |
-| `hammer-on`, `pull-off` (stop)      | The technique on the second note                                    |
-| `slide` (start), `bend`, `harmonic` | Slide on the first note, bend, harmonic                             |
-| `implicit="yes"` measure            | A pickup keeps its own, shorter, time signature                     |
+| In the file                         | In the score                                                       |
+| ----------------------------------- | ------------------------------------------------------------------ |
+| `work-title`, `movement-title`      | Title (the file name when there is none)                           |
+| Each `part` with pitched notes      | A track. Parts with only unpitched notes (drums) are left out      |
+| `part-name`, `midi-program`         | Track name; the closest sound to the program, else from the name   |
+| Part of no string instrument        | A pitched track: piano, organ, synthesizer or voice; see below     |
+| `clef` of a voice part              | The clef of the voice (`G`, `G` with `clef-octave-change` -1, `F`) |
+| `staff-tuning`                      | Tuning, highest string first. Else the standard tuning             |
+| `divisions`, `time`                 | Positions; time signature of each measure ("3+2" beats are summed) |
+| `sound tempo`, quarter `metronome`  | Tempo of the score (the first one found), else 120                 |
+| `transpose`                         | Notes are read at sounding pitch                                   |
+| `string` and `fret` (technical)     | Kept as given. Other notes are placed on strings by pitch          |
+| `chord`                             | Notes on distinct strings, low frets first                         |
+| `tie type="stop"`                   | The note is tied to the one before                                 |
+| `voice`, `backup`, `forward`        | One voice per (staff, voice), up to 16 per part; one for a piano   |
+| `hammer-on`, `pull-off` (stop)      | The technique on the second note                                   |
+| `slide` (start), `bend`, `harmonic` | Slide on the first note, bend, harmonic                            |
+| `implicit="yes"` measure            | A pickup keeps its own, shorter, time signature                    |
 
 ## Decisions
 
@@ -33,8 +34,13 @@ the number of nodes and the expansion of entities; compressed files are read up 
   once in tablature. When a part has a `TAB` clef only that staff is read.
 - **String instrument or not.** A part is a string instrument when its `midi-program` is one
   (25 to 41 or 106, counted from 1 as the file does), else when its name says so ("guitar", "bass", "violin", "banjo", "steel"), else
-  when it has a `TAB` staff. Any other part becomes a pitched track, the piano for now (see
-  [`notation.md`](notation.md)): every pitch is kept, none is left out for want of a string.
+  when it has a `TAB` staff. Any other part becomes a pitched track (see
+  [`notation.md`](notation.md)): an organ, a synthesizer or a voice when its program or its name
+  says so (see [`sounds.md`](sounds.md)), else the grand piano. Every pitch is kept, none is left
+  out for want of a string.
+- **The clef of a voice** is the first clef of the part when it is a treble, tenor (treble with
+  `clef-octave-change` -1) or bass clef; a part without one gets the clef of its range. Pitches are
+  read as they sound either way, as MusicXML writes them.
 - **The staves and voices of a pitched part are merged into one voice.** The editor and the staff
   show the first voice of a track, so a piano part read as two voices would lose its left hand on
   screen. Every note of the measure is cut where another starts or ends and the pieces are tied
@@ -52,7 +58,8 @@ Techniques the model has but MusicXML has no standard way to say (palm mute) are
 
 `export_musicxml` writes one part per track with a single `TAB` staff (`staff-details` with the
 tuning, `string` and `fret` on every note). A pitched track is one standard staff, in the treble
-clef, or in the bass clef when most of its notes are below middle C, with no `technical` element.
+clef, or in the bass clef when most of its notes are below middle C, with no `technical` element;
+a voice is written in its own clef (the tenor clef with `clef-octave-change` -1).
 Durations use 32 divisions per quarter note, the unit of the score, so nothing is rounded and
 importing the file gives the same music back. A test checks
 this on the demo score and on a score with ties, techniques, a second voice and a changing time

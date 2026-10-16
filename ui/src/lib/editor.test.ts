@@ -686,6 +686,16 @@ describe('Editor', () => {
 
       expect(edits).toEqual([{ type: 'setSound', track: 1, sound: 'bass/slap' }])
     })
+
+    it('should change the clef of the current track', async () => {
+      const { api, edits } = fakeApi()
+      const { editor } = setup({ api })
+      await editor.start()
+      editor.selectTrack(1)
+      await editor.setClef('treble8vb')
+
+      expect(edits).toEqual([{ type: 'setClef', track: 1, clef: 'treble8vb' }])
+    })
   })
 
   describe('sending edits', () => {

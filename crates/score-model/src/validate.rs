@@ -27,7 +27,8 @@ fn fail<T>(message: String) -> Result<T, ScoreError> {
 
 impl Score {
     /// Verifies the invariants the rest of the program relies on: sizes within limits, valid time
-    /// signatures and durations, a sound of the track's instrument, notes of the kind of the
+    /// signatures and durations, a sound of the track's instrument, a clef only where the
+    /// instrument has a clef choice, notes of the kind of the
     /// instrument (on existing strings and frets, or at distinct pitches up to 127), and every
     /// voice filling its measure.
     pub fn validate(&self) -> Result<(), ScoreError> {
@@ -44,6 +45,11 @@ impl Score {
                 return fail(format!(
                     "track \"{name}\" has the sound \"{}\", which is not a sound of its instrument",
                     track.sound.id()
+                ));
+            }
+            if track.clef.is_some() != track.instrument.has_clef_choice() {
+                return fail(format!(
+                    "track \"{name}\" must have a clef exactly when its instrument lets it choose one"
                 ));
             }
             let kind = track.instrument.note_kind();
@@ -147,7 +153,8 @@ fn check_notes(track: &Track, voice: &Voice, at: &str) -> Result<(), ScoreError>
 mod tests {
     use super::*;
     use crate::{
-        demo_score, Beat, Duration, Instrument, Measure, Note, NoteValue, Sound, TimeSignature,
+        demo_score, Beat, Clef, Duration, Instrument, Measure, Note, NoteValue, Sound,
+        TimeSignature,
     };
 
     fn error(score: &Score) -> String {
@@ -245,6 +252,19 @@ mod tests {
         let mut score = piano(&[60]);
         score.tracks[0].tuning = vec![64];
         assert!(error(&score).contains("has strings"));
+    }
+
+    #[test]
+    fn a_voice_has_a_clef_and_other_instruments_have_none() {
+        let mut score = piano(&[60]);
+        score.tracks[0].clef = Some(Clef::Bass);
+        assert!(error(&score).contains("clef"), "{}", error(&score));
+
+        let track = &mut score.tracks[0];
+        (track.instrument, track.sound) = (Instrument::Voice, Sound::VoiceAahs);
+        assert_eq!(score.validate(), Ok(()));
+        score.tracks[0].clef = None;
+        assert!(error(&score).contains("clef"));
     }
 
     #[test]

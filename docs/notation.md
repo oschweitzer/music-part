@@ -27,7 +27,8 @@ pub enum Place {
 
 - The **instrument decides the kind** (`Instrument::note_kind()`: `NoteKind::Fretted` or
   `NoteKind::Pitched`), and `Score::validate` checks that every note of a track is of that kind.
-  A track cannot mix them. The piano is the only pitched instrument so far.
+  A track cannot mix them. The pitched instruments are the piano, the organ, the synthesizer and
+  the voice.
 - `Note::key()` is what tells the notes of a beat apart: the string of a fretted note, the pitch of
   a pitched one. Beats keep their notes sorted by key, one note per key, and the UI selects a note
   by it (the selection *row*).
@@ -82,9 +83,10 @@ addressed by the pitch they sound, on any track:
 
 ### Import and export
 
-- `Sound::from_midi_program` gives the piano to every program that is not a string instrument here,
-  so MIDI and MusicXML parts of keyboards, winds or voices keep all their notes instead of losing
-  those no guitar string can play. A channel with no program at all stays a nylon guitar, since
+- `Sound::from_midi_program` gives keyboards, synthesizers and voices their own pitched
+  instruments, and the grand piano to every other program that is not a string instrument here,
+  so MIDI and MusicXML parts of winds or brass keep all their notes instead of losing those no
+  guitar string can play. A channel with no program at all stays a nylon guitar, since
   files written from a tablature often name none.
 - A pitched track keeps notes whole: notes that overlap (a held bass note under a melody, the two
   hands of a piano part) are cut where another note starts or ends and tied on
@@ -100,12 +102,14 @@ addressed by the pitch they sound, on any track:
 beat. `TabView.svelte` only draws; the glyphs (clefs, accidentals, rests, flags) are SVG paths in
 `staff-glyphs.ts`, so no music font is needed.
 
-| Track                          | Staves                         | Tablature           |
-| ------------------------------ | ------------------------------ | ------------------- |
-| Piano                          | Grand staff, split at middle C | None                |
-| Guitar, electric guitar, banjo | Treble clef, an octave down    | `Tab` / `Both` view |
-| Bass                           | Bass clef, an octave down      | `Tab` / `Both` view |
-| Violin                         | Treble clef                    | `Tab` / `Both` view |
+| Track                          | Staves                                                        | Tablature           |
+| ------------------------------ | ------------------------------------------------------------- | ------------------- |
+| Piano, organ                   | Grand staff, split at middle C                                | None                |
+| Synthesizer                    | Treble clef                                                   | None                |
+| Voice                          | The clef of the track: treble, treble an octave down, or bass | None                |
+| Guitar, electric guitar, banjo | Treble clef, an octave down                                   | `Tab` / `Both` view |
+| Bass                           | Bass clef, an octave down                                     | `Tab` / `Both` view |
+| Violin                         | Treble clef                                                   | `Tab` / `Both` view |
 
 - **Fretted tracks** show their tablature, their staff, or both (staff above), as the
   `Tab` / `Staff` / `Both` switch says (`FrettedView` in `track-view.ts`, kept like the view mode).
@@ -129,18 +133,51 @@ beat. `TabView.svelte` only draws; the glyphs (clefs, accidentals, rests, flags)
 - **Rows view**: rows have different heights (a grand staff, staff and tablature) but share their
   measure columns, so barlines, notes and the cursor still line up across rows.
 
+## Keyboards and voice
+
+### Keyboards: organ, synthesizer, more pianos (issue #9)
+
+Pitched instruments, nothing new in the model: `Instrument::Organ` and `Instrument::Synth` store
+pitches and have no strings, like the piano, which gets more sounds (bright, electric, FM
+electric). Their sounds, and how General MIDI programs and MusicXML part names map to them, are
+in [`sounds.md`](sounds.md).
+
+- The **organ** is written on a grand staff, like the piano. A real organ part often has a third
+  staff for the pedals; there is no third staff (nor a way to say which notes are the feet), so a
+  pedal line is written on the bass staff with the left hand. A pedal staff would need a way to
+  assign notes to a staff, which the grand staff does not have either (see below).
+- The **synthesizer** is written on one treble staff. Low synthesizer lines (a synth bass) are read
+  as the bass guitar from their program, so a synthesizer part is mostly a lead or a pad.
+
+### Voice (issue #11)
+
+`Instrument::Voice` stores pitches, on one staff, with three sounds (choir aahs, voice oohs, synth
+voice: General MIDI 52 to 54).
+
+**The clef is a setting of the track, not computed from the notes.** A voice part is written in
+the clef of the singer: treble for soprano and alto, the treble clef with an 8 below for tenor
+(written an octave above how it sounds), bass for baritone and bass. Picking it from the notes on
+every redraw would flip the staff while the user writes (a tenor's first few high notes would
+show a treble clef), and a part keeps its clef in printed music even where it goes out of range.
+So `Track::clef` (`Clef::Treble`, `Treble8vb`, `Bass`) is stored:
+
+- `Some` exactly when the instrument has a clef choice (`Instrument::has_clef_choice`, only the
+  voice), checked by `Score::validate`. Other tracks write no `clef` field, so their files do not
+  change; a voice read without one gets the treble clef (`#[serde(default)]`, format version 1).
+- `Edit::SetClef { track, clef }` changes it, refused on another instrument
+  (`EditError::NoClefChoice`). The notes keep their pitches: only where they are written moves.
+- The range picks it once, where nothing else says it (`Track::fitting_clef`, by the mean pitch:
+  from B3 treble, from F3 treble an octave down, below that bass): when a track becomes a voice
+  (`SetInstrument`), and when a MIDI file is read. A new voice track starts in the treble clef.
+- MusicXML keeps it: a voice part is exported in its clef (`clef-octave-change` -1 for the tenor
+  clef, pitches as they sound), and on import the clef of the file wins over the range.
+- In the toolbar, a `Clef` menu next to the sound menu shows on voice tracks only.
+
+**Lyrics are not done yet** (a later issue): an optional syllable per note, as a field with
+`#[serde(default)]` on `Note` (older files stay valid), an edit to set it, and a line of text under
+the staff drawn from the layout. Breath marks and slurs can follow the same way.
+
 ## Instruments to come
-
-### Keyboards: organ, synthesizers, more pianos (issue #9)
-
-Pitched instruments, nothing new in the model: add `Instrument::Organ`, `Synth`... with
-`note_kind()` returning `Pitched`, an empty `standard_tuning`, their sounds in `sound.rs` (ids such
-as `"organ/drawbar"`, `"synth/lead"`, `"piano/electric"`), the same rows in `ui/src/lib/instruments.ts`
-(the Rust test `every_sound_is_listed_in_the_ui` checks them) and the instrument in `PITCHED` there,
-and their clefs in `clefsFor` (`staff-layout.ts`). Move the General MIDI ranges they cover out of the
-catch-all piano branch of `Sound::from_midi_program` (16 to 23 organs, 80 to 103 synthesizers,
-1 to 7 other pianos as sounds of the piano), and the matching part names in `sound_for` of
-`io-musicxml`.
 
 ### Drums (issue #10)
 
@@ -160,14 +197,6 @@ MIDI key of the piece (35 to 81), `NoteKind::Percussion`, and `Instrument::Drums
 - Staff: a percussion clef and a table from piece to staff position and head shape (cross heads for
   cymbals) in the UI, stems up, one voice to start with.
 
-### Voice (issue #11)
-
-A voice is pitched: `Instrument::Voice` with `NoteKind::Pitched`, the treble clef (or treble an
-octave down for tenor and bass), and sounds from General MIDI 52 to 54 (choir aahs, voice oohs,
-synth voice). Lyrics are the new part: an optional syllable per note, as a field with
-`#[serde(default)]` on `Note` (older files stay valid), an edit to set it, and a line of text under
-the staff drawn from the layout. Breath marks and slurs can follow the same way.
-
 ## Not done yet
 
 - Only the first voice of a measure is shown and edited, so a pitched part is merged into one voice
@@ -176,5 +205,6 @@ the staff drawn from the layout. Breath marks and slurs can follow the same way.
   note on the other staff by hand, and no beam crosses staves.
 - Beams are flat; no slant, no beaming over rests, no tuplets.
 - No key signature in the model, no clef change within a track, no octave lines (8va).
+- No pedal staff for the organ, and no lyrics under a voice.
 - Letter entry needs Shift (`Shift+A` to `Shift+G`): the plain letters are durations and
   techniques.

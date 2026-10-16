@@ -35,10 +35,16 @@ pub struct Track {
     /// Empty for an instrument without strings (`NoteKind::Pitched`).
     pub tuning: Vec<u8>,
     pub measures: Vec<Measure>,
+    /// The clef of a track whose instrument lets the user choose it (`Instrument::has_clef_choice`:
+    /// a voice), `None` for every other instrument, whose clefs follow from the instrument. Left
+    /// out of files when `None`, so tracks of the other instruments are written as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clef: Option<Clef>,
 }
 
 /// A track as files store it. Files written before sounds existed have no `sound`: the track then
-/// gets the default sound of its instrument, which is the sound it used to have.
+/// gets the default sound of its instrument, which is the sound it used to have. A voice without
+/// a `clef` gets the default clef of its instrument.
 #[derive(Deserialize)]
 struct TrackFile {
     name: String,
@@ -47,6 +53,8 @@ struct TrackFile {
     sound: Option<Sound>,
     tuning: Vec<u8>,
     measures: Vec<Measure>,
+    #[serde(default)]
+    clef: Option<Clef>,
 }
 
 impl From<TrackFile> for Track {
@@ -59,6 +67,7 @@ impl From<TrackFile> for Track {
             instrument: file.instrument,
             tuning: file.tuning,
             measures: file.measures,
+            clef: file.clef.or_else(|| file.instrument.default_clef()),
         }
     }
 }
@@ -76,6 +85,24 @@ pub enum Instrument {
     Banjo,
     /// A keyboard: notes are pitches, written on a grand staff. See `docs/notation.md`.
     Piano,
+    /// A keyboard written on a grand staff, like the piano (no pedal staff).
+    Organ,
+    /// A synthesizer, written on one treble staff.
+    Synth,
+    /// A singing voice, written on one staff in the clef of the track (`Track::clef`).
+    Voice,
+}
+
+/// The clef of a track that has one staff and lets the user choose it (a voice: treble for
+/// soprano and alto, treble an octave down for tenor, bass for baritone and bass). See
+/// `docs/notation.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Clef {
+    Treble,
+    /// The treble clef with an 8 below: notes sound an octave lower than written.
+    Treble8vb,
+    Bass,
 }
 
 /// How the notes of an instrument are stored, and so how they are entered and written.
@@ -373,13 +400,16 @@ pub const BANJO_STANDARD: [u8; 5] = [62, 59, 55, 50, 67];
 const BANJO_FIFTH_STRING_START: u8 = 5;
 
 impl Instrument {
-    pub const ALL: [Instrument; 6] = [
+    pub const ALL: [Instrument; 9] = [
         Instrument::Guitar,
         Instrument::ElectricGuitar,
         Instrument::Bass,
         Instrument::Violin,
         Instrument::Banjo,
         Instrument::Piano,
+        Instrument::Organ,
+        Instrument::Synth,
+        Instrument::Voice,
     ];
 
     /// How the notes of a track of this instrument are stored.
@@ -390,7 +420,9 @@ impl Instrument {
             | Instrument::Bass
             | Instrument::Violin
             | Instrument::Banjo => NoteKind::Fretted,
-            Instrument::Piano => NoteKind::Pitched,
+            Instrument::Piano | Instrument::Organ | Instrument::Synth | Instrument::Voice => {
+                NoteKind::Pitched
+            }
         }
     }
 
@@ -401,7 +433,7 @@ impl Instrument {
             Instrument::Bass => &BASS_STANDARD,
             Instrument::Violin => &VIOLIN_STANDARD,
             Instrument::Banjo => &BANJO_STANDARD,
-            Instrument::Piano => &[],
+            Instrument::Piano | Instrument::Organ | Instrument::Synth | Instrument::Voice => &[],
         }
     }
 
@@ -418,6 +450,61 @@ impl Instrument {
     /// The instrument for a General MIDI program, when a file names one.
     pub fn from_midi_program(program: Option<u8>) -> Instrument {
         Sound::from_midi_program(program).instrument()
+    }
+
+    /// True for an instrument written on one staff whose clef the track chooses (`Track::clef`):
+    /// a voice, whose clef depends on the singer's range.
+    pub fn has_clef_choice(self) -> bool {
+        self == Instrument::Voice
+    }
+
+    /// The clef of a new track of this instrument: the treble clef for a voice, `None` for an
+    /// instrument without a clef choice.
+    pub fn default_clef(self) -> Option<Clef> {
+        self.has_clef_choice().then_some(Clef::Treble)
+    }
+}
+
+/// Mean pitch from which a part is written in the treble clef (B3).
+const TREBLE_FROM: u64 = 59;
+/// Mean pitch from which a part below `TREBLE_FROM` is written in the treble clef an octave down
+/// (F3); lower parts take the bass clef.
+const TREBLE_8VB_FROM: u64 = 53;
+
+impl Clef {
+    pub const ALL: [Clef; 3] = [Clef::Treble, Clef::Treble8vb, Clef::Bass];
+
+    /// The clef that suits a part with these pitches, by their mean: the treble clef for soprano
+    /// and alto parts (mean from B3), an octave down for tenor (from F3), bass below. No pitch
+    /// gives the treble clef.
+    pub fn for_pitches(pitches: impl IntoIterator<Item = u8>) -> Clef {
+        let (sum, count) = pitches.into_iter().fold((0u64, 0u64), |(sum, count), p| {
+            (sum + u64::from(p), count + 1)
+        });
+        match sum.checked_div(count) {
+            None => Clef::Treble,
+            Some(mean) if mean >= TREBLE_FROM => Clef::Treble,
+            Some(mean) if mean >= TREBLE_8VB_FROM => Clef::Treble8vb,
+            Some(_) => Clef::Bass,
+        }
+    }
+}
+
+impl Track {
+    /// The clef that suits the notes of this track when its instrument has a clef choice (see
+    /// `Clef::for_pitches`), else `None`. Importers and a change of instrument use it.
+    pub fn fitting_clef(&self) -> Option<Clef> {
+        if !self.instrument.has_clef_choice() {
+            return None;
+        }
+        let pitches = self
+            .measures
+            .iter()
+            .flat_map(|m| &m.voices)
+            .flat_map(|v| &v.beats)
+            .flat_map(|b| &b.notes)
+            .filter_map(|n| self.pitch(n));
+        Some(Clef::for_pitches(pitches))
     }
 }
 
@@ -439,6 +526,7 @@ mod tests {
             sound: Sound::GuitarNylon,
             tuning: GUITAR_STANDARD.to_vec(),
             measures: vec![],
+            clef: None,
         }
     }
 
@@ -481,6 +569,7 @@ mod tests {
             sound: Sound::Banjo,
             tuning: BANJO_STANDARD.to_vec(),
             measures: vec![],
+            clef: None,
         }
     }
 
@@ -678,6 +767,7 @@ mod tests {
             sound: Sound::Piano,
             tuning: vec![],
             measures: vec![],
+            clef: None,
         };
         assert_eq!(piano.pitch(&Note::pitched(60)), Some(60));
         assert_eq!(piano.pitch(&Note::pitched(128)), None);
@@ -687,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_piano_stores_pitches() {
+    fn only_instruments_without_strings_store_pitches() {
         for instrument in Instrument::ALL {
             let has_strings = !instrument.standard_tuning().is_empty();
             assert_eq!(
@@ -697,6 +787,23 @@ mod tests {
             );
         }
         assert_eq!(Instrument::Piano.note_kind(), NoteKind::Pitched);
+    }
+
+    #[test]
+    fn the_clef_of_a_part_follows_its_mean_pitch() {
+        // Soprano, alto, tenor, baritone and bass lines.
+        assert_eq!(Clef::for_pitches([67, 72, 74, 69]), Clef::Treble);
+        assert_eq!(Clef::for_pitches([57, 62, 64, 60]), Clef::Treble);
+        assert_eq!(Clef::for_pitches([55, 60, 57, 52]), Clef::Treble8vb);
+        assert_eq!(Clef::for_pitches([45, 52, 55, 50]), Clef::Bass);
+        assert_eq!(Clef::for_pitches([40, 43, 48, 45]), Clef::Bass);
+        assert_eq!(Clef::for_pitches([]), Clef::Treble);
+    }
+
+    #[test]
+    fn a_clef_is_written_in_camel_case() {
+        let json = serde_json::to_string(&Clef::ALL).unwrap();
+        assert_eq!(json, r#"["treble","treble8vb","bass"]"#);
     }
 
     #[test]

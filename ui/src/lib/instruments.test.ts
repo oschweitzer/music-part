@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INSTRUMENTS, SOUNDS, instrumentLabel, isPitchedTrack, noteKindOf, soundLabel, soundsOf } from './instruments'
+import { CLEF_CHOICES, INSTRUMENTS, SOUNDS, hasClefChoice, instrumentLabel, isPitchedTrack, noteKindOf, soundLabel, soundsOf } from './instruments'
 
 describe('instruments', () => {
   it('should give every instrument a distinct label', () => {
@@ -37,8 +37,21 @@ describe('sounds', () => {
     expect(programs.every((p) => p >= 0 && p <= 127)).toBe(true)
   })
 
-  it('should store the notes of the piano as pitches, those of string instruments on strings', () => {
-    expect(INSTRUMENTS.filter((i) => noteKindOf(i) === 'pitched')).toEqual(['Piano'])
+  it('should store the notes of keyboards and voices as pitches, those of string instruments on strings', () => {
+    expect(INSTRUMENTS.filter((i) => noteKindOf(i) === 'pitched')).toEqual(['Piano', 'Organ', 'Synth', 'Voice'])
     expect(isPitchedTrack({ instrument: 'Banjo' })).toBe(false)
+  })
+
+  it('should list the default sounds of keyboards and voices first', () => {
+    expect(soundsOf('Piano')[0]?.id).toBe('piano/grand')
+    expect(soundsOf('Organ')[0]?.id).toBe('organ/drawbar')
+    expect(soundsOf('Synth')[0]?.id).toBe('synth/square-lead')
+    expect(soundsOf('Voice')[0]?.id).toBe('voice/aahs')
+    expect(soundLabel('voice/oohs')).toBe('Voice: Voice oohs')
+  })
+
+  it('should let only a voice choose its clef, among three', () => {
+    expect(INSTRUMENTS.filter(hasClefChoice)).toEqual(['Voice'])
+    expect(CLEF_CHOICES.map((c) => c.clef)).toEqual(['treble', 'treble8vb', 'bass'])
   })
 })

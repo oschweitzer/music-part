@@ -2,13 +2,13 @@
 //!
 //! Each track of a string instrument is a part with one tablature staff (`TAB` clef, tuning,
 //! string and fret on every note), so other programs show the tablature and can play it. A
-//! pitched track (piano) is a part with one standard staff, in the treble or bass clef that suits
-//! its notes best. Durations are written in divisions of 32 per quarter note, which is exactly the
+//! pitched track (keyboards, synthesizer, voice) is a part with one standard staff: a voice in its
+//! own clef, another track in the treble or bass clef that suits its notes best. Durations are written in divisions of 32 per quarter note, which is exactly the
 //! unit of the score: nothing is rounded.
 
 use std::fmt::Write;
 
-use score_model::{Beat, Note, NoteKind, Score, Technique, Track};
+use score_model::{Beat, Clef, Note, NoteKind, Score, Technique, Track};
 
 const DIVISIONS: u32 = 32;
 const PERCUSSION_CHANNEL: usize = 9;
@@ -271,8 +271,21 @@ fn same_note<'a>(beat: Option<&'a Beat>, note: &Note) -> Option<&'a Note> {
     beat?.notes.iter().find(|n| n.key() == note.key())
 }
 
-/// The treble clef, or the bass clef when most notes of the track are below middle C.
+const TREBLE: &str = "<clef><sign>G</sign><line>2</line></clef>";
+const BASS: &str = "<clef><sign>F</sign><line>4</line></clef>";
+
+/// The clef of the track when it has one (a voice); else the treble clef, or the bass clef when
+/// most notes of the track are below middle C. Notes are written at their sounding pitch either
+/// way: the 8 of a tenor's clef is a `clef-octave-change`, not a transposition.
 fn clef_for(track: &Track) -> &'static str {
+    match track.clef {
+        Some(Clef::Treble) => return TREBLE,
+        Some(Clef::Treble8vb) => {
+            return "<clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>"
+        }
+        Some(Clef::Bass) => return BASS,
+        None => {}
+    }
     let (low, high) = track
         .measures
         .iter()
@@ -287,9 +300,9 @@ fn clef_for(track: &Track) -> &'static str {
             }
         });
     if low > high {
-        "<clef><sign>F</sign><line>4</line></clef>"
+        BASS
     } else {
-        "<clef><sign>G</sign><line>2</line></clef>"
+        TREBLE
     }
 }
 
@@ -365,7 +378,9 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::import_musicxml;
-    use score_model::{apply_edit, blank_score, demo_score, Edit, Instrument, Sound, Technique};
+    use score_model::{
+        apply_edit, blank_score, demo_score, Clef, Edit, Instrument, Sound, Technique,
+    };
 
     /// What a round trip may change without changing the music: the order of the notes of a chord,
     /// and silent extra voices (the importer gives every measure of a part the same voices).
@@ -395,8 +410,8 @@ mod tests {
         assert_eq!(a.tracks.len(), b.tracks.len());
         for (x, y) in a.tracks.iter().zip(&b.tracks) {
             assert_eq!(
-                (&x.name, x.instrument, x.sound, &x.tuning),
-                (&y.name, y.instrument, y.sound, &y.tuning)
+                (&x.name, x.instrument, x.sound, &x.tuning, x.clef),
+                (&y.name, y.instrument, y.sound, &y.tuning, y.clef)
             );
             assert_eq!(x.measures.len(), y.measures.len());
             for (m, (p, q)) in x.measures.iter().zip(&y.measures).enumerate() {
@@ -456,6 +471,42 @@ mod tests {
             }
         }
         assert_same_music(&roundtrip(&score), &score);
+    }
+
+    #[test]
+    fn a_voice_keeps_its_clef_even_when_its_range_would_suggest_another() {
+        let mut score = blank_score("Choir");
+        for clef in Clef::ALL {
+            let edits = [
+                Edit::AddTrack {
+                    instrument: Instrument::Voice,
+                    sound: Some(Sound::VoiceOohs),
+                },
+                Edit::SetClef {
+                    track: score.tracks.len(),
+                    clef,
+                },
+                // A4: the range of a soprano, whatever the clef says.
+                Edit::AddPitch {
+                    track: score.tracks.len(),
+                    measure: 0,
+                    beat: 0,
+                    pitch: 69,
+                },
+            ];
+            for edit in edits {
+                apply_edit(&mut score, &edit).unwrap();
+            }
+        }
+        apply_edit(&mut score, &Edit::RemoveTrack { index: 0 }).unwrap();
+        let xml = export_musicxml(&score);
+        assert!(xml.contains("<clef-octave-change>-1</clef-octave-change>"));
+        // Pitches are written as they sound, in every clef.
+        assert_eq!(xml.matches("<octave>4</octave>").count(), 3);
+        let back = roundtrip(&score);
+        let clefs: Vec<_> = back.tracks.iter().map(|t| t.clef).collect();
+        assert_eq!(clefs, Clef::ALL.map(Some));
+        assert_same_music(&back, &score);
     }
 
     #[test]

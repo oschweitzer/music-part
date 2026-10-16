@@ -3,8 +3,9 @@
 //! Each (MIDI track, channel) that plays notes becomes a track of the score, so a format 0 file
 //! with several channels is split. The percussion channel (10) is not imported. The sound, and
 //! with it the instrument, is the closest to the General MIDI program (see
-//! `Sound::from_midi_program`): the piano for a program that is not a string instrument here, the
-//! nylon guitar when the channel names no program.
+//! `Sound::from_midi_program`): keyboards, synthesizers and voices get their own families, any
+//! other program without strings here the grand piano, and a channel that names no program the
+//! nylon guitar. A voice is written in the clef that suits its range (`Track::fitting_clef`).
 //!
 //! A string instrument gets its notes placed on the strings, a chord being cut where the next one
 //! starts. A pitched instrument (piano) keeps every note whole: notes that overlap are written as
@@ -293,13 +294,16 @@ fn build_track(
             segments
         }
     };
-    let track = Track {
+    let mut track = Track {
         name,
         instrument,
         sound,
         tuning,
         measures: split_into_measures(segments, ts)?,
+        clef: None,
     };
+    // MIDI says nothing of how a part is written: a voice gets the clef of its range.
+    track.clef = track.fitting_clef();
     Ok((track, skipped_notes))
 }
 
@@ -409,7 +413,7 @@ fn split_into_measures(
 mod tests {
     use super::*;
     use midly::{num::u4, Format, Header, MetaMessage, TrackEvent};
-    use score_model::Instrument;
+    use score_model::{Clef, Instrument};
 
     const PPQ: u16 = 480;
 
@@ -675,6 +679,47 @@ mod tests {
         let score = import(&write(PPQ, vec![events])).unwrap();
         assert_eq!(score.tracks[0].instrument, Instrument::ElectricGuitar);
         assert_eq!(score.tracks[0].sound, Sound::ElectricGuitarDistortion);
+    }
+
+    #[test]
+    fn organ_synth_and_voice_programs_give_their_own_pitched_instruments() {
+        let one_note = |program_number| {
+            let events = vec![
+                program(0, program_number),
+                on_channel(0, 0, 60, true),
+                on_channel(0, 480, 60, false),
+            ];
+            import(&write(PPQ, vec![events])).unwrap().tracks[0].clone()
+        };
+        let organ = one_note(19);
+        assert_eq!(
+            (organ.instrument, organ.sound),
+            (Instrument::Organ, Sound::OrganChurch)
+        );
+        assert!(organ.tuning.is_empty());
+        assert_eq!(organ.clef, None);
+        assert_eq!(one_note(91).sound, Sound::SynthChoirPad);
+        assert_eq!(one_note(5).sound, Sound::PianoElectricFm);
+        let voice = one_note(53);
+        assert_eq!(
+            (voice.instrument, voice.sound),
+            (Instrument::Voice, Sound::VoiceOohs)
+        );
+    }
+
+    #[test]
+    fn a_voice_is_written_in_the_clef_of_its_range() {
+        let voice = |keys: &[u8]| {
+            let mut events = vec![program(0, 52)];
+            for &key in keys {
+                events.push(on_channel(0, 0, key, true));
+                events.push(on_channel(0, 480, key, false));
+            }
+            import(&write(PPQ, vec![events])).unwrap().tracks[0].clef
+        };
+        assert_eq!(voice(&[67, 72, 69, 65]), Some(Clef::Treble));
+        assert_eq!(voice(&[55, 60, 57, 52]), Some(Clef::Treble8vb));
+        assert_eq!(voice(&[43, 48, 45, 50]), Some(Clef::Bass));
     }
 
     #[test]

@@ -34,22 +34,44 @@ without changing the file format.
 
 ### The sounds
 
-| Id                           | Name          | GM program | Instrument      | Sound pack file       |
-| ---------------------------- | ------------- | ---------- | --------------- | --------------------- |
-| `guitar/nylon`               | Nylon strings | 24         | Acoustic guitar | `nylon-guitar.sf2`    |
-| `guitar/steel`               | Steel strings | 25         | Acoustic guitar |                       |
-| `electric-guitar/clean`      | Clean         | 27         | Electric guitar | `electric-guitar.sf2` |
-| `electric-guitar/muted`      | Muted         | 28         | Electric guitar |                       |
-| `electric-guitar/overdrive`  | Overdrive     | 29         | Electric guitar |                       |
-| `electric-guitar/distortion` | Distortion    | 30         | Electric guitar |                       |
-| `bass/finger`                | Finger        | 33         | Electric bass   | `electric-bass.sf2`   |
-| `bass/pick`                  | Pick          | 34         | Electric bass   |                       |
-| `bass/slap`                  | Slap          | 36         | Electric bass   |                       |
-| `violin/standard`            | Standard      | 40         | Violin          |                       |
-| `banjo/standard`             | Standard      | 105        | Banjo           |                       |
-| `piano/grand`                | Grand piano   | 0          | Piano           |                       |
+| Id                           | Name              | GM program | Instrument      | Sound pack file       |
+| ---------------------------- | ----------------- | ---------- | --------------- | --------------------- |
+| `guitar/nylon`               | Nylon strings     | 24         | Acoustic guitar | `nylon-guitar.sf2`    |
+| `guitar/steel`               | Steel strings     | 25         | Acoustic guitar |                       |
+| `electric-guitar/clean`      | Clean             | 27         | Electric guitar | `electric-guitar.sf2` |
+| `electric-guitar/muted`      | Muted             | 28         | Electric guitar |                       |
+| `electric-guitar/overdrive`  | Overdrive         | 29         | Electric guitar |                       |
+| `electric-guitar/distortion` | Distortion        | 30         | Electric guitar |                       |
+| `bass/finger`                | Finger            | 33         | Electric bass   | `electric-bass.sf2`   |
+| `bass/pick`                  | Pick              | 34         | Electric bass   |                       |
+| `bass/slap`                  | Slap              | 36         | Electric bass   |                       |
+| `violin/standard`            | Standard          | 40         | Violin          |                       |
+| `banjo/standard`             | Standard          | 105        | Banjo           |                       |
+| `piano/grand`                | Grand piano       | 0          | Piano           |                       |
+| `piano/bright`               | Bright piano      | 1          | Piano           |                       |
+| `piano/electric`             | Electric piano    | 4          | Piano           |                       |
+| `piano/electric-fm`          | FM electric piano | 5          | Piano           |                       |
+| `organ/drawbar`              | Drawbar           | 16         | Organ           |                       |
+| `organ/rock`                 | Rock              | 18         | Organ           |                       |
+| `organ/church`               | Church            | 19         | Organ           |                       |
+| `organ/reed`                 | Reed              | 20         | Organ           |                       |
+| `synth/square-lead`          | Square lead       | 80         | Synthesizer     |                       |
+| `synth/saw-lead`             | Saw lead          | 81         | Synthesizer     |                       |
+| `synth/warm-pad`             | Warm pad          | 89         | Synthesizer     |                       |
+| `synth/choir-pad`            | Choir pad         | 91         | Synthesizer     |                       |
+| `voice/aahs`                 | Choir aahs        | 52         | Voice           |                       |
+| `voice/oohs`                 | Voice oohs        | 53         | Voice           |                       |
+| `voice/synth`                | Synth voice       | 54         | Voice           |                       |
 
 Programs are General MIDI, counted from 0. The first sound of each instrument is its default.
+
+The keyboards, the synthesizer and the voice ([issues #9](https://github.com/oschweitzer/music-part/issues/9)
+and [#11](https://github.com/oschweitzer/music-part/issues/11)) keep short lists of sounds that are
+clearly apart in a General MIDI bank: the percussive organ (17) is close to the drawbar one and the
+other pads to the warm pad, so they are played by those. A test in `audio-engine` renders the same
+chord with each of these sounds in the base SoundFont and checks that it is heard, that every sound
+picks its own preset and that no two renderings are the same. A realistic piano pack (such as
+Salamander) belongs to the sample banks of [issue #7](https://github.com/oschweitzer/music-part/issues/7).
 `ui/src/lib/instruments.ts` mirrors this table by hand, and a Rust test
 (`every_sound_is_listed_in_the_ui`) fails when a sound is missing there.
 
@@ -82,26 +104,44 @@ every string runs the whole neck.
 
 Both importers map a General MIDI program to the closest sound (`Sound::from_midi_program`):
 
-| Program               | Sound                                                     |
-| --------------------- | --------------------------------------------------------- |
-| 24, and none          | `guitar/nylon` (a file for a tablature often names none)  |
-| 25                    | `guitar/steel`                                            |
-| 26, 27, 31            | `electric-guitar/clean` (jazz and harmonics: the closest) |
-| 28, 29, 30            | `electric-guitar/muted`, `overdrive`, `distortion`        |
-| 32, 33, 35, 38, 39    | `bass/finger` (acoustic, fretless and synth bass too)     |
-| 34                    | `bass/pick`                                               |
-| 36, 37                | `bass/slap`                                               |
-| 40                    | `violin/standard`                                         |
-| 105                   | `banjo/standard`                                          |
-| any other             | `piano/grand`: keyboards, winds, voice, other strings...  |
+| Program            | Sound                                                               |
+| ------------------ | ------------------------------------------------------------------- |
+| 24, and none       | `guitar/nylon` (a file for a tablature often names none)            |
+| 25                 | `guitar/steel`                                                      |
+| 26, 27, 31         | `electric-guitar/clean` (jazz and harmonics: the closest)           |
+| 28, 29, 30         | `electric-guitar/muted`, `overdrive`, `distortion`                  |
+| 32, 33, 35, 38, 39 | `bass/finger` (acoustic, fretless and synth bass too)               |
+| 34                 | `bass/pick`                                                         |
+| 36, 37             | `bass/slap`                                                         |
+| 40                 | `violin/standard`                                                   |
+| 105                | `banjo/standard`                                                    |
+| 0                  | `piano/grand`                                                       |
+| 1, 2, 3, 6         | `piano/bright` (electric grand, honky-tonk, harpsichord)            |
+| 4, 7               | `piano/electric` (and the clavinet)                                 |
+| 5                  | `piano/electric-fm`                                                 |
+| 16, 17             | `organ/drawbar` (and the percussive organ)                          |
+| 18, 19             | `organ/rock`, `organ/church`                                        |
+| 20 to 23           | `organ/reed` (accordion, harmonica: free reeds too)                 |
+| 52, 53, 54         | `voice/aahs`, `voice/oohs`, `voice/synth`                           |
+| 80, 82, 83         | `synth/square-lead` (calliope and chiff leads too)                  |
+| 81, 84 to 87       | `synth/saw-lead` (the other leads)                                  |
+| 91                 | `synth/choir-pad`                                                   |
+| 88 to 103 but 91   | `synth/warm-pad` (the other pads and the effects)                   |
+| any other          | `piano/grand`: chromatic percussion, winds, brass, other strings... |
 
 - MIDI writes the program of the sound; reading it back gives the same sound.
-- MusicXML writes it in `midi-program` (counted from 1). On import, a program of a string
-  instrument wins; otherwise the part name decides ("electric guitar", "bass", "violin", "banjo",
-  "steel", "guitar"), then a tablature staff (the nylon guitar), else the piano.
-- A program that is not a string instrument gives a pitched track, the piano, which keeps every
-  note (see [`notation.md`](notation.md)). Organ, synthesizers, drums and voice get their own
-  instruments and sounds later; the mapping then sends their programs there.
+- MusicXML writes it in `midi-program` (counted from 1). On import, a program that has a sound
+  of its own family wins (a string instrument, a keyboard other than the grand piano, a
+  synthesizer, a voice); the grand piano and the programs of no family come after the part name,
+  since some programs write the piano for every part. The name then decides: a voice ("voice",
+  "vocals", "soprano", "alto", "tenor", "baritone", "bass voice", "choir"..., but not "alto sax"
+  or "tenor banjo"), an organ ("organ", "church organ", "accordion"), a synthesizer ("synth",
+  "synth pad"), an electric piano ("electric piano", "Rhodes"), then "electric guitar", "bass",
+  "violin", "banjo", "steel", "guitar". "Bass" alone stays the bass guitar. Then a tablature staff
+  (the nylon guitar), else the grand piano.
+- MIDI files are read by program only: a track name says too little to override it.
+- A program of no family here gives a pitched track, the grand piano, which keeps every note
+  (see [`notation.md`](notation.md)). Drums get their own instrument with issue #10.
 - Tests export a track of every sound to MIDI, MusicXML and `.mpart` and check that the sound comes
   back.
 

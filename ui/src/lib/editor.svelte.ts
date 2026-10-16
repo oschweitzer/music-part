@@ -4,7 +4,7 @@ import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
 import { isPitchedTrack, noteKindOf } from './instruments'
 import { notePitch, noteRow } from './notes'
-import type { Beat, Instrument, Note, NoteValue, SoundId, TimeSignature } from './score-types'
+import type { Beat, Instrument, Note, NoteValue, SoundId, TimeSignature, TrackClef } from './score-types'
 import {
   clampSelection,
   DEFAULT_PITCH,
@@ -295,6 +295,11 @@ export class Editor {
   /** Changes the sound of the current track, among the sounds of its instrument. */
   setSound(sound: SoundId): Promise<void> {
     return this.#send({ type: 'setSound', track: this.track, sound })
+  }
+
+  /** Changes the clef of the current track, a voice: the notes keep their pitches. */
+  setClef(clef: TrackClef): Promise<void> {
+    return this.#send({ type: 'setClef', track: this.track, clef })
   }
 
   /** Copies the selected beats (or the selected beat) of this track, all their notes. */

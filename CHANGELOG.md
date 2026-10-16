@@ -26,6 +26,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/notation.md`.
 - A new instrument, the piano (sound `piano/grand`, General MIDI program 0), written on a grand
   staff. `Score::validate` checks its notes (pitches 0 to 127, no pitch twice in a beat).
+- New instruments: the organ (drawbar, rock, church and reed sounds, General MIDI 16 to 20) on a
+  grand staff, the synthesizer (square and saw leads, warm and choir pads, 80, 81, 89, 91) on a
+  treble staff, and the voice (choir aahs, voice oohs, synth voice, 52 to 54). The piano gets a
+  bright, an electric and an FM electric piano sound (1, 4, 5). See `docs/sounds.md`.
+- A voice track has a clef: treble, treble an octave down (tenor) or bass, chosen in the new
+  `Clef` menu (`Edit::SetClef`) and stored in the track (`clef`, left out for other instruments,
+  so older files load unchanged). A track that becomes a voice, and a voice read from MIDI, get
+  the clef of their range; MusicXML keeps the clef. See `docs/notation.md`.
+- MIDI and MusicXML import map organ, synthesizer, voice and other piano programs to these
+  sounds instead of the grand piano, and MusicXML part names such as "Organ", "Synth", "Vocals",
+  "Soprano", "Tenor" or "Bass voice" too ("Bass" alone stays the bass guitar). Exports write
+  their programs.
 - `score-model`: edits by pitch, `AddPitch`, `RemovePitch`, `MovePitch`, `SetPitchTied`, and a
   `pitches` span on `ClearNotes`; on a string track a pitch goes on a free string.
 - UI: a standard notation staff, with clefs, key signatures, accidentals, ledger lines, stems,

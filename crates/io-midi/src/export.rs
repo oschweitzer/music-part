@@ -323,6 +323,7 @@ mod tests {
         for (a, b) in score.tracks.iter().zip(&imported.tracks) {
             assert_eq!(b.sound, a.sound);
             assert_eq!(b.tuning, a.tuning);
+            assert_eq!(b.clef, a.clef, "{:?}", a.sound);
             assert_eq!(sounding(a), sounding(b), "{:?}", a.sound);
         }
     }

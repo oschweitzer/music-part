@@ -4,7 +4,7 @@ export type NoteValue = 'Whole' | 'Half' | 'Quarter' | 'Eighth' | 'Sixteenth' | 
 
 export type Technique = 'HammerOn' | 'PullOff' | 'Slide' | 'Bend' | 'PalmMute' | 'Harmonic'
 
-export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo' | 'Piano'
+export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo' | 'Piano' | 'Organ' | 'Synth' | 'Voice'
 
 /** The id of a sound of an instrument, `"<instrument>/<sound>"` (see `SOUNDS` in `instruments.ts`). */
 export type SoundId =
@@ -20,6 +20,23 @@ export type SoundId =
   | 'violin/standard'
   | 'banjo/standard'
   | 'piano/grand'
+  | 'piano/bright'
+  | 'piano/electric'
+  | 'piano/electric-fm'
+  | 'organ/drawbar'
+  | 'organ/rock'
+  | 'organ/church'
+  | 'organ/reed'
+  | 'synth/square-lead'
+  | 'synth/saw-lead'
+  | 'synth/warm-pad'
+  | 'synth/choir-pad'
+  | 'voice/aahs'
+  | 'voice/oohs'
+  | 'voice/synth'
+
+/** `Clef` of the model: the clef a voice track chooses (treble8vb is the treble clef an octave down). */
+export type TrackClef = 'treble' | 'treble8vb' | 'bass'
 
 /** A note on a string and a fret, on a track of a fretted instrument (guitar, bass...). */
 export type FrettedNote = {
@@ -59,6 +76,8 @@ export type Track = {
   /** MIDI pitches of the open strings, string 1 first (the highest, except a banjo's short fifth string). Empty for a pitched instrument. */
   tuning: number[]
   measures: Measure[]
+  /** The clef of a voice, which chooses it; absent for every other instrument. */
+  clef?: TrackClef
 }
 
 export type Score = { title: string; tempo_bpm: number; tracks: Track[] }
