@@ -3,5 +3,7 @@ node_modules/
 dist/
 src-tauri/gen/
 assets/soundfonts/**/*.sf2
-assets/soundfonts/*.part
+assets/soundfonts/**/*.part
+assets/soundfonts/**/*.wav
+assets/soundfonts/**/*.sfz
 src-tauri/tests-data/

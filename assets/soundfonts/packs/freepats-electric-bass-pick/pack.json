@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "freepats-electric-bass-pick",
+  "name": "Picked Bass YR",
+  "author": "Andrea Biasior, edited by roberto@zenvoid.org",
+  "licence": "CC0-1.0",
+  "source": "https://github.com/freepats/electric-bass-YR",
+  "sounds": [
+    {
+      "sound": "bass/pick",
+      "file": "picked-bass.sf2",
+      "firstKey": 26,
+      "lastKey": 46
+    }
+  ]
+}

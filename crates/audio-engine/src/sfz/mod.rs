@@ -65,6 +65,13 @@ impl SfzInstrument {
     pub fn region_count(&self) -> usize {
         self.regions.len()
     }
+
+    /// Whether a region plays `key` at some velocity, whatever its round-robin turn.
+    pub fn covers(&self, key: u8) -> bool {
+        self.regions
+            .iter()
+            .any(|region| (region.spec.lokey..=region.spec.hikey).contains(&key))
+    }
 }
 
 /// A region ready to play: its opcodes, its sample, and its loop worked out against the sample.

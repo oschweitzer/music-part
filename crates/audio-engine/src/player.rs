@@ -1351,9 +1351,34 @@ pub(crate) mod tests {
         assert_eq!(with_bank, without);
     }
 
-    /// The sounds of the packs committed in `assets/soundfonts/packs`, with the path of their
-    /// sample file. The files are fetched by `pnpm fetch:soundfont`; callers skip missing ones.
+    /// The SoundFont sounds of the packs committed in `assets/soundfonts/packs`, with the path of
+    /// their sample file. The files are fetched by `pnpm fetch:soundfont`; callers skip missing
+    /// ones.
     fn committed_banks() -> Vec<(crate::pack::PackSound, std::path::PathBuf)> {
+        committed_pack_sounds()
+            .into_iter()
+            .filter(|(sound, _, _)| !sound.is_sfz())
+            .map(|(sound, path, _)| (sound, path))
+            .collect()
+    }
+
+    /// The SFZ sounds of the committed packs, with the path of their `.sfz` file and pack folder.
+    fn committed_sfz_banks() -> Vec<(
+        crate::pack::PackSound,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    )> {
+        committed_pack_sounds()
+            .into_iter()
+            .filter(|(sound, _, _)| sound.is_sfz())
+            .collect()
+    }
+
+    fn committed_pack_sounds() -> Vec<(
+        crate::pack::PackSound,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    )> {
         let root =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/soundfonts/packs");
         let (packs, errors) = crate::pack::discover(&[root]);
@@ -1364,9 +1389,87 @@ pub(crate) mod tests {
                 pack.manifest
                     .sounds
                     .iter()
-                    .map(|sound| (sound.clone(), pack.file(sound)))
+                    .map(|sound| (sound.clone(), pack.file(sound), pack.dir.clone()))
             })
             .collect()
+    }
+
+    /// Loads a committed SFZ pack sound, or `None` when its files were not fetched.
+    fn load_committed_sfz(
+        sound: &crate::pack::PackSound,
+        file: &std::path::Path,
+        dir: &std::path::Path,
+    ) -> Option<crate::sfz::SfzInstrument> {
+        if !file.exists() {
+            eprintln!("{} not fetched, skipped", sound.file);
+            return None;
+        }
+        let mut budget = crate::sfz::MAX_PACK_SAMPLE_BYTES;
+        let (instrument, report) = crate::sfz::load(file, dir, &mut budget).unwrap();
+        assert!(report.dropped.is_empty(), "{}: {report}", sound.file);
+        Some(instrument)
+    }
+
+    #[test]
+    fn the_declared_key_ranges_of_sfz_packs_match_their_regions() {
+        for (sound, file, dir) in &committed_sfz_banks() {
+            let Some(instrument) = load_committed_sfz(sound, file, dir) else {
+                continue;
+            };
+            let covered: Vec<u8> = (0..128u8).filter(|&key| instrument.covers(key)).collect();
+            assert_eq!(
+                (covered.first().copied(), covered.last().copied()),
+                (Some(sound.first_key), Some(sound.last_key)),
+                "{}",
+                sound.file
+            );
+            assert_eq!(
+                covered.len(),
+                usize::from(sound.last_key - sound.first_key) + 1,
+                "{} has gaps",
+                sound.file
+            );
+        }
+    }
+
+    #[test]
+    fn every_sfz_bank_plays_its_instrument_over_the_whole_neck() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        for (sound, file, dir) in &committed_sfz_banks() {
+            let Some(instrument) = load_committed_sfz(sound, file, dir) else {
+                continue;
+            };
+            let mut score = one_note_score();
+            score.tracks[0].instrument = sound.sound.instrument();
+            score.tracks[0].sound = sound.sound;
+            score.tracks[0].tuning = sound.sound.instrument().standard_tuning().to_vec();
+            let strings = score.tracks[0].tuning.len() as u8;
+            // Every string open, at the twelfth fret and high up the neck, past the recordings.
+            for string in 1..=strings {
+                for fret in [0, 12, 22] {
+                    let note = &mut score.tracks[0].measures[0].voices[0].beats[0].notes[0];
+                    note.place = score_model::Place::Fretted { string, fret };
+                    let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
+                    player
+                        .add_sfz(sound.sound, instrument.clone(), sound.keys())
+                        .unwrap();
+                    player.load_score(&score);
+                    player.play();
+                    let mut buf = vec![0.0f32; 2 * 44_100];
+                    player.render(&mut buf);
+                    let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+                    assert!(
+                        peak > 0.005,
+                        "{} string {string} fret {fret} is silent",
+                        sound.file
+                    );
+                    assert!(peak <= 1.0, "{} clips", sound.file);
+                }
+            }
+        }
     }
 
     /// The fetched sample file of the committed pack that plays `sound`, or `None` to skip.
