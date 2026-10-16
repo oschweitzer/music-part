@@ -13,9 +13,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    decompose_ticks, fret_pitch, pitch_fret, place_chord, place_pitch, Beat, Duration, Instrument,
-    Measure, Note, NoteKind, Place, Score, Sound, Technique, TimeSignature, Track, Voice,
-    DRUM_PIECES, MAX_FRET, MAX_PITCH,
+    decompose_ticks, fret_pitch, pitch_fret, place_chord, place_pitch, Beat, Clef, Duration,
+    Instrument, Measure, Note, NoteKind, Place, Score, Sound, Technique, TimeSignature, Track,
+    Voice, DRUM_PIECES, MAX_FRET, MAX_PITCH,
 };
 
 /// A beat of the first voice of a track.
@@ -138,7 +138,8 @@ pub enum Edit {
     /// fretted to a pitched instrument every note keeps its pitch and its tie, without technique.
     /// From a pitched to a fretted one the track gets the standard tuning and the pitches are
     /// placed on the strings; refused if a note cannot be. To or from drums only a track without
-    /// notes changes (a drum piece is no pitch): refused otherwise.
+    /// notes changes (a drum piece is no pitch): refused otherwise. A track that becomes a voice
+    /// gets the clef that suits its notes (`Track::fitting_clef`).
     SetInstrument {
         track: usize,
         instrument: Instrument,
@@ -211,6 +212,12 @@ pub enum Edit {
         from: BeatAddress,
         to: BeatAddress,
     },
+    /// Changes the clef of a track whose instrument lets it choose one (a voice). The notes keep
+    /// their pitches; only how they are written changes. Refused on other tracks.
+    SetClef {
+        track: usize,
+        clef: Clef,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +262,8 @@ pub enum EditError {
     /// The track has notes, and the new instrument stores another kind of note with no way to
     /// convert them (drum pieces and pitches).
     NotesOfAnotherKind,
+    /// The instrument of the track has no clef choice: its clefs follow from the instrument.
+    NoClefChoice,
 }
 
 impl fmt::Display for EditError {
@@ -307,6 +316,10 @@ impl fmt::Display for EditError {
             Self::NotesOfAnotherKind => write!(
                 f,
                 "drum pieces are not pitches: clear the notes of this track before changing between drums and another instrument"
+            ),
+            Self::NoClefChoice => write!(
+                f,
+                "the clef of this instrument cannot be changed: only a voice chooses its clef"
             ),
         }
     }
@@ -510,6 +523,17 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             Ok(())
         }
         Edit::SetTuning { track, ref tuning } => set_tuning(score, track, tuning),
+        Edit::SetClef { track, clef } => {
+            let target = score
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::OutOfRange("track"))?;
+            if !target.instrument.has_clef_choice() {
+                return Err(EditError::NoClefChoice);
+            }
+            target.clef = Some(clef);
+            Ok(())
+        }
     }
 }
 
@@ -1074,6 +1098,7 @@ fn set_instrument(
             changed.tuning = instrument.standard_tuning().to_vec();
         }
     }
+    changed.clef = changed.fitting_clef();
     *target = changed;
     Ok(())
 }
@@ -1126,6 +1151,7 @@ fn add_track(score: &mut Score, sound: Sound) -> Result<(), EditError> {
         sound,
         tuning: instrument.standard_tuning().to_vec(),
         measures,
+        clef: instrument.default_clef(),
     });
     Ok(())
 }
@@ -3056,6 +3082,88 @@ mod tests {
     }
 
     #[test]
+    fn keyboards_and_voices_are_added_as_pitched_tracks_and_only_a_voice_has_a_clef() {
+        let mut score = blank_score("t");
+        for instrument in [Instrument::Organ, Instrument::Synth, Instrument::Voice] {
+            let add = Edit::AddTrack {
+                instrument,
+                sound: None,
+            };
+            apply_edit(&mut score, &add).unwrap();
+            let track = score.tracks.last().unwrap();
+            assert!(track.tuning.is_empty());
+            assert_eq!(track.sound, instrument.default_sound());
+        }
+        let clefs: Vec<Option<Clef>> = score.tracks.iter().map(|t| t.clef).collect();
+        assert_eq!(clefs, vec![None, None, None, Some(Clef::Treble)]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn the_clef_of_a_voice_changes_but_not_its_pitches() {
+        let mut score = blank_score("t");
+        let voice = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Voice,
+        };
+        apply_edit(&mut score, &voice).unwrap();
+        apply_edit(&mut score, &add_pitch(0, 0, 50)).unwrap();
+        let set = |clef| Edit::SetClef { track: 0, clef };
+        apply_edit(&mut score, &set(Clef::Bass)).unwrap();
+        assert_eq!(score.tracks[0].clef, Some(Clef::Bass));
+        assert_eq!(pitches_of(&score, 0, 0), vec![50]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn the_clef_of_an_instrument_without_a_clef_choice_is_refused() {
+        let mut score = piano_score();
+        let before = score.clone();
+        let edit = Edit::SetClef {
+            track: 0,
+            clef: Clef::Treble8vb,
+        };
+        assert_eq!(apply_edit(&mut score, &edit), Err(EditError::NoClefChoice));
+        assert_eq!(score, before);
+        let missing = Edit::SetClef {
+            track: 9,
+            clef: Clef::Bass,
+        };
+        assert_eq!(
+            apply_edit(&mut score, &missing),
+            Err(EditError::OutOfRange("track"))
+        );
+    }
+
+    #[test]
+    fn a_track_that_becomes_a_voice_gets_the_clef_of_its_range_and_loses_it_after() {
+        // The demo bass plays around E1 to A2: a bass voice, an octave higher on paper.
+        let mut score = demo_score();
+        let to = |instrument| Edit::SetInstrument {
+            track: 1,
+            instrument,
+        };
+        apply_edit(&mut score, &to(Instrument::Voice)).unwrap();
+        assert_eq!(score.tracks[1].sound, Sound::VoiceAahs);
+        assert_eq!(score.tracks[1].clef, Some(Clef::Bass));
+        apply_edit(&mut score, &to(Instrument::Organ)).unwrap();
+        assert_eq!(score.tracks[1].clef, None);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_clef_edit_travels_as_camel_case_json() {
+        let edit = Edit::SetClef {
+            track: 2,
+            clef: Clef::Treble8vb,
+        };
+        assert_eq!(
+            serde_json::to_value(edit).unwrap(),
+            serde_json::json!({ "type": "setClef", "track": 2, "clef": "treble8vb" })
+        );
+    }
+
+    #[test]
     fn pitched_edits_travel_as_camel_case_json() {
         let json = serde_json::to_value(move_pitch(1, 2, 60, 61)).unwrap();
         assert_eq!(
@@ -3449,6 +3557,10 @@ mod tests {
                             measure: measure + next(2),
                             beat: next(4),
                         },
+                    },
+                    12 if next(3) == 0 => Edit::SetClef {
+                        track,
+                        clef: Clef::ALL[next(Clef::ALL.len())],
                     },
                     12 => Edit::RenameTrack {
                         track,

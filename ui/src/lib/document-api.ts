@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from './score-source'
-import type { Beat, Duration, Instrument, Score, SoundId, Technique } from './score-types'
+import type { Beat, Duration, Instrument, Score, SoundId, Technique, TrackClef } from './score-types'
 
 export type BeatAddress = { measure: number; beat: number }
 
@@ -35,6 +35,7 @@ export type Edit =
   | { type: 'movePitch'; track: number; measure: number; beat: number; pitch: number; to: number }
   | { type: 'setPitchTied'; track: number; measure: number; beat: number; pitch: number; tied: boolean }
   | { type: 'removeRests'; track: number; from: BeatAddress; to: BeatAddress }
+  | { type: 'setClef'; track: number; clef: TrackClef }
 
 /** A format a score can be exported to, besides the native one. */
 export type ExportFormat = 'midi' | 'musicXml'

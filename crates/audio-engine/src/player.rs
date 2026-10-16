@@ -827,6 +827,7 @@ pub(crate) mod tests {
                         }],
                     }],
                 }],
+                clef: None,
             }],
         }
     }
@@ -1472,6 +1473,70 @@ pub(crate) mod tests {
                 bank.sound
             );
         }
+    }
+
+    /// A one-track score playing a C major chord around middle C with `sound`, whose instrument
+    /// is pitched (keyboards, synthesizer, voice).
+    fn pitched_chord(sound: Sound) -> Score {
+        let mut score = blank_score("chord");
+        let edits = [
+            Edit::SetInstrument {
+                track: 0,
+                instrument: sound.instrument(),
+            },
+            Edit::SetSound { track: 0, sound },
+        ];
+        let notes = [48, 60, 64, 67].map(|pitch| Edit::AddPitch {
+            track: 0,
+            measure: 0,
+            beat: 0,
+            pitch,
+        });
+        for edit in edits.iter().chain(&notes) {
+            apply_edit(&mut score, edit).unwrap();
+        }
+        score
+    }
+
+    #[test]
+    fn every_keyboard_synth_and_voice_sound_is_audible_and_distinct() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let pitched = [
+            Instrument::Piano,
+            Instrument::Organ,
+            Instrument::Synth,
+            Instrument::Voice,
+        ];
+        let mut presets: Vec<(Sound, String)> = Vec::new();
+        let mut renders: Vec<(Sound, Vec<f32>)> = Vec::new();
+        for sound in Sound::ALL
+            .into_iter()
+            .filter(|s| pitched.contains(&s.instrument()))
+        {
+            let mut player = Player::new(&mut File::open(&path).unwrap(), 44_100).unwrap();
+            player.load_score(&pitched_chord(sound));
+            player.play();
+            let mut buf = vec![0.0f32; 2 * 44_100];
+            player.render(&mut buf);
+            let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak > 0.01, "{sound:?} is nearly silent (peak {peak})");
+            assert!(peak <= 1.0, "{sound:?} clips (peak {peak})");
+            let preset = player.preset_of_track(0).expect("a preset");
+            if let Some((other, _)) = presets.iter().find(|(_, p)| *p == preset) {
+                panic!("{sound:?} and {other:?} both play {preset}");
+            }
+            presets.push((sound, preset));
+            // The same chord played by two sounds differs, beyond the noise of rounding.
+            for (other, earlier) in &renders {
+                let difference: f32 = buf.iter().zip(earlier).map(|(a, b)| (a - b).abs()).sum();
+                assert!(difference > 1.0, "{sound:?} sounds like {other:?}");
+            }
+            renders.push((sound, buf));
+        }
+        assert_eq!(presets.len(), 15);
     }
 
     #[test]

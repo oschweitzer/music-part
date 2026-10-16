@@ -26,7 +26,7 @@ use std::io::{Cursor, Read};
 use roxmltree::{Document, Node, ParsingOptions};
 use score_model::{
     decompose_ticks, drum_piece_at, drum_segments, fret_pitch, pitched_segments, place_chord, Beat,
-    Duration, Instrument, Measure, Note, NoteHead, NoteKind, Score, Sound, Span, Technique,
+    Clef, Duration, Instrument, Measure, Note, NoteHead, NoteKind, Score, Sound, Span, Technique,
     TimeSignature, Track, Voice, MAX_FRET,
 };
 
@@ -323,6 +323,8 @@ struct PartSetup {
     tuning: Option<Vec<u8>>,
     /// The part has a percussion clef.
     has_percussion_clef: bool,
+    /// The first clef of the first staff, when it is one a voice can be written in.
+    clef: Option<Clef>,
 }
 
 fn scan_setup(part: Node) -> PartSetup {
@@ -369,10 +371,24 @@ fn scan_setup(part: Node) -> PartSetup {
         .descendants()
         .filter(|n| n.has_tag_name("clef"))
         .any(|n| child_text(n, "sign").as_deref() == Some("percussion"));
+    let clef = part
+        .descendants()
+        .filter(|n| n.has_tag_name("clef"))
+        .find(|n| n.attribute("number").is_none_or(|number| number == "1"))
+        .and_then(|n| {
+            let octave = child_text(n, "clef-octave-change");
+            match (child_text(n, "sign")?.as_str(), octave.as_deref()) {
+                ("G", None | Some("0")) => Some(Clef::Treble),
+                ("G", Some("-1")) => Some(Clef::Treble8vb),
+                ("F", None | Some("0")) => Some(Clef::Bass),
+                _ => None,
+            }
+        });
     PartSetup {
         tab_staff,
         tuning,
         has_percussion_clef,
+        clef,
     }
 }
 
@@ -391,14 +407,16 @@ fn pitch_of(step: &str, alter: i32, octave: i32) -> Option<i32> {
     (0..=127).contains(&pitch).then_some(pitch)
 }
 
-/// The sound of a part: a string instrument when its program, its name or a tablature staff says
-/// so, else the piano (pitched).
+/// The sound of a part: the instrument its program, its name or a tablature staff says, else the
+/// grand piano (pitched).
 fn sound_for(info: Option<&PartInfo>, has_tab: bool) -> Sound {
-    // A program the file names wins when it is a guitar, bass, violin or banjo. Other programs
-    // come after the name: some programs write the piano for every part.
+    // A program the file names wins when it has a sound of its own family here: a string
+    // instrument, a keyboard other than the grand piano, a synthesizer or a voice. The grand
+    // piano and the programs of no family come after the name: some programs write the piano
+    // for every part.
     let program = info.and_then(|i| i.midi_program);
-    if let Some(program) =
-        program.filter(|p| (24..=40).contains(p) || *p == Sound::Banjo.midi_program())
+    if let Some(program) = program
+        .filter(|p| (24..=40).contains(p) || Sound::from_midi_program(Some(*p)) != Sound::Piano)
     {
         return Sound::from_midi_program(Some(program));
     }
@@ -406,7 +424,9 @@ fn sound_for(info: Option<&PartInfo>, has_tab: bool) -> Sound {
         .and_then(|i| i.name.as_deref())
         .unwrap_or_default()
         .to_lowercase();
-    if name.contains("electric") && name.contains("guitar") {
+    if let Some(sound) = keyboard_or_voice_for(&name) {
+        sound
+    } else if name.contains("electric") && name.contains("guitar") {
         Instrument::ElectricGuitar.default_sound()
     } else if name.contains("bass") && !name.contains("bassoon") {
         Instrument::Bass.default_sound()
@@ -421,6 +441,83 @@ fn sound_for(info: Option<&PartInfo>, has_tab: bool) -> Sound {
     } else {
         Instrument::Piano.default_sound()
     }
+}
+
+/// Words of a part name that name a voice or a choir. "Bass" alone is left out: it is the bass
+/// guitar, unless the name also says "voice" or another word of this list.
+const VOICE_WORDS: [&str; 15] = [
+    "voice",
+    "voices",
+    "vocal",
+    "vocals",
+    "vox",
+    "choir",
+    "chorus",
+    "singer",
+    "soprano",
+    "mezzo",
+    "alto",
+    "contralto",
+    "tenor",
+    "baritone",
+    "basso",
+];
+
+/// Words that make a part an instrument even with a voice word in its name (an alto saxophone, a
+/// tenor banjo).
+const NOT_A_VOICE: [&str; 14] = [
+    "sax", "trombone", "recorder", "flute", "clarinet", "horn", "guitar", "banjo", "viol",
+    "ukulele", "oboe", "bassoon", "tuba", "drum",
+];
+
+/// The sound a part name gives to a keyboard, a synthesizer or a voice, if it names one.
+fn keyboard_or_voice_for(name: &str) -> Option<Sound> {
+    let words: Vec<&str> = name
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let has_word = |list: &[&str]| words.iter().any(|w| list.contains(w));
+    if has_word(&VOICE_WORDS) && !NOT_A_VOICE.iter().any(|w| name.contains(w)) {
+        return Some(if name.contains("synth") {
+            Sound::VoiceSynth
+        } else if name.contains("ooh") {
+            Sound::VoiceOohs
+        } else {
+            Instrument::Voice.default_sound()
+        });
+    }
+    if name.contains("organ") || name.contains("harmonium") || name.contains("accordion") {
+        return Some(if name.contains("church") || name.contains("pipe") {
+            Sound::OrganChurch
+        } else if name.contains("rock") {
+            Sound::OrganRock
+        } else if name.contains("harmonium") || name.contains("accordion") || name.contains("reed")
+        {
+            Sound::OrganReed
+        } else {
+            Instrument::Organ.default_sound()
+        });
+    }
+    if name.contains("synth") && !name.contains("bass") {
+        return Some(if name.contains("choir") {
+            Sound::SynthChoirPad
+        } else if name.contains("pad") {
+            Sound::SynthWarmPad
+        } else if name.contains("saw") {
+            Sound::SynthSawLead
+        } else {
+            Instrument::Synth.default_sound()
+        });
+    }
+    if name.contains("rhodes")
+        || name.contains("wurlitzer")
+        || name.contains("e-piano")
+        || name.contains("e. piano")
+        || (name.contains("electric") && name.contains("piano"))
+    {
+        return Some(Sound::PianoElectric);
+    }
+    None
 }
 
 /// One note of a measure as written in the file, before it is placed on the grid.
@@ -658,13 +755,17 @@ fn read_part(
         .and_then(|i| i.name.clone())
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| format!("Track {}", index + 1));
-    Ok(Some(Track {
+    let mut track = Track {
         name,
         instrument,
         sound,
         tuning,
         measures,
-    }))
+        clef: None,
+    };
+    // A voice keeps the clef the file writes it in, else gets the one that suits its range.
+    track.clef = track.fitting_clef().map(|fit| setup.clef.unwrap_or(fit));
+    Ok(Some(track))
 }
 
 /// The drum piece of an unpitched note: the `midi-unpitched` key of its instrument, else the piece

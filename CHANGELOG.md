@@ -23,7 +23,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `io-musicxml`: parts of `unpitched` notes are imported as drum tracks (the piece from the
   note's `instrument` and `midi-unpitched`, else from its place and head), and drum tracks are
   exported with a percussion clef, one instrument per piece and `unpitched` notes.
-
 - Sound packs can give a sound an SFZ instrument (`.sfz` and WAV samples) instead of a SoundFont,
   played by a small SFZ player in `audio-engine`: key and velocity ranges, round-robin, loops,
   amplitude envelope, volume, pan and tuning. Unsupported opcodes are ignored and reported on
@@ -41,6 +40,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/notation.md`.
 - A new instrument, the piano (sound `piano/grand`, General MIDI program 0), written on a grand
   staff. `Score::validate` checks its notes (pitches 0 to 127, no pitch twice in a beat).
+- New instruments: the organ (drawbar, rock, church and reed sounds, General MIDI 16 to 20) on a
+  grand staff, the synthesizer (square and saw leads, warm and choir pads, 80, 81, 89, 91) on a
+  treble staff, and the voice (choir aahs, voice oohs, synth voice, 52 to 54). The piano gets a
+  bright, an electric and an FM electric piano sound (1, 4, 5). See `docs/sounds.md`.
+- A voice track has a clef: treble, treble an octave down (tenor) or bass, chosen in the new
+  `Clef` menu (`Edit::SetClef`) and stored in the track (`clef`, left out for other instruments,
+  so older files load unchanged). A track that becomes a voice, and a voice read from MIDI, get
+  the clef of their range; MusicXML keeps the clef. See `docs/notation.md`.
+- MIDI and MusicXML import map organ, synthesizer, voice and other piano programs to these
+  sounds instead of the grand piano, and MusicXML part names such as "Organ", "Synth", "Vocals",
+  "Soprano", "Tenor" or "Bass voice" too ("Bass" alone stays the bass guitar). Exports write
+  their programs.
 - `score-model`: edits by pitch, `AddPitch`, `RemovePitch`, `MovePitch`, `SetPitchTied`, and a
   `pitches` span on `ClearNotes`; on a string track a pitch goes on a free string.
 - UI: a standard notation staff, with clefs, key signatures, accidentals, ledger lines, stems,
@@ -139,7 +150,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Sound packs: a pack that lists a drum kit is refused; drums always play the SoundFont's kits.
 - Opening a MIDI file that only has drums now opens it instead of saying it has no notes.
-
 - Import: MIDI and MusicXML parts that are not a string instrument (keyboards, winds, voices...)
   now become piano tracks that keep every note, instead of nylon guitar tracks that lost the notes
   no string could play. A MusicXML piano part is merged into one voice, held notes tied on.

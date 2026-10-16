@@ -454,6 +454,17 @@ describe('staves', () => {
     expect(system.measures[0]!.beams).toEqual([])
   })
 
+  it('should write a voice on one staff in its clef, and an organ on a grand staff', () => {
+    const voice = { ...piano, name: 'Voice', instrument: 'Voice' as const, sound: 'voice/aahs' as const, clef: 'bass' as const }
+    const system = layoutTab({ track: voice, width: 900 }).systems[0]!
+    expect(system.staves.map((s) => s.clef)).toEqual(['bass'])
+    expect(system.measures[0]!.staves[0]!.beats[0]!.heads.map((h) => h.pitch)).toEqual([48, 64])
+    const tenor = layoutTab({ track: { ...voice, clef: 'treble8vb' }, width: 900 }).systems[0]!
+    expect(tenor.staves.map((s) => s.clef)).toEqual(['treble8vb'])
+    const organ = { ...piano, instrument: 'Organ' as const, sound: 'organ/drawbar' as const }
+    expect(notationOf({ track: organ })).toEqual({ clefs: ['treble', 'bass'], hasTab: false })
+  })
+
   it('should split a chord between the staves at middle C, and rest where a staff has nothing', () => {
     const [upper, lower] = layoutTab({ track: piano, width: 900 }).systems[0]!.measures[0]!.staves
     expect(upper!.beats[0]!.heads.map((h) => h.pitch)).toEqual([64])

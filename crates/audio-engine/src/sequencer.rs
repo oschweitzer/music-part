@@ -425,6 +425,7 @@ mod tests {
                     },
                     voices: vec![Voice { beats }],
                 }],
+                clef: None,
             }],
         }
     }

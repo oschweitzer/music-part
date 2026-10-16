@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use score_model::{Instrument, Note, Score, Sound, Technique, GUITAR_STANDARD};
+use score_model::{Clef, Instrument, Note, Score, Sound, Technique, GUITAR_STANDARD};
 
 use super::*;
 
@@ -465,6 +465,90 @@ fn the_midi_program_picks_the_closest_sound() {
     assert_eq!(ok(&with_program(1)).score.tracks[0].sound, Sound::Piano);
     let named_guitar = with_program(1).replace("<part-name>Part<", "<part-name>Guitar<");
     assert_eq!(ok(&named_guitar).score.tracks[0].sound, Sound::GuitarNylon);
+}
+
+#[test]
+fn keyboard_synth_and_voice_programs_win_over_the_part_name() {
+    let notes = pitched("C", 4, 8, "");
+    let with_program = |program: u8| {
+        score_xml("Part", FOUR_FOUR, &[&notes]).replace(
+            "<part-name>Part</part-name>",
+            &format!("<part-name>Part</part-name><midi-instrument id=\"i1\"><midi-program>{program}</midi-program></midi-instrument>"),
+        )
+    };
+    // Counted from 1 in the file.
+    assert_eq!(
+        ok(&with_program(5)).score.tracks[0].sound,
+        Sound::PianoElectric
+    );
+    assert_eq!(
+        ok(&with_program(20)).score.tracks[0].sound,
+        Sound::OrganChurch
+    );
+    assert_eq!(
+        ok(&with_program(82)).score.tracks[0].sound,
+        Sound::SynthSawLead
+    );
+    assert_eq!(
+        ok(&with_program(53)).score.tracks[0].sound,
+        Sound::VoiceAahs
+    );
+}
+
+#[test]
+fn part_names_find_voices_organs_synthesizers_and_electric_pianos() {
+    let notes = pitched("C", 4, 8, "");
+    let sound_of = |name: &str| ok(&score_xml(name, FOUR_FOUR, &[&notes])).score.tracks[0].sound;
+    for name in [
+        "Voice",
+        "Vocals",
+        "Soprano",
+        "Alto",
+        "Tenor",
+        "Bass Voice",
+        "Baritone",
+        "Choir",
+        "Lead vocal",
+    ] {
+        assert_eq!(sound_of(name), Sound::VoiceAahs, "{name}");
+    }
+    assert_eq!(sound_of("Synth Voice"), Sound::VoiceSynth);
+    // "Bass" alone stays the bass guitar, and a saxophone is no singer.
+    assert_eq!(sound_of("Bass"), Sound::BassFinger);
+    assert_eq!(sound_of("Alto Saxophone"), Sound::Piano);
+    assert_eq!(sound_of("Tenor Banjo"), Sound::Banjo);
+    assert_eq!(sound_of("Organ"), Sound::OrganDrawbar);
+    assert_eq!(sound_of("Church Organ"), Sound::OrganChurch);
+    assert_eq!(sound_of("Accordion"), Sound::OrganReed);
+    assert_eq!(sound_of("Synthesizer"), Sound::SynthSquareLead);
+    assert_eq!(sound_of("Synth Pad"), Sound::SynthWarmPad);
+    assert_eq!(sound_of("Synth Bass"), Sound::BassFinger);
+    assert_eq!(sound_of("Electric Piano"), Sound::PianoElectric);
+    assert_eq!(sound_of("Piano"), Sound::Piano);
+}
+
+#[test]
+fn a_voice_takes_the_clef_of_the_file_else_the_clef_of_its_range() {
+    let low = [pitched("C", 3, 4, ""), pitched("G", 2, 4, "")].concat();
+    let clef_of = |xml: String| ok(&xml).score.tracks[0].clef;
+    assert_eq!(
+        clef_of(score_xml("Voice", FOUR_FOUR, &[&low])),
+        Some(Clef::Bass)
+    );
+    let tenor = four_four_with(
+        "<clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>",
+    );
+    assert_eq!(
+        clef_of(score_xml("Voice", &tenor, &[&low])),
+        Some(Clef::Treble8vb)
+    );
+    let treble = four_four_with("<clef><sign>G</sign><line>2</line></clef>");
+    assert_eq!(
+        clef_of(score_xml("Voice", &treble, &[&low])),
+        Some(Clef::Treble)
+    );
+    // Only a voice has a clef of its own.
+    assert_eq!(clef_of(score_xml("Organ", &treble, &[&low])), None);
 }
 
 #[test]

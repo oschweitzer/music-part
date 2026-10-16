@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { NoteValue } from './score-types'
 import {
   clefsFor,
+  clefsOf,
   engraveMeasure,
   keySignatureGlyphs,
   pitchAtPosition,
@@ -62,6 +63,20 @@ describe('pitches on a staff', () => {
     expect(clefsFor('Bass')).toEqual(['bass8vb'])
     expect(staffPosition({ pitch: 52, clef: 'treble8vb' })).toBe(0)
     expect(clefsFor('Piano')).toEqual(['treble', 'bass'])
+  })
+
+  it('should write an organ on a grand staff, a synthesizer on a treble staff', () => {
+    expect(clefsFor('Organ')).toEqual(['treble', 'bass'])
+    expect(clefsFor('Synth')).toEqual(['treble'])
+  })
+
+  it('should write a voice in the clef its track chose, treble when it says none', () => {
+    expect(clefsOf({ instrument: 'Voice', clef: 'bass' })).toEqual(['bass'])
+    expect(clefsOf({ instrument: 'Voice', clef: 'treble8vb' })).toEqual(['treble8vb'])
+    expect(clefsOf({ instrument: 'Voice' })).toEqual(['treble'])
+    expect(clefsOf({ instrument: 'Piano' })).toEqual(['treble', 'bass'])
+    // A tenor's middle C is written in the third space, an octave above how it sounds.
+    expect(staffPosition({ pitch: 60, clef: 'treble8vb' })).toBe(5)
   })
 
   it('should find back the pitch of a line or space, and its y', () => {

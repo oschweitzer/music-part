@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drum_track_takes_the_pieces_the_ui_sends() {
+    fn a_drum_track_takes_the_pieces_the_ui_sends_and_no_clef() {
         let (_app, window) = app();
         let add = json!({ "type": "addTrack", "instrument": "Drums", "sound": "drums/jazz" });
         invoke(&window, "edit_score", json!({ "edit": add })).unwrap();
@@ -417,6 +417,33 @@ mod tests {
                 { "piece": 42, "technique": null, "tied": false }
             ])
         );
+        let no_clef = json!({ "type": "setClef", "track": 2, "clef": "bass" });
+        let error = invoke(&window, "edit_score", json!({ "edit": no_clef })).unwrap_err();
+        assert!(error.as_str().unwrap().contains("only a voice"), "{error}");
+    }
+
+    #[test]
+    fn a_voice_track_takes_the_clef_the_ui_sends_and_an_organ_refuses_it() {
+        let (_app, window) = app();
+        for instrument in ["Voice", "Organ"] {
+            let add = json!({ "type": "addTrack", "instrument": instrument });
+            invoke(&window, "edit_score", json!({ "edit": add })).unwrap();
+        }
+        let clef = json!({ "type": "setClef", "track": 2, "clef": "treble8vb" });
+        let state = invoke(&window, "edit_score", json!({ "edit": clef })).unwrap();
+
+        let voice = &state["score"]["tracks"][2];
+        assert_eq!(
+            (&voice["sound"], &voice["clef"]),
+            (&json!("voice/aahs"), &json!("treble8vb"))
+        );
+        let organ = &state["score"]["tracks"][3];
+        assert_eq!(organ["sound"], json!("organ/drawbar"));
+        assert!(organ.get("clef").is_none(), "{organ}");
+
+        let refused = json!({ "type": "setClef", "track": 3, "clef": "bass" });
+        let error = invoke(&window, "edit_score", json!({ "edit": refused })).unwrap_err();
+        assert!(error.as_str().unwrap().contains("only a voice"), "{error}");
     }
 
     #[test]
