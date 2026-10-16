@@ -100,9 +100,10 @@ fn edit_score(
     edit: Edit,
     document: State<SharedDocument>,
     audio: State<AudioController>,
+    packs: State<FoundPacks>,
 ) -> Result<DocumentState, String> {
     let mut document = locked(&document);
-    let state = service::edit_score(&mut document, &edit)?;
+    let state = service::edit_score(&mut document, &edit, &packs)?;
     sync_audio(&document, &audio);
     Ok(state)
 }
@@ -580,7 +581,7 @@ mod tests {
         assert_eq!(nylon["source"], "https://example.org");
         assert_eq!(
             nylon["sounds"][0],
-            json!({ "sound": "guitar/nylon", "firstKey": 40, "lastKey": 88 })
+            json!({ "sound": "guitar/nylon", "firstKey": 40, "lastKey": 88, "name": null, "program": null })
         );
         assert!(packs["refused"][0]["folder"]
             .as_str()
@@ -588,6 +589,55 @@ mod tests {
             .ends_with("broken"));
         assert!(!packs["refused"][0]["reason"].as_str().unwrap().is_empty());
         assert!(packs["userFolder"].as_str().unwrap().ends_with("user"));
+    }
+
+    /// An app whose only pack declares the new sound `guitar/twelve-string`.
+    fn app_with_a_new_sound(folder: &str) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/tauri-tests")
+            .join(folder);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("twelve")).unwrap();
+        std::fs::write(
+            root.join("twelve").join("pack.json"),
+            r#"{ "format": 1, "id": "twelve", "name": "Twelve", "author": "Me", "licence": "CC0-1.0",
+                "sounds": [{ "sound": "guitar/twelve-string", "name": "Twelve-string", "program": 25,
+                             "file": "t.sfz", "firstKey": 40, "lastKey": 88 }] }"#,
+        )
+        .unwrap();
+        app_with_packs(FoundPacks::discover(std::slice::from_ref(&root), None))
+    }
+
+    #[test]
+    fn the_sound_packs_list_the_new_sounds_with_their_name_and_program() {
+        let (_app, window) = app_with_a_new_sound("ipc-new-sound-list");
+        let packs = invoke(&window, "sound_packs", json!({})).unwrap();
+        assert_eq!(
+            packs["packs"][0]["sounds"][0],
+            json!({ "sound": "guitar/twelve-string", "firstKey": 40, "lastKey": 88,
+                    "name": "Twelve-string", "program": 25 })
+        );
+    }
+
+    #[test]
+    fn a_track_is_given_a_sound_a_pack_declares_and_keeps_its_fallback_program() {
+        let (_app, window) = app_with_a_new_sound("ipc-new-sound-set");
+        let edit = json!({ "type": "setSound", "track": 0, "sound": "guitar/twelve-string" });
+        let state = invoke(&window, "edit_score", json!({ "edit": edit })).unwrap();
+        let track = &state["score"]["tracks"][0];
+        assert_eq!(
+            (&track["sound"], &track["fallback_program"]),
+            (&json!("guitar/twelve-string"), &json!(25))
+        );
+
+        let unknown = json!({ "type": "setSound", "track": 0, "sound": "guitar/unknown" });
+        let error = invoke(&window, "edit_score", json!({ "edit": unknown })).unwrap_err();
+        assert_eq!(
+            error,
+            json!("no sound pack declares the sound \"guitar/unknown\"")
+        );
+        let kit = json!({ "type": "setSound", "track": 0, "sound": "drums/mine" });
+        assert!(invoke(&window, "edit_score", json!({ "edit": kit })).is_err());
     }
 
     #[test]

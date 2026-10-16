@@ -9,6 +9,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Sound packs can declare new sounds of an existing instrument (a twelve-string guitar as
+  `"guitar/twelve-string"`), with a name and the General MIDI program that stands in for them.
+  The Sound and `+ Track` menus list them after the built-in sounds, and the `Sounds` panel marks
+  them as new. Drum kits stay the built-in ones. See `docs/sound-packs.md`.
+- `.mpart`: a track with a pack's sound records that program as `fallback_program`, so a score
+  opened where the pack is missing still loads and plays it, and the Sound menu shows the sound as
+  "(pack missing)". MIDI and MusicXML exports write that program. Older files load unchanged and
+  files with built-in sounds are written as before.
+
 - Drums: a new instrument whose notes are the pieces of a kit (General MIDI percussion keys 35 to
   81), written on a percussion staff (x heads for cymbals and hi-hats, stems up for the hands and
   down for the feet) and played on MIDI channel 10. Six kits: standard, room, power, electronic,

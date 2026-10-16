@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::document::{Document, DocumentState};
 use crate::files;
-use audio_engine::{pack, PackError, PackFailure, SoundPack};
+use audio_engine::{pack, DeclaredSound, PackError, PackFailure, SoundPack};
 use score_model::{blank_score, demo_score, Edit, Sound};
 
 /// A document that was just opened, with what the UI should tell the user about it.
@@ -104,9 +104,59 @@ pub fn export_file(
     Ok(target.display().to_string())
 }
 
-pub fn edit_score(document: &mut Document, edit: &Edit) -> Result<DocumentState, String> {
-    document.edit(edit).map_err(|e| e.to_string())?;
+/// Applies an edit. A sound that is not built in must be one a pack found at start declares (or
+/// the sound the track already has, whose pack may be missing); the track then records the
+/// General MIDI program the pack declared, so the score still plays where the pack is not
+/// installed.
+pub fn edit_score(
+    document: &mut Document,
+    edit: &Edit,
+    packs: &FoundPacks,
+) -> Result<DocumentState, String> {
+    let edit = with_fallback_program(document, edit, packs)?;
+    document.edit(&edit).map_err(|e| e.to_string())?;
     Ok(document.state())
+}
+
+/// `edit` with the fallback program of a pack's sound filled in from the pack that declares it.
+fn with_fallback_program(
+    document: &Document,
+    edit: &Edit,
+    packs: &FoundPacks,
+) -> Result<Edit, String> {
+    let (sound, track) = match edit {
+        Edit::SetSound { sound, track, .. } => (*sound, Some(*track)),
+        Edit::AddTrack {
+            sound: Some(sound), ..
+        } => (*sound, None),
+        _ => return Ok(edit.clone()),
+    };
+    if sound.is_built_in() {
+        return Ok(edit.clone());
+    }
+    let declared = packs.declared();
+    let program = match declared.iter().find(|d| d.sound == sound) {
+        Some(declared) => Some(declared.program),
+        None => {
+            // Choosing again the sound of a track whose pack is missing keeps what it has.
+            let current = track.and_then(|t| document.score().tracks.get(t));
+            match current {
+                Some(current) if current.sound == sound => current.fallback_program,
+                _ => return Err(format!("no sound pack declares the sound \"{sound}\"")),
+            }
+        }
+    };
+    let mut edit = edit.clone();
+    match &mut edit {
+        Edit::SetSound {
+            fallback_program, ..
+        }
+        | Edit::AddTrack {
+            fallback_program, ..
+        } => *fallback_program = program,
+        _ => {}
+    }
+    Ok(edit)
 }
 
 pub fn undo(document: &mut Document) -> DocumentState {
@@ -140,6 +190,11 @@ impl FoundPacks {
             refused,
             user_folder,
         }
+    }
+
+    /// The new sounds the packs declare: with the built-in table, the sounds a track can be given.
+    pub fn declared(&self) -> Vec<DeclaredSound> {
+        pack::declared_sounds(&self.packs)
     }
 }
 
@@ -177,6 +232,10 @@ pub struct PackSoundInfo {
     pub sound: Sound,
     pub first_key: u8,
     pub last_key: u8,
+    /// For a new sound the pack declares, its name; `None` for a sound of the built-in table.
+    pub name: Option<String>,
+    /// For a new sound, the General MIDI program that plays it without the pack.
+    pub program: Option<u8>,
 }
 
 /// A pack folder, or one file of a pack, that could not be used, and why.
@@ -214,6 +273,8 @@ pub fn sound_packs(found: &FoundPacks, failures: &[PackFailure]) -> SoundPacks {
                         sound: s.sound,
                         first_key: s.first_key,
                         last_key: s.last_key,
+                        name: s.name.clone(),
+                        program: s.program,
                     })
                     .collect(),
             }
@@ -265,7 +326,12 @@ mod tests {
     #[test]
     fn a_new_document_replaces_the_current_one_and_is_clean() {
         let mut document = demo();
-        edit_score(&mut document, &Edit::SetTempo { bpm: 80 }).unwrap();
+        edit_score(
+            &mut document,
+            &Edit::SetTempo { bpm: 80 },
+            &FoundPacks::default(),
+        )
+        .unwrap();
         let state = new_document(&mut document);
 
         assert_eq!(state.score.title, "Untitled");
@@ -275,7 +341,12 @@ mod tests {
     #[test]
     fn a_refused_edit_comes_back_as_a_readable_message() {
         let mut document = demo();
-        let error = edit_score(&mut document, &Edit::SetTempo { bpm: 0 }).unwrap_err();
+        let error = edit_score(
+            &mut document,
+            &Edit::SetTempo { bpm: 0 },
+            &FoundPacks::default(),
+        )
+        .unwrap_err();
         assert_eq!(error, "the tempo must be between 1 and 999 bpm");
     }
 
@@ -295,7 +366,12 @@ mod tests {
             Some(format!("{path}.mpart").as_str())
         );
 
-        edit_score(&mut document, &Edit::SetTempo { bpm: 77 }).unwrap();
+        edit_score(
+            &mut document,
+            &Edit::SetTempo { bpm: 77 },
+            &FoundPacks::default(),
+        )
+        .unwrap();
         assert!(document.state().is_dirty);
         assert!(
             !save_file(&mut document, None).unwrap().is_dirty,
@@ -315,6 +391,7 @@ mod tests {
                 string: 1,
                 fret: 12,
             },
+            &FoundPacks::default(),
         )
         .unwrap();
         let path = scratch("service-roundtrip")
@@ -379,7 +456,7 @@ mod tests {
         let found = FoundPacks::discover(std::slice::from_ref(&root), None);
         let failure = PackFailure {
             pack: "nylon".into(),
-            sound: Sound::GuitarSteel,
+            sound: Sound::GUITAR_STEEL,
             error: PackError {
                 dir: root.join("nylon"),
                 reason: "steel.sf2: missing".into(),
@@ -389,8 +466,79 @@ mod tests {
         let packs = sound_packs(&found, &[failure]);
 
         let sounds: Vec<Sound> = packs.packs[0].sounds.iter().map(|s| s.sound).collect();
-        assert_eq!(sounds, [Sound::GuitarNylon]);
+        assert_eq!(sounds, [Sound::GUITAR_NYLON]);
         assert_eq!(packs.refused[0].reason, "steel.sf2: missing");
+    }
+
+    const TWELVE: &str = r#"{ "format": 1, "id": "twelve", "name": "Twelve", "author": "Me",
+        "licence": "CC0-1.0", "sounds": [
+            { "sound": "guitar/twelve-string", "name": "Twelve-string", "program": 25,
+              "file": "twelve.sfz", "firstKey": 40, "lastKey": 88 }
+        ] }"#;
+
+    fn twelve_string() -> Sound {
+        Sound::parse("guitar/twelve-string").unwrap()
+    }
+
+    fn set_twelve_string() -> Edit {
+        Edit::SetSound {
+            track: 0,
+            sound: twelve_string(),
+            fallback_program: None,
+        }
+    }
+
+    #[test]
+    fn a_new_sound_of_a_pack_is_listed_with_its_name_and_program() {
+        let root = scratch("service-new-sound");
+        write_pack(&root, "twelve", TWELVE);
+        let found = FoundPacks::discover(std::slice::from_ref(&root), None);
+
+        let sound = &sound_packs(&found, &[]).packs[0].sounds[0];
+
+        assert_eq!(sound.sound, twelve_string());
+        assert_eq!(
+            (sound.name.as_deref(), sound.program),
+            (Some("Twelve-string"), Some(25))
+        );
+    }
+
+    #[test]
+    fn a_track_given_a_pack_sound_records_the_program_the_pack_declares() {
+        let root = scratch("service-set-new-sound");
+        write_pack(&root, "twelve", TWELVE);
+        let found = FoundPacks::discover(std::slice::from_ref(&root), None);
+        let mut document = demo();
+
+        let state = edit_score(&mut document, &set_twelve_string(), &found).unwrap();
+
+        let track = &state.score.tracks[0];
+        assert_eq!(
+            (track.sound, track.fallback_program),
+            (twelve_string(), Some(25))
+        );
+    }
+
+    #[test]
+    fn a_sound_no_pack_declares_is_refused_unless_the_track_already_has_it() {
+        let mut document = demo();
+        let none = FoundPacks::default();
+        let error = edit_score(&mut document, &set_twelve_string(), &none).unwrap_err();
+        assert!(error.contains("no sound pack declares"), "{error}");
+        let add = Edit::AddTrack {
+            instrument: score_model::Instrument::Guitar,
+            sound: Some(twelve_string()),
+            fallback_program: Some(25),
+        };
+        assert!(edit_score(&mut document, &add, &none).is_err());
+
+        // A score made with the pack, opened without it.
+        let mut score = demo_score();
+        score.tracks[0].sound = twelve_string();
+        score.tracks[0].fallback_program = Some(25);
+        let mut document = Document::new(score, None);
+        let state = edit_score(&mut document, &set_twelve_string(), &none).unwrap();
+        assert_eq!(state.score.tracks[0].fallback_program, Some(25));
     }
 
     #[test]

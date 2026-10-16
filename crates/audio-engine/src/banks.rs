@@ -328,27 +328,27 @@ mod tests {
         let mut banks = PackBanks::new(vec![pack(
             &root,
             "two",
-            &[Sound::GuitarNylon, Sound::BassFinger],
+            &[Sound::GUITAR_NYLON, Sound::BASS_FINGER],
             false,
         )]);
 
-        let changes = banks.update(&score_with(&[Sound::GuitarNylon, Sound::GuitarSteel]));
+        let changes = banks.update(&score_with(&[Sound::GUITAR_NYLON, Sound::GUITAR_STEEL]));
 
-        assert_eq!(kinds(&changes), [('+', Sound::GuitarNylon)]);
-        assert_eq!(banks.loaded().collect::<Vec<_>>(), [Sound::GuitarNylon]);
+        assert_eq!(kinds(&changes), [('+', Sound::GUITAR_NYLON)]);
+        assert_eq!(banks.loaded().collect::<Vec<_>>(), [Sound::GUITAR_NYLON]);
     }
 
     #[test]
     fn a_bank_is_read_once_and_removed_when_no_track_uses_it() {
         let root = temp_dir("once");
-        let mut banks = PackBanks::new(vec![pack(&root, "nylon", &[Sound::GuitarNylon], false)]);
-        let nylon = score_with(&[Sound::GuitarNylon, Sound::GuitarNylon]);
+        let mut banks = PackBanks::new(vec![pack(&root, "nylon", &[Sound::GUITAR_NYLON], false)]);
+        let nylon = score_with(&[Sound::GUITAR_NYLON, Sound::GUITAR_NYLON]);
 
-        assert_eq!(kinds(&banks.update(&nylon)), [('+', Sound::GuitarNylon)]);
+        assert_eq!(kinds(&banks.update(&nylon)), [('+', Sound::GUITAR_NYLON)]);
         assert!(banks.update(&nylon).is_empty());
         assert_eq!(
-            kinds(&banks.update(&score_with(&[Sound::GuitarSteel]))),
-            [('-', Sound::GuitarNylon)]
+            kinds(&banks.update(&score_with(&[Sound::GUITAR_STEEL]))),
+            [('-', Sound::GUITAR_NYLON)]
         );
         assert_eq!(banks.loaded().count(), 0);
     }
@@ -357,21 +357,21 @@ mod tests {
     fn a_broken_file_is_reported_once_and_the_previous_pack_plays_the_sound() {
         let root = temp_dir("broken");
         let mut banks = PackBanks::new(vec![
-            pack(&root, "good", &[Sound::GuitarNylon], false),
-            pack(&root, "broken", &[Sound::GuitarNylon], true),
+            pack(&root, "good", &[Sound::GUITAR_NYLON], false),
+            pack(&root, "broken", &[Sound::GUITAR_NYLON], true),
         ]);
-        let score = score_with(&[Sound::GuitarNylon]);
+        let score = score_with(&[Sound::GUITAR_NYLON]);
 
-        assert_eq!(kinds(&banks.update(&score)), [('+', Sound::GuitarNylon)]);
+        assert_eq!(kinds(&banks.update(&score)), [('+', Sound::GUITAR_NYLON)]);
         assert_eq!(banks.failures().len(), 1);
         assert_eq!(banks.failures()[0].pack, "broken");
         assert!(banks.failures()[0].error.reason.starts_with("s0.sf2"));
         assert_eq!(
-            banks.source(Sound::GuitarNylon).unwrap().0.manifest.id,
+            banks.source(Sound::GUITAR_NYLON).unwrap().0.manifest.id,
             "good"
         );
 
-        banks.update(&score_with(&[Sound::GuitarSteel]));
+        banks.update(&score_with(&[Sound::GUITAR_STEEL]));
         banks.update(&score);
         assert_eq!(banks.failures().len(), 1, "a broken file is not read again");
     }
@@ -379,13 +379,13 @@ mod tests {
     #[test]
     fn a_missing_file_leaves_the_sound_on_general_midi() {
         let root = temp_dir("missing");
-        let nylon = pack(&root, "nylon", &[Sound::GuitarNylon], false);
+        let nylon = pack(&root, "nylon", &[Sound::GUITAR_NYLON], false);
         fs::remove_file(nylon.dir.join("s0.sf2")).unwrap();
         let mut banks = PackBanks::new(vec![nylon]);
 
-        assert!(banks.update(&score_with(&[Sound::GuitarNylon])).is_empty());
+        assert!(banks.update(&score_with(&[Sound::GUITAR_NYLON])).is_empty());
         assert_eq!(banks.failures().len(), 1);
-        assert!(banks.source(Sound::GuitarNylon).is_none());
+        assert!(banks.source(Sound::GUITAR_NYLON).is_none());
     }
 
     #[test]
@@ -393,31 +393,35 @@ mod tests {
         let Some(mut player) = player() else { return };
         let root = temp_dir("any-order");
         let sounds = [
-            Sound::GuitarNylon,
-            Sound::BassFinger,
-            Sound::ElectricGuitarClean,
-            Sound::Banjo,
+            Sound::GUITAR_NYLON,
+            Sound::BASS_FINGER,
+            Sound::ELECTRIC_GUITAR_CLEAN,
+            Sound::BANJO,
         ];
         let mut banks = PackBanks::new(vec![pack(&root, "all", &sounds, false)]);
         let own = |sound: Sound| Some(preset("all", sound));
         let base = load(
             &mut self::player().unwrap(),
             &mut PackBanks::new(Vec::new()),
-            &score_with(&[Sound::GuitarSteel]),
+            &score_with(&[Sound::GUITAR_STEEL]),
         );
 
         // Each step adds some banks and removes others, so they are numbered in every order.
         let steps: [&[Sound]; 5] = [
-            &[Sound::GuitarNylon, Sound::BassFinger],
-            &[Sound::BassFinger, Sound::ElectricGuitarClean],
-            &[Sound::Banjo, Sound::ElectricGuitarClean, Sound::GuitarNylon],
-            &[Sound::GuitarNylon, Sound::GuitarSteel],
+            &[Sound::GUITAR_NYLON, Sound::BASS_FINGER],
+            &[Sound::BASS_FINGER, Sound::ELECTRIC_GUITAR_CLEAN],
+            &[
+                Sound::BANJO,
+                Sound::ELECTRIC_GUITAR_CLEAN,
+                Sound::GUITAR_NYLON,
+            ],
+            &[Sound::GUITAR_NYLON, Sound::GUITAR_STEEL],
             &sounds,
         ];
         for step in steps {
             let presets = load(&mut player, &mut banks, &score_with(step));
             for (sound, preset) in step.iter().zip(&presets) {
-                if *sound == Sound::GuitarSteel {
+                if *sound == Sound::GUITAR_STEEL {
                     assert_eq!(
                         preset, &base[0],
                         "a sound without a pack plays General MIDI"
@@ -430,10 +434,10 @@ mod tests {
             let mut wanted: Vec<Sound> = step
                 .iter()
                 .copied()
-                .filter(|s| *s != Sound::GuitarSteel)
+                .filter(|s| *s != Sound::GUITAR_STEEL)
                 .collect();
-            held.sort_by_key(|s| s.id());
-            wanted.sort_by_key(|s| s.id());
+            held.sort_by(|a, b| a.id().cmp(b.id()));
+            wanted.sort_by(|a, b| a.id().cmp(b.id()));
             assert_eq!(held, wanted, "the player holds only the banks in use");
         }
     }
@@ -442,36 +446,36 @@ mod tests {
     fn removing_a_bank_brings_back_the_sound_it_replaced() {
         let Some(mut player) = player() else { return };
         let root = temp_dir("replaced");
-        let first = pack(&root, "first", &[Sound::GuitarNylon], false);
-        let second = pack(&root, "second", &[Sound::GuitarNylon], false);
-        let score = score_with(&[Sound::GuitarNylon]);
+        let first = pack(&root, "first", &[Sound::GUITAR_NYLON], false);
+        let second = pack(&root, "second", &[Sound::GUITAR_NYLON], false);
+        let score = score_with(&[Sound::GUITAR_NYLON]);
         player.load_score(&score);
         let general_midi = player.preset_of_track(0);
         let font = |pack: &SoundPack| read_bank(pack, &pack.manifest.sounds[0]).unwrap();
 
         player
-            .add_bank_font(Sound::GuitarNylon, font(&first), 0..=127)
+            .add_bank_font(Sound::GUITAR_NYLON, font(&first), 0..=127)
             .unwrap();
         player
-            .add_bank_font(Sound::GuitarNylon, font(&second), 0..=127)
+            .add_bank_font(Sound::GUITAR_NYLON, font(&second), 0..=127)
             .unwrap();
         player.load_score(&score);
         assert_eq!(
             player.preset_of_track(0),
-            Some(preset("second", Sound::GuitarNylon))
+            Some(preset("second", Sound::GUITAR_NYLON))
         );
 
-        assert!(player.remove_bank(Sound::GuitarNylon).is_some());
+        assert!(player.remove_bank(Sound::GUITAR_NYLON).is_some());
         player.load_score(&score);
         assert_eq!(
             player.preset_of_track(0),
-            Some(preset("first", Sound::GuitarNylon))
+            Some(preset("first", Sound::GUITAR_NYLON))
         );
 
-        assert!(player.remove_bank(Sound::GuitarNylon).is_some());
+        assert!(player.remove_bank(Sound::GUITAR_NYLON).is_some());
         player.load_score(&score);
         assert_eq!(player.preset_of_track(0), general_midi);
-        assert!(player.remove_bank(Sound::GuitarNylon).is_none());
+        assert!(player.remove_bank(Sound::GUITAR_NYLON).is_none());
     }
 
     #[test]
@@ -480,10 +484,10 @@ mod tests {
             return;
         };
         let root = temp_dir("audible");
-        let mut banks = PackBanks::new(vec![pack(&root, "nylon", &[Sound::GuitarNylon], false)]);
+        let mut banks = PackBanks::new(vec![pack(&root, "nylon", &[Sound::GUITAR_NYLON], false)]);
         let render = |player: &mut Player, banks: &mut PackBanks| {
-            load(player, banks, &score_with(&[Sound::GuitarSteel]));
-            load(player, banks, &score_with(&[Sound::GuitarNylon]));
+            load(player, banks, &score_with(&[Sound::GUITAR_STEEL]));
+            load(player, banks, &score_with(&[Sound::GUITAR_NYLON]));
             player.play();
             let mut buf = vec![0.0f32; 2 * 11_025];
             player.render(&mut buf);
@@ -542,12 +546,12 @@ mod tests {
         let mut banks = PackBanks::new(vec![sfz_pack(
             &root,
             "sfz",
-            &[Sound::GuitarNylon, Sound::BassFinger],
+            &[Sound::GUITAR_NYLON, Sound::BASS_FINGER],
             false,
         )]);
-        let nylon = score_with(&[Sound::GuitarNylon]);
+        let nylon = score_with(&[Sound::GUITAR_NYLON]);
 
-        assert_eq!(kinds(&banks.update(&nylon)), [('~', Sound::GuitarNylon)]);
+        assert_eq!(kinds(&banks.update(&nylon)), [('~', Sound::GUITAR_NYLON)]);
         assert!(banks.update(&nylon).is_empty());
         assert_eq!(banks.notes().len(), 1);
         assert!(
@@ -556,10 +560,10 @@ mod tests {
             banks.notes()[0]
         );
         assert_eq!(
-            kinds(&banks.update(&score_with(&[Sound::BassFinger]))),
-            [('-', Sound::GuitarNylon), ('~', Sound::BassFinger)]
+            kinds(&banks.update(&score_with(&[Sound::BASS_FINGER]))),
+            [('-', Sound::GUITAR_NYLON), ('~', Sound::BASS_FINGER)]
         );
-        assert_eq!(banks.loaded().collect::<Vec<_>>(), [Sound::BassFinger]);
+        assert_eq!(banks.loaded().collect::<Vec<_>>(), [Sound::BASS_FINGER]);
     }
 
     #[test]
@@ -568,16 +572,16 @@ mod tests {
         let mut banks = PackBanks::new(vec![sfz_pack(
             &root,
             "sfz",
-            &[Sound::GuitarNylon, Sound::BassFinger],
+            &[Sound::GUITAR_NYLON, Sound::BASS_FINGER],
             false,
         )]);
         // Room for one instrument's samples, not two.
         banks.sfz_budget = 4410 * 4 + 100;
 
-        let both = banks.update(&score_with(&[Sound::GuitarNylon, Sound::BassFinger]));
-        assert_eq!(kinds(&both), [('~', Sound::GuitarNylon)]);
+        let both = banks.update(&score_with(&[Sound::GUITAR_NYLON, Sound::BASS_FINGER]));
+        assert_eq!(kinds(&both), [('~', Sound::GUITAR_NYLON)]);
         assert_eq!(banks.failures().len(), 1);
-        assert_eq!(banks.failures()[0].sound, Sound::BassFinger);
+        assert_eq!(banks.failures()[0].sound, Sound::BASS_FINGER);
         assert!(
             banks.failures()[0]
                 .error
@@ -592,13 +596,13 @@ mod tests {
     fn a_refused_sfz_is_a_failure_and_the_previous_pack_plays_the_sound() {
         let root = temp_dir("sfz-broken");
         let mut banks = PackBanks::new(vec![
-            pack(&root, "good", &[Sound::GuitarNylon], false),
-            sfz_pack(&root, "broken", &[Sound::GuitarNylon], true),
+            pack(&root, "good", &[Sound::GUITAR_NYLON], false),
+            sfz_pack(&root, "broken", &[Sound::GUITAR_NYLON], true),
         ]);
 
-        let changes = banks.update(&score_with(&[Sound::GuitarNylon]));
+        let changes = banks.update(&score_with(&[Sound::GUITAR_NYLON]));
 
-        assert_eq!(kinds(&changes), [('+', Sound::GuitarNylon)]);
+        assert_eq!(kinds(&changes), [('+', Sound::GUITAR_NYLON)]);
         assert_eq!(banks.failures().len(), 1);
         assert_eq!(banks.failures()[0].pack, "broken");
         assert!(
@@ -612,18 +616,18 @@ mod tests {
     fn the_latest_bank_of_a_sound_plays_it_soundfont_or_sfz() {
         let Some(mut player) = player() else { return };
         let root = temp_dir("sfz-latest");
-        let font_pack = pack(&root, "font", &[Sound::GuitarNylon], false);
-        let sfz_pack = sfz_pack(&root, "sfz", &[Sound::GuitarNylon], false);
+        let font_pack = pack(&root, "font", &[Sound::GUITAR_NYLON], false);
+        let sfz_pack = sfz_pack(&root, "sfz", &[Sound::GUITAR_NYLON], false);
         let font = || read_bank(&font_pack, &font_pack.manifest.sounds[0]).unwrap();
         let instrument = || {
             read_sfz(&sfz_pack, &sfz_pack.manifest.sounds[0], u64::MAX)
                 .unwrap()
                 .0
         };
-        let score = score_with(&[Sound::GuitarNylon]);
+        let score = score_with(&[Sound::GUITAR_NYLON]);
         player.load_score(&score);
         let general_midi = player.preset_of_track(0);
-        let from_font = Some(preset("font", Sound::GuitarNylon));
+        let from_font = Some(preset("font", Sound::GUITAR_NYLON));
         // A track the SFZ instrument plays keeps the General MIDI program on its channel, for
         // the notes it does not cover; the SoundFont bank is not on it.
         let playing = |player: &mut Player| {
@@ -632,10 +636,10 @@ mod tests {
         };
 
         player
-            .add_bank_font(Sound::GuitarNylon, font(), 0..=127)
+            .add_bank_font(Sound::GUITAR_NYLON, font(), 0..=127)
             .unwrap();
         player
-            .add_sfz(Sound::GuitarNylon, instrument(), 0..=127)
+            .add_sfz(Sound::GUITAR_NYLON, instrument(), 0..=127)
             .unwrap();
         assert_eq!(
             playing(&mut player),
@@ -643,16 +647,16 @@ mod tests {
             "the SFZ added last plays"
         );
         assert!(matches!(
-            player.remove_latest_bank(Sound::GuitarNylon),
+            player.remove_latest_bank(Sound::GUITAR_NYLON),
             Some(RemovedBank::Sfz(_))
         ));
         assert_eq!(playing(&mut player), from_font, "the SoundFont is back");
 
         player
-            .add_sfz(Sound::GuitarNylon, instrument(), 0..=127)
+            .add_sfz(Sound::GUITAR_NYLON, instrument(), 0..=127)
             .unwrap();
         player
-            .add_bank_font(Sound::GuitarNylon, font(), 0..=127)
+            .add_bank_font(Sound::GUITAR_NYLON, font(), 0..=127)
             .unwrap();
         assert_eq!(
             playing(&mut player),
@@ -660,7 +664,7 @@ mod tests {
             "the SoundFont added last plays"
         );
         assert!(matches!(
-            player.remove_latest_bank(Sound::GuitarNylon),
+            player.remove_latest_bank(Sound::GUITAR_NYLON),
             Some(RemovedBank::Font(_))
         ));
         assert_eq!(playing(&mut player), general_midi);
@@ -676,12 +680,62 @@ mod tests {
         let with_sfz = render(&mut player);
         assert!(with_sfz.iter().any(|s| s.abs() > 0.01), "the SFZ is heard");
         assert!(matches!(
-            player.remove_latest_bank(Sound::GuitarNylon),
+            player.remove_latest_bank(Sound::GUITAR_NYLON),
             Some(RemovedBank::Sfz(_))
         ));
         assert_ne!(render(&mut player), with_sfz);
-        assert!(player.remove_latest_bank(Sound::GuitarNylon).is_some());
-        assert!(player.remove_latest_bank(Sound::GuitarNylon).is_none());
+        assert!(player.remove_latest_bank(Sound::GUITAR_NYLON).is_some());
+        assert!(player.remove_latest_bank(Sound::GUITAR_NYLON).is_none());
         assert_eq!(playing(&mut player), general_midi);
+    }
+
+    /// A pack in `root` declaring the new sound `guitar/twelve-string`, played by General MIDI
+    /// program 25 (the steel guitar) where the pack is missing, with a tiny SoundFont.
+    fn twelve_string_pack(root: &Path) -> SoundPack {
+        let dir = root.join("twelve");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("twelve.sf2"), tiny_soundfont("Twelve test")).unwrap();
+        let manifest = r#"{ "format": 1, "id": "twelve", "name": "Twelve", "author": "Test",
+            "licence": "CC0-1.0", "sounds": [{ "sound": "guitar/twelve-string",
+            "name": "Twelve-string", "program": 25, "file": "twelve.sf2",
+            "firstKey": 0, "lastKey": 127 }] }"#;
+        SoundPack {
+            dir,
+            manifest: parse_manifest(manifest).unwrap(),
+        }
+    }
+
+    /// One track of the new sound, with the fallback program its pack declared.
+    fn twelve_string_score() -> Score {
+        let mut score = crate::player::tests::one_note_score();
+        score.tracks[0].sound = Sound::parse("guitar/twelve-string").unwrap();
+        score.tracks[0].fallback_program = Some(25);
+        score
+    }
+
+    #[test]
+    fn a_pack_declaring_a_new_sound_plays_the_tracks_using_it() {
+        let Some(mut player) = player() else { return };
+        let root = temp_dir("new-sound");
+        let mut banks = PackBanks::new(vec![twelve_string_pack(&root)]);
+        let score = twelve_string_score();
+
+        assert_eq!(
+            load(&mut player, &mut banks, &score),
+            [Some("Twelve test".to_string())]
+        );
+        assert_eq!(kinds(&banks.update(&score)), []);
+    }
+
+    #[test]
+    fn without_its_pack_a_new_sound_plays_the_fallback_program_of_its_track() {
+        let Some(mut player) = player() else { return };
+        let mut banks = PackBanks::new(Vec::new());
+        let steel = load(&mut player, &mut banks, &score_with(&[Sound::GUITAR_STEEL]));
+
+        assert_eq!(load(&mut player, &mut banks, &twelve_string_score()), steel);
+        let (_, bank, program) = player.bank_and_program_of_track(0).unwrap();
+        assert_eq!((bank, program), (0, 25));
+        assert!(banks.failures().is_empty(), "a missing pack is no failure");
     }
 }

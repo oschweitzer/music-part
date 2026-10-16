@@ -97,6 +97,8 @@ eight they belong to, the TR-808 to electronic, others to standard).
 - **Sound packs and SFZ banks never play drums.** A pack that lists a drum kit is refused
   ("drum kits cannot come from a sound pack yet"), and the player ignores any bank for a drum
   track: a pack records one instrument across its keys, while a kit maps every key to a piece.
+  Nor can a pack declare a new kit: `Sound::parse` refuses a `drums/...` id that is not one of
+  the six kits, in a manifest as in a score, so a drum track always has a kit of the SoundFont.
 
 ## Import and export
 

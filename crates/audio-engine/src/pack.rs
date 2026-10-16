@@ -1,5 +1,6 @@
 //! Sound packs: a folder holding a `pack.json` manifest and the sample files it lists. A pack
-//! gives recordings to one or more sounds of the built-in table (`score_model::Sound`); the app
+//! gives recordings to one or more sounds of the built-in table (`score_model::Sound`), or
+//! declares new sounds with a name and the General MIDI program that stands in for them; the app
 //! finds packs at start and plays every note a pack does not cover with the General MIDI sound.
 //! See `docs/sound-packs.md`.
 
@@ -44,8 +45,18 @@ pub struct Manifest {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackSound {
-    /// A sound of the built-in table, by its id (`"guitar/nylon"`).
+    /// A sound by its id: one of the built-in table (`"guitar/nylon"`), or a new sound the pack
+    /// declares (`"guitar/twelve-string"`), whose id starts with an instrument family.
     pub sound: Sound,
+    /// The name of a new sound, shown to the user within its instrument. Only for a new sound: a
+    /// built-in one keeps its name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The General MIDI program that plays a new sound where the pack is not installed, and the
+    /// notes outside `first_key` to `last_key`. Only for a new sound: a built-in one keeps its
+    /// program.
+    #[serde(default)]
+    pub program: Option<u8>,
     /// A SoundFont (`.sf2`) or an SFZ instrument (`.sfz`, see `docs/sfz.md`) in the pack folder,
     /// by its plain file name.
     pub file: String,
@@ -64,6 +75,48 @@ impl PackSound {
     pub fn is_sfz(&self) -> bool {
         self.file.to_ascii_lowercase().ends_with(".sfz")
     }
+
+    /// True for a sound the pack declares, which is not in the built-in table.
+    pub fn is_new(&self) -> bool {
+        !self.sound.is_built_in()
+    }
+}
+
+/// A sound a pack adds to the built-in table: what the UI lists, and what a track using it records
+/// so it still plays without the pack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredSound {
+    pub sound: Sound,
+    pub name: String,
+    /// The General MIDI program that plays it where the pack is missing.
+    pub program: u8,
+    /// Id of the pack that declares it.
+    pub pack: String,
+}
+
+/// The new sounds `packs` declare, in the order they first appear. When two packs declare the same
+/// sound, the later one (the one heard) gives its name and program.
+pub fn declared_sounds(packs: &[SoundPack]) -> Vec<DeclaredSound> {
+    let mut declared: Vec<DeclaredSound> = Vec::new();
+    for pack in packs {
+        for listed in &pack.manifest.sounds {
+            // `check` makes both present on a new sound.
+            let (Some(name), Some(program)) = (&listed.name, listed.program) else {
+                continue;
+            };
+            let entry = DeclaredSound {
+                sound: listed.sound,
+                name: name.clone(),
+                program,
+                pack: pack.manifest.id.clone(),
+            };
+            match declared.iter_mut().find(|d| d.sound == listed.sound) {
+                Some(earlier) => *earlier = entry,
+                None => declared.push(entry),
+            }
+        }
+    }
+    declared
 }
 
 /// A pack found on disk: its folder and its checked manifest.
@@ -284,6 +337,7 @@ fn check(manifest: &Manifest) -> Result<(), String> {
                 sound.sound.id()
             ));
         }
+        check_new_sound(sound)?;
         // A plain name keeps every file the pack opens inside its own folder.
         let is_plain_name = !sound.file.is_empty()
             && !sound.file.contains(['/', '\\', ':'])
@@ -312,6 +366,37 @@ fn check(manifest: &Manifest) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Longest name of a new sound, in characters: it fits in a menu.
+const MAX_SOUND_NAME_CHARS: usize = 40;
+
+/// A new sound has a name and a fallback program; a built-in one has neither, as it keeps its own.
+fn check_new_sound(sound: &PackSound) -> Result<(), String> {
+    let id = sound.sound.id();
+    if !sound.is_new() {
+        if sound.name.is_some() || sound.program.is_some() {
+            return Err(format!(
+                "{id} is a built-in sound: it keeps its own name and program"
+            ));
+        }
+        return Ok(());
+    }
+    let name = sound.name.as_deref().map(str::trim).unwrap_or_default();
+    if name.is_empty() || name.chars().count() > MAX_SOUND_NAME_CHARS {
+        return Err(format!(
+            "{id} is a new sound: it needs a name of 1 to {MAX_SOUND_NAME_CHARS} characters"
+        ));
+    }
+    match sound.program {
+        Some(program) if program <= score_model::MAX_PROGRAM => Ok(()),
+        Some(program) => Err(format!(
+            "{id}: program {program} is not a General MIDI program (0 to 127)"
+        )),
+        None => Err(format!(
+            "{id} is a new sound: it needs the General MIDI program that plays it without the pack"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -355,7 +440,7 @@ mod tests {
         let manifest = parse_manifest(NYLON).unwrap();
         assert_eq!(manifest.id, "test-nylon");
         assert_eq!(manifest.source, None);
-        assert_eq!(manifest.sounds[0].sound, Sound::GuitarNylon);
+        assert_eq!(manifest.sounds[0].sound, Sound::GUITAR_NYLON);
         assert_eq!(manifest.sounds[0].keys(), 29..=88);
     }
 
@@ -377,7 +462,8 @@ mod tests {
     #[test]
     fn a_manifest_with_a_wrong_field_is_refused() {
         let cases = [
-            with(r#""guitar/nylon""#, r#""guitar/banjo""#),
+            with(r#""guitar/nylon""#, r#""ukulele/soprano""#),
+            with(r#""guitar/nylon""#, r#""guitar/Nylon""#),
             with(r#""firstKey": 29"#, r#""firstKey": 90"#),
             with(r#""lastKey": 88"#, r#""lastKey": 128"#),
             with(r#""nylon.sf2""#, r#""nylon.wav""#),
@@ -406,6 +492,84 @@ mod tests {
     fn a_pack_for_a_drum_kit_is_refused() {
         let drums = NYLON.replace("guitar/nylon", "drums/standard");
         assert!(parse_manifest(&drums).unwrap_err().contains("drum kits"));
+        let new_kit = NYLON.replace(
+            r#""sound": "guitar/nylon""#,
+            r#""sound": "drums/my-kit", "name": "My kit", "program": 0"#,
+        );
+        assert!(parse_manifest(&new_kit).unwrap_err().contains("drum kit"));
+    }
+
+    /// The test pack declaring a new sound instead of the nylon guitar.
+    fn new_sound(fields: &str) -> String {
+        NYLON.replace(
+            r#""sound": "guitar/nylon""#,
+            &format!(r#""sound": "guitar/twelve-string"{fields}"#),
+        )
+    }
+
+    #[test]
+    fn a_manifest_declares_a_new_sound_with_its_name_and_fallback_program() {
+        let manifest =
+            parse_manifest(&new_sound(r#", "name": "Twelve-string", "program": 25"#)).unwrap();
+        let sound = &manifest.sounds[0];
+        assert!(sound.is_new());
+        assert_eq!(sound.sound.id(), "guitar/twelve-string");
+        assert_eq!(
+            (sound.name.as_deref(), sound.program),
+            (Some("Twelve-string"), Some(25))
+        );
+        assert!(!parse_manifest(NYLON).unwrap().sounds[0].is_new());
+    }
+
+    #[test]
+    fn a_new_sound_needs_a_name_and_a_program_and_a_built_in_one_has_neither() {
+        let long = "x".repeat(41);
+        for fields in [
+            String::new(),
+            r#", "name": "Twelve-string""#.to_string(),
+            r#", "program": 25"#.to_string(),
+            r#", "name": " ", "program": 25"#.to_string(),
+            format!(r#", "name": "{long}", "program": 25"#),
+            r#", "name": "Twelve-string", "program": 128"#.to_string(),
+        ] {
+            assert!(parse_manifest(&new_sound(&fields)).is_err(), "{fields}");
+        }
+        let renamed = NYLON.replace(
+            r#""sound": "guitar/nylon""#,
+            r#""sound": "guitar/nylon", "name": "Mine""#,
+        );
+        assert!(parse_manifest(&renamed)
+            .unwrap_err()
+            .contains("built-in sound"));
+    }
+
+    #[test]
+    fn the_later_pack_gives_the_name_and_program_of_a_sound_two_packs_declare() {
+        let pack = |id: &str, name: &str, program: u8| SoundPack {
+            dir: PathBuf::from(id),
+            manifest: parse_manifest(
+                &new_sound(&format!(r#", "name": "{name}", "program": {program}"#))
+                    .replace("test-nylon", id),
+            )
+            .unwrap(),
+        };
+        let packs = [
+            pack("first", "Twelve", 25),
+            SoundPack::read(&write_pack(&temp_dir("declared"), "nylon", NYLON)).unwrap(),
+            pack("second", "Twelve-string", 26),
+        ];
+
+        let declared = declared_sounds(&packs);
+
+        assert_eq!(
+            declared,
+            [DeclaredSound {
+                sound: Sound::parse("guitar/twelve-string").unwrap(),
+                name: "Twelve-string".into(),
+                program: 26,
+                pack: "second".into(),
+            }]
+        );
     }
 
     #[test]
@@ -496,12 +660,12 @@ mod tests {
         };
 
         assert_ne!(
-            render(Sound::GuitarNylon, true),
-            render(Sound::GuitarNylon, false)
+            render(Sound::GUITAR_NYLON, true),
+            render(Sound::GUITAR_NYLON, false)
         );
         assert_eq!(
-            render(Sound::GuitarSteel, true),
-            render(Sound::GuitarSteel, false)
+            render(Sound::GUITAR_STEEL, true),
+            render(Sound::GUITAR_STEEL, false)
         );
     }
 

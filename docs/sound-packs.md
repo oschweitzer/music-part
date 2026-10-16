@@ -2,8 +2,9 @@
 
 A sound pack gives recordings to one or more sounds of the built-in table (see
 [`sounds.md`](sounds.md)): a nylon guitar recorded from a real guitar instead of the General MIDI
-program. A pack is a folder, so adding one needs no code: drop the folder in the packs directory
-and restart the app.
+program. It can also declare new sounds of an existing instrument, such as a twelve-string guitar
+(see [New sounds](#new-sounds)). A pack is a folder, so adding one needs no code: drop the folder
+in the packs directory and restart the app.
 
 ## What a pack is
 
@@ -37,8 +38,11 @@ freepats-nylon-guitar/
 | `name`, `author`    | Shown to the user, not empty.                                                   |
 | `licence`           | SPDX identifier of the samples' licence (`CC0-1.0`, `CC-BY-4.0`...).            |
 | `source`            | Optional: where the samples come from.                                          |
-| `sounds[].sound`    | A sound id of the built-in table, such as `"bass/slap"`. Each one at most once. |
-|                     | Not a drum kit: a pack that lists one is refused (see [`drums.md`](drums.md)).  |
+| `sounds[].sound`    | A sound id of the built-in table, such as `"bass/slap"`, or a new sound of an   |
+|                     | instrument, such as `"guitar/twelve-string"`. Each one at most once. Not a drum |
+|                     | kit: a pack that lists one is refused (see [`drums.md`](drums.md)).             |
+| `sounds[].name`     | A new sound only: its name within its instrument, 1 to 40 characters.           |
+| `sounds[].program`  | A new sound only: the General MIDI program (0 to 127) that stands in for it.    |
 | `sounds[].file`     | A SoundFont (`.sf2`) or SFZ (`.sfz`) file in the pack folder, by its file name. |
 | `sounds[].firstKey` | First MIDI key the recordings cover.                                            |
 | `sounds[].lastKey`  | Last MIDI key the recordings cover.                                             |
@@ -48,6 +52,57 @@ reads a subset of the format and samples in WAV: see [`sfz.md`](sfz.md). Notes o
 to `lastKey` are played with the General MIDI program of the sound rather than left silent: the
 bass recording stops at A2, the higher notes come from the base SoundFont. A manifest with an
 unknown field, a file outside its folder or a key range that is not one is refused as a whole.
+
+## New sounds
+
+A pack can play a sound the built-in table does not have. Its id is `"<instrument>/<sound>"` like
+any other: the prefix must be an instrument of the app (`guitar`, `electric-guitar`, `bass`,
+`violin`, `banjo`, `piano`, `organ`, `synth` or `voice`), which decides the strings, the tuning and
+the notation of a track with that sound, and the rest is the sound's own name in kebab-case. The
+manifest gives it a `name` to show and the General MIDI `program` that stands in for it:
+
+```json
+{ "sound": "guitar/twelve-string", "name": "Twelve-string", "program": 25,
+  "file": "twelve-string.sfz", "firstKey": 40, "lastKey": 88 }
+```
+
+- The instrument is not a separate field: the id already names it, and a second field could only
+  disagree with it.
+- A built-in sound with a `name` or a `program` is refused: it keeps its own.
+- New drum kits are refused, like packs for the built-in kits: a pack records one instrument
+  across its keys, a kit a different piece on every key (see [`drums.md`](drums.md)).
+- When two packs declare the same new sound, the later one (the one heard) gives its name and
+  program.
+- The manifest `format` stays `1`. An older app refuses a pack declaring a new sound, on the
+  unknown `name` field: the pack is listed as not used, and the app starts anyway.
+
+The Sound menu of a track lists the new sounds of its instrument after the built-in ones, and so
+does the `+ Track` menu; the `Sounds` panel marks them as new. The app checks a new sound against
+the packs it found at start: `service::edit_score` refuses a sound no pack declares, and gives the
+edit the program the pack declared (`FoundPacks::declared`). `score-model` never sees the packs.
+
+### A score whose pack is missing
+
+A track with a pack's sound records the pack's program in the score, as `fallback_program`:
+
+```json
+{ "name": "Guitar", "instrument": "Guitar", "sound": "guitar/twelve-string", "fallback_program": 25, ... }
+```
+
+The field is written only for a pack's sound, so a file with built-in sounds is written exactly as
+before, and an older file (which has none) loads unchanged. Where the pack is not installed:
+
+- the score opens: `Score::validate` accepts any well-formed sound of the track's instrument;
+- the track plays the fallback program (`Track::midi_program`), and a file that names none (made
+  by hand) plays the default sound of the instrument;
+- the Sound menu shows the sound as "twelve-string (pack missing), plays General MIDI program 25",
+  and the `Sounds` panel says General MIDI plays it instead;
+- the MIDI and MusicXML exports write the fallback program, which imports back as the built-in
+  sound of that program.
+
+The program is stored with each track rather than looked up in the pack, so that the score sounds
+the same on any machine. A track keeps the program it was given: a pack that later declares
+another program changes the tracks given its sound from then on.
 
 ## Where the app looks
 
@@ -130,9 +185,8 @@ offered as a folder users add themselves.
 
 ## Limits and next steps
 
-- A pack can only give samples to the sounds of the built-in table; a new sound (a twelve-string
-  guitar) is still a change of `score-model`. Letting packs declare new sounds means a string
-  `Sound` checked against the loaded table, and a fallback for a score whose pack is missing.
+- A new sound belongs to an existing instrument: a pack cannot add an instrument (a ukulele with
+  its own strings and tuning), nor a drum kit.
 - SFZ files play their regions, round-robin, loops and envelope, but not yet key switches for
   articulations nor release samples; see [`sfz.md`](sfz.md).
 - Packs are found at start only: a pack added while the app runs shows up after a restart. The

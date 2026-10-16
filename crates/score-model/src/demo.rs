@@ -55,7 +55,8 @@ pub fn blank_score(title: &str) -> Score {
         tracks: vec![Track {
             name: "Guitar".into(),
             instrument: Instrument::Guitar,
-            sound: Sound::GuitarNylon,
+            sound: Sound::GUITAR_NYLON,
+            fallback_program: None,
             tuning: GUITAR_STANDARD.to_vec(),
             measures: (0..4).map(|_| measure(rests.clone())).collect(),
             clef: None,
@@ -153,7 +154,8 @@ pub fn demo_score() -> Score {
             Track {
                 name: "Guitar".into(),
                 instrument: Instrument::Guitar,
-                sound: Sound::GuitarNylon,
+                sound: Sound::GUITAR_NYLON,
+                fallback_program: None,
                 tuning: GUITAR_STANDARD.to_vec(),
                 measures: guitar_measures,
                 clef: None,
@@ -161,7 +163,8 @@ pub fn demo_score() -> Score {
             Track {
                 name: "Bass".into(),
                 instrument: Instrument::Bass,
-                sound: Sound::BassFinger,
+                sound: Sound::BASS_FINGER,
+                fallback_program: None,
                 tuning: BASS_STANDARD.to_vec(),
                 measures: bass_measures,
                 clef: None,

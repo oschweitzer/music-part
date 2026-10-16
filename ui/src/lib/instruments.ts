@@ -1,4 +1,4 @@
-import type { Instrument, SoundId, Track, TrackClef } from './score-types'
+import type { BuiltInSoundId, Instrument, SoundId, Track, TrackClef } from './score-types'
 
 /** Every instrument a track can have, in the order menus list them. */
 export const INSTRUMENTS: Instrument[] = ['Guitar', 'ElectricGuitar', 'Bass', 'Violin', 'Banjo', 'Piano', 'Organ', 'Synth', 'Voice', 'Drums']
@@ -53,7 +53,7 @@ export function instrumentLabel(instrument: Instrument): string {
 }
 
 /** A sound of an instrument, played with a General MIDI program. */
-export type SoundInfo = { id: SoundId; name: string; program: number; instrument: Instrument }
+export type SoundInfo = { id: BuiltInSoundId; name: string; program: number; instrument: Instrument }
 
 /**
  * Mirrors the sounds table of `crates/score-model/src/sound.rs`, the default sound of each
@@ -104,6 +104,46 @@ export function soundsOf(instrument: Instrument): SoundInfo[] {
 export function soundLabel(id: SoundId): string {
   const sound = SOUNDS.find((s) => s.id === id)
   return sound ? `${instrumentLabel(sound.instrument)}: ${sound.name}` : id
+}
+
+/** True for a sound of the built-in table, false for one a sound pack declares. */
+export function isBuiltInSound(id: SoundId): boolean {
+  return SOUNDS.some((s) => s.id === id)
+}
+
+/** The first part of the sound ids of each instrument, as `Instrument::sound_prefix` in `crates/score-model`. */
+const SOUND_PREFIXES: Record<Instrument, string> = {
+  Guitar: 'guitar',
+  ElectricGuitar: 'electric-guitar',
+  Bass: 'bass',
+  Violin: 'violin',
+  Banjo: 'banjo',
+  Piano: 'piano',
+  Organ: 'organ',
+  Synth: 'synth',
+  Voice: 'voice',
+  Drums: 'drums',
+}
+
+/** The instrument a sound id names before its slash, or null for an id of no instrument. */
+export function instrumentOfSound(id: SoundId): Instrument | null {
+  const prefix = id.slice(0, id.indexOf('/'))
+  return INSTRUMENTS.find((instrument) => SOUND_PREFIXES[instrument] === prefix) ?? null
+}
+
+/**
+ * The General MIDI program that plays a track when no pack does, as `Track::midi_program` in
+ * `crates/score-model`: the program of a built-in sound, else the fallback a pack declared, else
+ * the program of the default sound of the instrument.
+ */
+export function trackProgram(track: Pick<Track, 'instrument' | 'sound' | 'fallback_program'>): number {
+  return SOUNDS.find((s) => s.id === track.sound)?.program ?? track.fallback_program ?? soundsOf(track.instrument)[0]?.program ?? 0
+}
+
+/** A General MIDI program with the built-in sound it plays, if any: "General MIDI program 25 (Acoustic guitar: Steel strings)". */
+export function programLabel(program: number): string {
+  const sound = SOUNDS.find((s) => s.program === program && s.instrument !== 'Drums')
+  return `General MIDI program ${program}${sound ? ` (${soundLabel(sound.id)})` : ''}`
 }
 
 /** True for an instrument whose track chooses its clef (`Track.clef`): a voice. */

@@ -4,10 +4,11 @@
   import SoundsPanel from './components/SoundsPanel.svelte'
   import TabView from './components/TabView.svelte'
   import TrackRows from './components/TrackRows.svelte'
-  import { createDocumentApi, type ExportFormat } from './lib/document-api'
+  import { createDocumentApi, NO_SOUND_PACKS, type ExportFormat, type SoundPacks } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
-  import { CLEF_CHOICES, INSTRUMENTS, hasClefChoice, hasStrings, instrumentLabel, soundsOf } from './lib/instruments'
+  import { CLEF_CHOICES, INSTRUMENTS, hasClefChoice, hasStrings, instrumentLabel } from './lib/instruments'
+  import { soundChoices } from './lib/sound-packs'
   import { interpretKey } from './lib/keymap'
   import type { Instrument, SoundId, TrackClef } from './lib/score-types'
   import type { Selection } from './lib/selection'
@@ -36,6 +37,15 @@
   const editor = new Editor({ api, playback, prompts: createFilePrompts() })
 
   let theme = $state<Theme>(readTheme())
+
+  // The sounds the packs declare join the built-in ones in the Sound and "+ Track" menus.
+  let soundPacks = $state<SoundPacks>(NO_SOUND_PACKS)
+  api
+    .soundPacks()
+    .then((packs) => (soundPacks = packs))
+    .catch(() => {
+      // Without the list, the menus offer the built-in sounds; the Sounds panel says why.
+    })
 
   function cycleTheme() {
     theme = nextTheme(theme)
@@ -340,7 +350,7 @@
           />
         </label>
       {/if}
-      <SoundsPanel load={() => api.soundPacks()} sound={track?.sound ?? null} />
+      <SoundsPanel load={() => api.soundPacks()} {track} onloaded={(packs) => (soundPacks = packs)} />
       <button
         type="button"
         class="icon-button small theme-button"
@@ -423,7 +433,7 @@
             {#each INSTRUMENTS as instrument (instrument)}
               <div class="family" role="group" aria-label={instrumentLabel(instrument)}>
                 <span>{instrumentLabel(instrument)}</span>
-                {#each soundsOf(instrument) as sound (sound.id)}
+                {#each soundChoices({ instrument, packs: soundPacks.packs }) as sound (sound.id)}
                   <button
                     type="button"
                     class="sound"
@@ -464,11 +474,11 @@
               {/each}
             </select>
           </label>
-          <label class="track-field" title="How this track sounds, among the sounds of its instrument.">
+          <label class="track-field" title="How this track sounds, among the sounds of its instrument and those your sound packs add.">
             Sound
             <select value={track.sound} aria-label="Sound of this track" onchange={changeSound}>
-              {#each soundsOf(track.instrument) as sound (sound.id)}
-                <option value={sound.id}>{sound.name}</option>
+              {#each soundChoices({ instrument: track.instrument, packs: soundPacks.packs, track }) as sound (sound.id)}
+                <option value={sound.id} class={sound.kind}>{sound.name}</option>
               {/each}
             </select>
           </label>

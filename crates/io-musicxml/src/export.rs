@@ -70,7 +70,7 @@ fn write_score(out: &mut String, score: &Score) -> std::fmt::Result {
             }
         };
         // MusicXML counts programs from 1.
-        let program = track.sound.midi_program() + 1;
+        let program = track.midi_program() + 1;
         if track.sound.is_drum_kit() {
             write_drum_part_info(out, track, index + 1, program)?;
             continue;
@@ -519,6 +519,25 @@ mod tests {
     }
 
     #[test]
+    fn a_pack_sound_is_written_with_its_fallback_program() {
+        let mut original = demo_score();
+        let edit = Edit::SetSound {
+            track: 0,
+            sound: Sound::parse("guitar/twelve-string").unwrap(),
+            fallback_program: Some(25),
+        };
+        apply_edit(&mut original, &edit).unwrap();
+
+        let xml = export_musicxml(&original);
+        assert!(xml.contains("<midi-program>26</midi-program>"), "{xml}");
+        // MusicXML only knows General MIDI: the track comes back as the steel guitar.
+        let mut expected = original.clone();
+        expected.tracks[0].sound = Sound::GUITAR_STEEL;
+        expected.tracks[0].fallback_program = None;
+        assert_same_music(&roundtrip(&original), &expected);
+    }
+
+    #[test]
     fn the_demo_survives_a_round_trip_exactly() {
         let original = demo_score();
         assert_same_music(&roundtrip(&original), &original);
@@ -533,6 +552,7 @@ mod tests {
                 &Edit::AddTrack {
                     instrument: sound.instrument(),
                     sound: Some(sound),
+                    fallback_program: None,
                 },
             )
             .unwrap();
@@ -571,7 +591,8 @@ mod tests {
             let edits = [
                 Edit::AddTrack {
                     instrument: Instrument::Voice,
-                    sound: Some(Sound::VoiceOohs),
+                    sound: Some(Sound::VOICE_OOHS),
+                    fallback_program: None,
                 },
                 Edit::SetClef {
                     track: score.tracks.len(),
@@ -716,6 +737,7 @@ mod tests {
             Edit::AddTrack {
                 instrument: Instrument::Violin,
                 sound: None,
+                fallback_program: None,
             },
             Edit::SetTempo { bpm: 77 },
         ] {
@@ -801,7 +823,15 @@ mod tests {
             },
         )
         .unwrap();
-        apply_edit(&mut score, &Edit::SetSound { track: 0, sound }).unwrap();
+        apply_edit(
+            &mut score,
+            &Edit::SetSound {
+                track: 0,
+                sound,
+                fallback_program: None,
+            },
+        )
+        .unwrap();
         let pieces: Vec<u8> = score_model::DRUM_PIECES.collect();
         let measures = pieces.len().div_ceil(4);
         for at in score.tracks[0].measures.len()..measures {
@@ -838,7 +868,7 @@ mod tests {
 
     #[test]
     fn every_drum_piece_survives_a_round_trip() {
-        let original = every_piece(Sound::DrumsElectronic);
+        let original = every_piece(Sound::DRUMS_ELECTRONIC);
         let xml = export_musicxml(&original);
         assert!(xml.contains("<sign>percussion</sign>"));
         assert!(xml.contains("<midi-channel>10</midi-channel><midi-program>25</midi-program>"));
@@ -854,7 +884,7 @@ mod tests {
 
     #[test]
     fn drum_notes_are_read_back_from_their_place_when_no_instrument_says_which() {
-        let original = every_piece(Sound::DrumsStandard);
+        let original = every_piece(Sound::DRUMS_STANDARD);
         let xml = export_musicxml(&original);
         // Another program may write the place and head but no instrument.
         let without: String = xml
@@ -877,7 +907,7 @@ mod tests {
 
     #[test]
     fn a_beat_of_feet_only_has_its_stem_down() {
-        let mut score = every_piece(Sound::DrumsStandard);
+        let mut score = every_piece(Sound::DRUMS_STANDARD);
         // Beat 2 holds the kick (36) alone; add the hi-hat to beat 1, with the acoustic kick.
         apply_edit(
             &mut score,

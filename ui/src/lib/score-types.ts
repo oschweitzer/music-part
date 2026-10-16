@@ -6,8 +6,14 @@ export type Technique = 'HammerOn' | 'PullOff' | 'Slide' | 'Bend' | 'PalmMute' |
 
 export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo' | 'Piano' | 'Organ' | 'Synth' | 'Voice' | 'Drums'
 
-/** The id of a sound of an instrument, `"<instrument>/<sound>"` (see `SOUNDS` in `instruments.ts`). */
-export type SoundId =
+/**
+ * The id of a sound of an instrument, `"<instrument>/<sound>"`: a built-in sound, or one a sound
+ * pack declares, such as `"guitar/twelve-string"` (`Sound` in `crates/score-model`).
+ */
+export type SoundId = BuiltInSoundId | `${string}/${string}`
+
+/** The id of a sound of the built-in table (see `SOUNDS` in `instruments.ts`). */
+export type BuiltInSoundId =
   | 'guitar/nylon'
   | 'guitar/steel'
   | 'electric-guitar/clean'
@@ -84,8 +90,10 @@ export type Measure = { time_signature: TimeSignature; voices: Voice[] }
 export type Track = {
   name: string
   instrument: Instrument
-  /** One of the sounds of `instrument`. */
+  /** A sound of `instrument`: built in, or declared by a sound pack that may not be installed. */
   sound: SoundId
+  /** The General MIDI program that plays a pack's sound when its pack is missing; absent for a built-in sound. */
+  fallback_program?: number
   /** MIDI pitches of the open strings, string 1 first (the highest, except a banjo's short fifth string). Empty for a pitched instrument or drums. */
   tuning: number[]
   measures: Measure[]

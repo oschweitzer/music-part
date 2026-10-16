@@ -13,6 +13,6 @@ mod test_fonts;
 
 pub use banks::{BankChange, PackBanks, PackFailure};
 pub use output::{AudioOutput, SharedState};
-pub use pack::{PackError, PackNote, SoundPack};
+pub use pack::{declared_sounds, DeclaredSound, PackError, PackNote, SoundPack};
 pub use player::{BankFont, Player, PlayerError, Program, RemovedBank};
 pub use sfz::{SfzError, SfzInstrument, SfzReport};

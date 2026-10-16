@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::{NoteKind, Place, Score, Track, Voice, DRUM_PIECES, MAX_FRET, MAX_PITCH};
+use crate::{NoteKind, Place, Score, Track, Voice, DRUM_PIECES, MAX_FRET, MAX_PITCH, MAX_PROGRAM};
 
 const MAX_TRACKS: usize = 64;
 const MAX_STRINGS: usize = 12;
@@ -46,6 +46,19 @@ impl Score {
                     "track \"{name}\" has the sound \"{}\", which is not a sound of its instrument",
                     track.sound.id()
                 ));
+            }
+            match track.fallback_program {
+                Some(_) if track.sound.is_built_in() => {
+                    return fail(format!(
+                        "track \"{name}\" has a fallback program, which only a sound pack's sound has"
+                    ));
+                }
+                Some(program) if program > MAX_PROGRAM => {
+                    return fail(format!(
+                        "track \"{name}\" has the fallback program {program}, which is not a General MIDI program (0 to {MAX_PROGRAM})"
+                    ));
+                }
+                _ => {}
             }
             if track.clef.is_some() != track.instrument.has_clef_choice() {
                 return fail(format!(
@@ -218,7 +231,7 @@ mod tests {
         let mut score = crate::blank_score("p");
         let track = &mut score.tracks[0];
         track.instrument = Instrument::Piano;
-        track.sound = Sound::Piano;
+        track.sound = Sound::PIANO;
         track.tuning.clear();
         track.measures.truncate(1);
         track.measures[0] = Measure {
@@ -273,7 +286,7 @@ mod tests {
         let mut score = piano(&[]);
         let track = &mut score.tracks[0];
         track.instrument = Instrument::Drums;
-        track.sound = Sound::DrumsStandard;
+        track.sound = Sound::DRUMS_STANDARD;
         track.measures[0].voices[0].beats[0].notes =
             pieces.iter().map(|&p| Note::percussion(p)).collect();
         score
@@ -317,7 +330,7 @@ mod tests {
         assert!(error(&score).contains("clef"), "{}", error(&score));
 
         let track = &mut score.tracks[0];
-        (track.instrument, track.sound) = (Instrument::Voice, Sound::VoiceAahs);
+        (track.instrument, track.sound) = (Instrument::Voice, Sound::VOICE_AAHS);
         assert_eq!(score.validate(), Ok(()));
         score.tracks[0].clef = None;
         assert!(error(&score).contains("clef"));
@@ -326,12 +339,41 @@ mod tests {
     #[test]
     fn a_track_cannot_play_the_sound_of_another_instrument() {
         let mut score = demo_score();
-        score.tracks[1].sound = Sound::ElectricGuitarDistortion;
+        score.tracks[1].sound = Sound::ELECTRIC_GUITAR_DISTORTION;
         let message = error(&score);
         assert!(
             message.contains("Bass") && message.contains("electric-guitar/distortion"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_sound_unknown_here_validates_when_it_names_the_instrument_of_its_track() {
+        // A sound of a pack that is not installed: the score must still load.
+        let mut score = demo_score();
+        score.tracks[0].sound = Sound::parse("guitar/twelve-string").unwrap();
+        assert_eq!(score.validate(), Ok(()));
+        score.tracks[0].fallback_program = Some(25);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_sound_unknown_here_is_refused_on_a_track_of_another_instrument() {
+        let mut score = demo_score();
+        score.tracks[1].sound = Sound::parse("guitar/twelve-string").unwrap();
+        let message = error(&score);
+        assert!(message.contains("guitar/twelve-string"), "{message}");
+    }
+
+    #[test]
+    fn a_fallback_program_is_only_for_a_pack_sound_and_a_general_midi_program() {
+        let mut score = demo_score();
+        score.tracks[0].fallback_program = Some(25);
+        assert!(error(&score).contains("fallback program"));
+
+        score.tracks[0].sound = Sound::parse("guitar/twelve-string").unwrap();
+        score.tracks[0].fallback_program = Some(128);
+        assert!(error(&score).contains("128"));
     }
 
     #[test]

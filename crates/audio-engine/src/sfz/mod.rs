@@ -545,7 +545,7 @@ pub(crate) mod tests {
 
     fn sound_of(instrument: SfzInstrument) -> Vec<SfzSound> {
         vec![SfzSound {
-            sound: Sound::GuitarNylon,
+            sound: Sound::GUITAR_NYLON,
             keys: 0..=127,
             instrument,
         }]

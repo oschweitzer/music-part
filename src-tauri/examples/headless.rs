@@ -60,7 +60,7 @@ fn call(
         "edit_score" => {
             let edit = serde_json::from_value(args.get("edit").cloned().unwrap_or(Value::Null))
                 .map_err(|e| format!("invalid edit: {e}"))?;
-            to_value(service::edit_score(document, &edit)?)
+            to_value(service::edit_score(document, &edit, packs)?)
         }
         "undo" => to_value(service::undo(document)),
         "redo" => to_value(service::redo(document)),
