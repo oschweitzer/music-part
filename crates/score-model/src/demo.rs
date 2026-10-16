@@ -58,6 +58,7 @@ pub fn blank_score(title: &str) -> Score {
             sound: Sound::GuitarNylon,
             tuning: GUITAR_STANDARD.to_vec(),
             measures: (0..4).map(|_| measure(rests.clone())).collect(),
+            clef: None,
         }],
     }
 }
@@ -155,6 +156,7 @@ pub fn demo_score() -> Score {
                 sound: Sound::GuitarNylon,
                 tuning: GUITAR_STANDARD.to_vec(),
                 measures: guitar_measures,
+                clef: None,
             },
             Track {
                 name: "Bass".into(),
@@ -162,6 +164,7 @@ pub fn demo_score() -> Score {
                 sound: Sound::BassFinger,
                 tuning: BASS_STANDARD.to_vec(),
                 measures: bass_measures,
+                clef: None,
             },
         ],
     }

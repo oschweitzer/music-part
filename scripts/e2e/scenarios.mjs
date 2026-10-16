@@ -451,7 +451,7 @@ export const scenarios = [
   ],
 
   [
-    'a MIDI file opens under the name of the file, and one without playable notes is refused',
+    'a MIDI file opens under the name of the file, drums as a drum track, and one without notes is refused',
     async (context) => {
       const { page, out } = context
       const good = join(out, 'one-note.mid')
@@ -462,10 +462,20 @@ export const scenarios = [
       assert.match(await text(page, '.brand h1'), /one-note/)
       assert.deepEqual(await frets(page), ['0'])
 
+      const drums = Buffer.from(ONE_NOTE_MIDI)
+      drums[23] = 0x99 // percussion channel: E4 is the low conga
+      drums[28] = 0x89
+      const drumFile = join(out, 'drums.mid')
+      writeFileSync(drumFile, drums)
+      await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(drumFile)})`)
+      await clickButton(page, 'Open')
+      await settle()
+      assert.match(await text(page, '.brand h1'), /drums/)
+      assert.ok(await exists(page, 'svg.tab g.staff[data-clef="percussion"]'), 'a drum track')
+
       const silent = Buffer.from(ONE_NOTE_MIDI)
-      silent[23] = 0x99 // percussion channel
-      silent[27] = 0x89
-      const bad = join(out, 'drums.mid')
+      silent[25] = 0 // a note-on of velocity 0 is a note-off
+      const bad = join(out, 'silent.mid')
       writeFileSync(bad, silent)
       await page.eval(`window.__e2e.answers.open.push(${JSON.stringify(bad)})`)
       await clickButton(page, 'Open')
@@ -1286,6 +1296,96 @@ export const scenarios = [
   ],
 
   [
+    'writes a drum pattern with the digit keys and the palette, and plays it',
+    async (context) => {
+      const { page } = context
+      await clickButton(page, 'Drums: Standard kit')
+      await page.waitFor(`document.querySelector('svg.tab g.staff[data-clef="percussion"]')`, { what: 'the percussion staff' })
+      assert.ok(await exists(page, '[aria-label="Drum pieces"]'), 'the palette shows for a drum track')
+      // Eight eighths: the hi-hat on each (3), the kick on 1 and 3 (1), the snare on 2 and 4 from
+      // the palette.
+      for (let i = 0; i < 8; i++) {
+        await page.press('e')
+        await page.press('3')
+        if (i % 4 === 0) await page.press('1')
+        await settle()
+        if (i % 4 === 2) await clickButton(page, 'Snare')
+        await page.press('ArrowRight')
+      }
+      await settle()
+      const doc = await document_(context)
+      const drums = doc.score.tracks[2]
+      assert.equal(drums.instrument, 'Drums')
+      const hits = drums.measures[0].voices[0].beats.map((b) => b.notes.map((n) => n.piece))
+      assert.deepEqual(hits, [[36, 42], [42], [38, 42], [42], [36, 42], [42], [38, 42], [42]])
+      assert.ok((await page.eval(`document.querySelectorAll('svg.tab .cross-head').length`)) >= 8, 'hi-hats have cross heads')
+
+      // Up on the selected hi-hat of beat 7 moves it a line up, to the crash.
+      await page.press('ArrowLeft')
+      await page.press('ArrowLeft')
+      await settle()
+      await page.press('ArrowUp')
+      await settle()
+      const moved = (await document_(context)).score.tracks[2].measures[0].voices[0].beats[6].notes.map((n) => n.piece)
+      assert.deepEqual(moved, [38, 49])
+
+      await page.press(' ')
+      await settle()
+      assert.ok(await page.eval(`window.__e2e.audio.some(c => c.command === 'play')`), 'playback started')
+      await clickButton(page, 'Mute Drums')
+      const audible = await page.eval(`window.__e2e.audio.filter(c => c.command === 'set_audible').at(-1)?.args.audible`)
+      assert.deepEqual(audible, [true, true, false], 'the drum track can be muted')
+    },
+  ],
+
+  [
+    'draws a drum staff that reads well (drums.png in target/e2e)',
+    async (context) => {
+      const { page, backend, out } = context
+      const beat = (value, pieces, dots = 0) => ({
+        duration: { value, dots },
+        notes: pieces.map((piece) => ({ piece, technique: null, tied: false })),
+      })
+      await backend.request('edit_score', { edit: { type: 'addTrack', instrument: 'Drums', sound: 'drums/jazz' } })
+      const groove = [
+        beat('Eighth', [36, 49]),
+        beat('Eighth', [42]),
+        beat('Eighth', [38, 42]),
+        beat('Eighth', [42]),
+        beat('Eighth', [36, 42]),
+        beat('Eighth', [36, 46]),
+        beat('Eighth', [38, 42]),
+        beat('Eighth', [44]),
+      ]
+      const fill = [
+        beat('Sixteenth', [38]),
+        beat('Sixteenth', [38]),
+        beat('Sixteenth', [48]),
+        beat('Sixteenth', [47]),
+        beat('Sixteenth', [45]),
+        beat('Sixteenth', [43]),
+        beat('Sixteenth', [41]),
+        beat('Sixteenth', [41]),
+        beat('Quarter', [51, 36]),
+        beat('Quarter', [53, 44]),
+        beat('Quarter', [57, 35]),
+        beat('Quarter', [52, 37, 39, 54, 56]),
+        beat('Half', [55, 40]),
+        beat('Quarter', [62, 63, 64]),
+        beat('Quarter', []),
+      ]
+      await backend.request('edit_score', { edit: { type: 'paste', track: 2, measure: 0, beat: 0, beats: [...groove, ...fill] } })
+      await reload(page, `document.querySelector('svg.tab line.string')`, 'the score to appear')
+      await pickTrack(page, 2)
+      await page.waitFor(`document.querySelector('svg.tab g.staff[data-clef="percussion"]')`, { what: 'the percussion staff' })
+      await settle()
+      await page.screenshot(join(out, 'drums.png'))
+      const heads = await page.eval(`document.querySelectorAll('svg.tab .staff-notes .head').length`)
+      assert.ok(heads >= 30, `${heads} note heads drawn`)
+    },
+  ],
+
+  [
     'draws staves that read well (screenshots in target/e2e)',
     async (context) => {
       const { page, backend, out } = context
@@ -1317,6 +1417,121 @@ export const scenarios = [
         await page.screenshot(join(out, 'staff-2.png'))
         const heads = await page.eval(`document.querySelectorAll('svg.tab .staff-notes .head').length`)
         assert.ok(heads >= 30, `${heads} note heads drawn`)
+      })
+    },
+  ],
+
+  [
+    'adds an organ on a grand staff and a synthesizer on one treble staff',
+    async (context) => {
+      const { page } = context
+      const clefs = () => page.eval(`[...new Set([...document.querySelectorAll('svg.tab g.staff')].map(g => g.dataset.clef))].join(' ')`)
+
+      await page.eval(`document.querySelector('.add-track summary').click()`)
+      await clickButton(page, 'Organ: Church')
+      await page.waitFor(`document.querySelector('svg.tab g.staff[data-clef="bass"]')`, { what: 'the grand staff of the organ' })
+      const organ = (await document_(context)).score.tracks[2]
+      assert.deepEqual([organ.instrument, organ.sound, organ.tuning], ['Organ', 'organ/church', []])
+      assert.equal(await clefs(), 'treble bass')
+      assert.equal(await exists(page, 'svg.tab line.string'), false, 'an organ has no tablature')
+      assert.equal(await exists(page, 'select[aria-label="Clef of this track"]'), false, 'an organ has no clef to choose')
+
+      await page.eval(`document.querySelector('.add-track summary').click()`)
+      await clickButton(page, 'Synthesizer: Saw lead')
+      await page.waitFor(`document.querySelector('nav.tracks .track-tab.active .strings')?.textContent.trim() === 'Synthesizer'`, { what: 'the synthesizer track' })
+      await settle()
+      assert.equal(await clefs(), 'treble')
+      const middleC = await staffPoint(page, { clef: 'treble', position: -2 })
+      await page.mouseDoubleClick(middleC.x, middleC.y)
+      await settle()
+      const synth = (await document_(context)).score.tracks[3]
+      assert.equal(synth.sound, 'synth/saw-lead')
+      assert.deepEqual(synth.measures[0].voices[0].beats[0].notes.map((n) => n.pitch), [60])
+    },
+  ],
+
+  [
+    'a voice is written in the clef its singer reads, and the clef never moves its notes',
+    async (context) => {
+      const { page } = context
+      const clefSelect = `document.querySelector('select[aria-label="Clef of this track"]')`
+      const chooseClef = async (clef) => {
+        await page.eval(`(() => { const s = ${clefSelect}; s.value = '${clef}'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+        await settle()
+      }
+      const voice = async () => (await document_(context)).score.tracks[2]
+      const staffClef = () => page.eval(`document.querySelector('svg.tab g.staff')?.dataset.clef ?? null`)
+
+      await page.eval(`document.querySelector('.add-track summary').click()`)
+      await clickButton(page, 'Voice: Voice oohs')
+      await page.waitFor(`${clefSelect}`, { what: 'the clef menu of the voice' })
+      assert.equal(await page.eval(`${clefSelect}.value`), 'treble')
+      assert.equal(await staffClef(), 'treble')
+      assert.deepEqual([(await voice()).sound, (await voice()).clef], ['voice/oohs', 'treble'])
+
+      // Middle C, one ledger line below the treble staff.
+      const middleC = await staffPoint(page, { clef: 'treble', position: -2 })
+      await page.mouseDoubleClick(middleC.x, middleC.y)
+      await settle()
+
+      await chooseClef('treble8vb')
+      assert.equal((await voice()).clef, 'treble8vb')
+      await page.waitFor(`document.querySelector('svg.tab g.staff')?.dataset.clef === 'treble8vb'`, { what: 'the tenor clef' })
+      await chooseClef('bass')
+      assert.equal(await staffClef(), 'bass')
+      assert.deepEqual((await voice()).measures[0].voices[0].beats[0].notes.map((n) => n.pitch), [60], 'the note keeps its pitch')
+      // In the bass clef, middle C is one ledger line above the staff: position 10.
+      const head = await page.eval(`(() => {
+        const staff = document.querySelector('svg.tab g.staff[data-clef="bass"]')
+        const lines = [...staff.querySelectorAll('line.staff-line')].map(l => l.getBoundingClientRect().y)
+        const r = document.querySelector('svg.tab .staff-notes .head').getBoundingClientRect()
+        return { top: Math.min(...lines), y: r.y + r.height / 2, gap: (Math.max(...lines) - Math.min(...lines)) / 4 }
+      })()`)
+      assert.ok(Math.abs(head.top - head.gap - head.y) < 2, `middle C sits on the ledger line above the bass staff (${JSON.stringify(head)})`)
+
+      await page.press('z', ['ctrl'])
+      await settle()
+      assert.equal((await voice()).clef, 'treble8vb')
+      assert.equal(await page.eval(`${clefSelect}.value`), 'treble8vb')
+
+      // Another instrument has no clef to choose.
+      await page.eval(`(() => { const s = document.querySelector('select[aria-label="Instrument of this track"]'); s.value = 'Synth'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      assert.equal(await exists(page, 'select[aria-label="Clef of this track"]'), false)
+      assert.equal((await voice()).clef, undefined)
+    },
+  ],
+
+  [
+    'draws an organ grand staff and a tenor voice that read well (screenshot in target/e2e)',
+    async (context) => {
+      const { page, backend, out } = context
+      const beat = (value, pitches) => ({ duration: { value, dots: 0 }, notes: pitches.map((pitch) => ({ pitch, technique: null })) })
+      const edit = (edit) => backend.request('edit_score', { edit })
+      await edit({ type: 'addTrack', instrument: 'Organ', sound: 'organ/church' })
+      await edit({ type: 'addTrack', instrument: 'Voice' })
+      await edit({ type: 'setClef', track: 3, clef: 'treble8vb' })
+      await edit({
+        type: 'paste',
+        track: 2,
+        measure: 0,
+        beat: 0,
+        beats: [beat('Half', [48, 55, 64, 67, 72]), beat('Half', [43, 53, 62, 67, 71]), beat('Whole', [48, 52, 60, 67, 72])],
+      })
+      await edit({
+        type: 'paste',
+        track: 3,
+        measure: 0,
+        beat: 0,
+        beats: [beat('Quarter', [55]), beat('Quarter', [57]), beat('Quarter', [59]), beat('Quarter', [60]), beat('Half', [62]), beat('Half', [55])],
+      })
+      await reload(page, `document.querySelector('svg.tab line.string')`, 'the score to appear')
+      await inRows(page, async () => {
+        await settle()
+        const clefs = await page.eval(`[...document.querySelectorAll('section.row')].map(r => [...r.querySelectorAll('g.staff')].slice(0, 2).map(g => g.dataset.clef).join('+'))`)
+        assert.equal(clefs[2], 'treble+bass', 'the organ has a grand staff')
+        assert.equal(clefs[3], 'treble8vb', 'the tenor reads the treble clef an octave down')
+        await page.screenshot(join(out, 'keyboards-voice.png'))
       })
     },
   ],

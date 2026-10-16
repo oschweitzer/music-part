@@ -130,7 +130,9 @@ pub fn write_file(path: &Path, score: &Score) -> Result<(), NativeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use score_model::{apply_edit, blank_score, demo_score, Edit, Sound};
+    use score_model::{
+        apply_edit, blank_score, demo_score, Clef, Edit, Instrument, Sound, DRUM_PIECES,
+    };
 
     #[test]
     fn a_score_survives_a_round_trip() {
@@ -153,6 +155,74 @@ mod tests {
         let sounds: Vec<Sound> = back.tracks.iter().skip(1).map(|t| t.sound).collect();
         assert_eq!(sounds, Sound::ALL);
         assert_eq!(back, score);
+    }
+
+    #[test]
+    fn every_drum_piece_survives_a_round_trip() {
+        let mut score = blank_score("Drums");
+        let to_drums = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Drums,
+        };
+        apply_edit(&mut score, &to_drums).unwrap();
+        for pitch in DRUM_PIECES {
+            let hit = Edit::AddPitch {
+                track: 0,
+                measure: 0,
+                beat: 0,
+                pitch,
+            };
+            apply_edit(&mut score, &hit).unwrap();
+        }
+        let text = to_string(&score);
+        assert!(text.contains(r#"{"piece":35,"technique":null,"tied":false}"#));
+        let back = from_str(&text).unwrap();
+        let keys: Vec<u8> = back.tracks[0].measures[0].voices[0].beats[0]
+            .notes
+            .iter()
+            .map(|n| n.key())
+            .collect();
+        assert_eq!(keys, DRUM_PIECES.collect::<Vec<u8>>());
+        assert_eq!(back, score);
+    }
+
+    #[test]
+    fn the_clef_of_a_voice_survives_a_round_trip_and_other_tracks_write_none() {
+        let mut score = blank_score("Choir");
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Voice,
+                sound: None,
+            },
+        )
+        .unwrap();
+        let clef = Edit::SetClef {
+            track: 1,
+            clef: Clef::Treble8vb,
+        };
+        apply_edit(&mut score, &clef).unwrap();
+        let text = to_string(&score);
+        assert_eq!(text.matches("\"clef\"").count(), 1, "{text}");
+        assert!(text.contains("\"clef\":\"treble8vb\""), "{text}");
+        assert_eq!(from_str(&text).unwrap(), score);
+    }
+
+    #[test]
+    fn a_voice_written_without_a_clef_gets_the_treble_clef() {
+        let mut score = blank_score("Choir");
+        let add = Edit::AddTrack {
+            instrument: Instrument::Voice,
+            sound: None,
+        };
+        apply_edit(&mut score, &add).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&to_string(&score)).unwrap();
+        json["score"]["tracks"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("clef");
+        let back = from_str(&json.to_string()).unwrap();
+        assert_eq!(back.tracks[1].clef, Some(Clef::Treble));
     }
 
     #[test]

@@ -5,16 +5,17 @@
 //! Beats are addressed as (track, measure, beat) in the first voice. A note is addressed by its
 //! string on a fretted track (`SetFret`, `RemoveNote`, `SetTied`...) and by the pitch it sounds
 //! on any track (`AddPitch`, `RemovePitch`, `MovePitch`, `SetPitchTied`), which is how a staff
-//! shows it. See `docs/notation.md`.
+//! shows it. On a drum track that "pitch" is the General MIDI key of the piece (`Track::pitch`).
+//! See `docs/notation.md` and `docs/drums.md`.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    decompose_ticks, fret_pitch, pitch_fret, place_chord, place_pitch, Beat, Duration, Instrument,
-    Measure, Note, NoteKind, Place, Score, Sound, Technique, TimeSignature, Track, Voice, MAX_FRET,
-    MAX_PITCH,
+    decompose_ticks, fret_pitch, pitch_fret, place_chord, place_pitch, Beat, Clef, Duration,
+    Instrument, Measure, Note, NoteKind, Place, Score, Sound, Technique, TimeSignature, Track,
+    Voice, DRUM_PIECES, MAX_FRET, MAX_PITCH,
 };
 
 /// A beat of the first voice of a track.
@@ -136,7 +137,9 @@ pub enum Edit {
     /// instrument does not have (the first frets of the short fifth string of a banjo). From a
     /// fretted to a pitched instrument every note keeps its pitch and its tie, without technique.
     /// From a pitched to a fretted one the track gets the standard tuning and the pitches are
-    /// placed on the strings; refused if a note cannot be.
+    /// placed on the strings; refused if a note cannot be. To or from drums only a track without
+    /// notes changes (a drum piece is no pitch): refused otherwise. A track that becomes a voice
+    /// gets the clef that suits its notes (`Track::fitting_clef`).
     SetInstrument {
         track: usize,
         instrument: Instrument,
@@ -165,7 +168,8 @@ pub enum Edit {
     },
     /// Adds a note sounding at a MIDI pitch. On a pitched track it joins the notes of the beat (a
     /// chord); on a fretted track it goes on a free string, at the lowest fret that plays it
-    /// (refused if none can). A rest becomes a note; a pitch the beat already has changes nothing.
+    /// (refused if none can); on a drum track the pitch is the key of a piece (refused if it is
+    /// not 35 to 81). A rest becomes a note; a pitch the beat already has changes nothing.
     AddPitch {
         track: usize,
         measure: usize,
@@ -181,8 +185,8 @@ pub enum Edit {
     },
     /// Moves the note sounding at `pitch` to the pitch `to`, keeping its technique. It is no
     /// longer tied, and neither is the note that continued it. On a fretted track it stays on its
-    /// string when the string reaches `to`, else it goes to a free one. Refused if the beat
-    /// already has `to`.
+    /// string when the string reaches `to`, else it goes to a free one. On a drum track it moves
+    /// to the piece `to`. Refused if the beat already has `to`.
     MovePitch {
         track: usize,
         measure: usize,
@@ -207,6 +211,12 @@ pub enum Edit {
         track: usize,
         from: BeatAddress,
         to: BeatAddress,
+    },
+    /// Changes the clef of a track whose instrument lets it choose one (a voice). The notes keep
+    /// their pitches; only how they are written changes. Refused on other tracks.
+    SetClef {
+        track: usize,
+        clef: Clef,
     },
 }
 
@@ -247,6 +257,13 @@ pub enum EditError {
     PitchTaken,
     /// No free string of the instrument can play the pitch.
     NoFreeString,
+    /// A drum piece is a General MIDI percussion key from 35 to 81.
+    InvalidPiece,
+    /// The track has notes, and the new instrument stores another kind of note with no way to
+    /// convert them (drum pieces and pitches).
+    NotesOfAnotherKind,
+    /// The instrument of the track has no clef choice: its clefs follow from the instrument.
+    NoClefChoice,
 }
 
 impl fmt::Display for EditError {
@@ -292,6 +309,18 @@ impl fmt::Display for EditError {
             Self::NoFreeString => {
                 write!(f, "no free string of this instrument can play this pitch")
             }
+            Self::InvalidPiece => write!(
+                f,
+                "a drum piece is a General MIDI percussion key from 35 to 81"
+            ),
+            Self::NotesOfAnotherKind => write!(
+                f,
+                "drum pieces are not pitches: clear the notes of this track before changing between drums and another instrument"
+            ),
+            Self::NoClefChoice => write!(
+                f,
+                "the clef of this instrument cannot be changed: only a voice chooses its clef"
+            ),
         }
     }
 }
@@ -494,6 +523,17 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             Ok(())
         }
         Edit::SetTuning { track, ref tuning } => set_tuning(score, track, tuning),
+        Edit::SetClef { track, clef } => {
+            let target = score
+                .tracks
+                .get_mut(track)
+                .ok_or(EditError::OutOfRange("track"))?;
+            if !target.instrument.has_clef_choice() {
+                return Err(EditError::NoClefChoice);
+            }
+            target.clef = Some(clef);
+            Ok(())
+        }
     }
 }
 
@@ -569,6 +609,8 @@ fn add_pitch(
     }
     let note = match target.instrument.note_kind() {
         NoteKind::Pitched => Note::pitched(pitch),
+        NoteKind::Percussion if DRUM_PIECES.contains(&pitch) => Note::percussion(pitch),
+        NoteKind::Percussion => return Err(EditError::InvalidPiece),
         NoteKind::Fretted => {
             let taken: Vec<u8> = current.notes.iter().map(Note::key).collect();
             let (string, fret) = place_pitch(target.instrument, &target.tuning, pitch, &taken)
@@ -609,6 +651,8 @@ fn move_pitch(
     }
     let place = match current.notes[index].place {
         Place::Pitched { .. } => Place::Pitched { pitch: to },
+        Place::Percussion { .. } if DRUM_PIECES.contains(&to) => Place::Percussion { piece: to },
+        Place::Percussion { .. } => return Err(EditError::InvalidPiece),
         Place::Fretted { string, .. } => {
             let (instrument, tuning) = (target.instrument, &target.tuning);
             let taken: Vec<u8> = current
@@ -799,7 +843,8 @@ fn paste(
     }
 
     // The pasted beats on the timeline of the piece, without the notes the track cannot hold:
-    // on strings it does not have, or of the other kind (fretted notes on a piano).
+    // on strings it does not have, or of another kind (fretted notes on a piano), and without
+    // the techniques of drum notes (they are for strings).
     let strings = target.tuning.len();
     let kind = target.instrument.note_kind();
     let mut at = start;
@@ -812,6 +857,11 @@ fn paste(
                     && n.string()
                         .is_none_or(|s| s >= 1 && usize::from(s) <= strings)
             });
+            if kind == NoteKind::Percussion {
+                for note in &mut beat.notes {
+                    note.technique = None;
+                }
+            }
             beat.notes.sort_by_key(Note::key);
             beat.notes.dedup_by_key(|n| n.key());
             let from = at;
@@ -825,7 +875,10 @@ fn paste(
         .flat_map(|(_, _, b)| &b.notes)
         .any(|n| target.pitch(n).is_none())
     {
-        return Err(EditError::InvalidFret);
+        return Err(match kind {
+            NoteKind::Percussion => EditError::InvalidPiece,
+            _ => EditError::InvalidFret,
+        });
     }
 
     let mut rebuilt: Vec<(usize, Vec<Beat>)> = Vec::new();
@@ -1037,8 +1090,15 @@ fn set_instrument(
                 beat.notes = placed;
             }
         }
-        (NoteKind::Pitched, NoteKind::Pitched) => {}
+        (NoteKind::Pitched, NoteKind::Pitched) | (NoteKind::Percussion, NoteKind::Percussion) => {}
+        (NoteKind::Percussion, _) | (_, NoteKind::Percussion) => {
+            if beats_of_mut(&mut changed).any(|b| !b.notes.is_empty()) {
+                return Err(EditError::NotesOfAnotherKind);
+            }
+            changed.tuning = instrument.standard_tuning().to_vec();
+        }
     }
+    changed.clef = changed.fitting_clef();
     *target = changed;
     Ok(())
 }
@@ -1091,6 +1151,7 @@ fn add_track(score: &mut Score, sound: Sound) -> Result<(), EditError> {
         sound,
         tuning: instrument.standard_tuning().to_vec(),
         measures,
+        clef: instrument.default_clef(),
     });
     Ok(())
 }
@@ -3021,6 +3082,88 @@ mod tests {
     }
 
     #[test]
+    fn keyboards_and_voices_are_added_as_pitched_tracks_and_only_a_voice_has_a_clef() {
+        let mut score = blank_score("t");
+        for instrument in [Instrument::Organ, Instrument::Synth, Instrument::Voice] {
+            let add = Edit::AddTrack {
+                instrument,
+                sound: None,
+            };
+            apply_edit(&mut score, &add).unwrap();
+            let track = score.tracks.last().unwrap();
+            assert!(track.tuning.is_empty());
+            assert_eq!(track.sound, instrument.default_sound());
+        }
+        let clefs: Vec<Option<Clef>> = score.tracks.iter().map(|t| t.clef).collect();
+        assert_eq!(clefs, vec![None, None, None, Some(Clef::Treble)]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn the_clef_of_a_voice_changes_but_not_its_pitches() {
+        let mut score = blank_score("t");
+        let voice = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Voice,
+        };
+        apply_edit(&mut score, &voice).unwrap();
+        apply_edit(&mut score, &add_pitch(0, 0, 50)).unwrap();
+        let set = |clef| Edit::SetClef { track: 0, clef };
+        apply_edit(&mut score, &set(Clef::Bass)).unwrap();
+        assert_eq!(score.tracks[0].clef, Some(Clef::Bass));
+        assert_eq!(pitches_of(&score, 0, 0), vec![50]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn the_clef_of_an_instrument_without_a_clef_choice_is_refused() {
+        let mut score = piano_score();
+        let before = score.clone();
+        let edit = Edit::SetClef {
+            track: 0,
+            clef: Clef::Treble8vb,
+        };
+        assert_eq!(apply_edit(&mut score, &edit), Err(EditError::NoClefChoice));
+        assert_eq!(score, before);
+        let missing = Edit::SetClef {
+            track: 9,
+            clef: Clef::Bass,
+        };
+        assert_eq!(
+            apply_edit(&mut score, &missing),
+            Err(EditError::OutOfRange("track"))
+        );
+    }
+
+    #[test]
+    fn a_track_that_becomes_a_voice_gets_the_clef_of_its_range_and_loses_it_after() {
+        // The demo bass plays around E1 to A2: a bass voice, an octave higher on paper.
+        let mut score = demo_score();
+        let to = |instrument| Edit::SetInstrument {
+            track: 1,
+            instrument,
+        };
+        apply_edit(&mut score, &to(Instrument::Voice)).unwrap();
+        assert_eq!(score.tracks[1].sound, Sound::VoiceAahs);
+        assert_eq!(score.tracks[1].clef, Some(Clef::Bass));
+        apply_edit(&mut score, &to(Instrument::Organ)).unwrap();
+        assert_eq!(score.tracks[1].clef, None);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_clef_edit_travels_as_camel_case_json() {
+        let edit = Edit::SetClef {
+            track: 2,
+            clef: Clef::Treble8vb,
+        };
+        assert_eq!(
+            serde_json::to_value(edit).unwrap(),
+            serde_json::json!({ "type": "setClef", "track": 2, "clef": "treble8vb" })
+        );
+    }
+
+    #[test]
     fn pitched_edits_travel_as_camel_case_json() {
         let json = serde_json::to_value(move_pitch(1, 2, 60, 61)).unwrap();
         assert_eq!(
@@ -3032,6 +3175,217 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(clear, Edit::ClearNotes { pitches: None, .. }));
+    }
+
+    /// A blank score whose track is a drum kit: four measures of whole rests.
+    fn drum_score() -> Score {
+        let mut score = blank_score("d");
+        apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Drums,
+            },
+        )
+        .unwrap();
+        score
+    }
+
+    fn keys_of(score: &Score, measure: usize, beat: usize) -> Vec<u8> {
+        beats(score, measure)[beat]
+            .notes
+            .iter()
+            .map(Note::key)
+            .collect()
+    }
+
+    #[test]
+    fn an_empty_track_becomes_a_drum_kit_without_strings() {
+        let score = drum_score();
+        let drums = &score.tracks[0];
+        assert_eq!(drums.sound, Sound::DrumsStandard);
+        assert!(drums.tuning.is_empty());
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn pieces_added_to_a_beat_are_hit_together_once_each() {
+        let mut score = drum_score();
+        for piece in [42, 36, 42, 38] {
+            apply_edit(&mut score, &add_pitch(0, 0, piece)).unwrap();
+        }
+        assert_eq!(keys_of(&score, 0, 0), vec![36, 38, 42]);
+        assert_eq!(beats(&score, 0)[0].notes[0], Note::percussion(36));
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_key_that_is_no_drum_piece_is_refused() {
+        let mut score = drum_score();
+        let before = score.clone();
+        for key in [34, 82, 127] {
+            assert_eq!(
+                apply_edit(&mut score, &add_pitch(0, 0, key)),
+                Err(EditError::InvalidPiece)
+            );
+        }
+        apply_edit(&mut score, &add_pitch(0, 0, 38)).unwrap();
+        let with_snare = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &move_pitch(0, 0, 38, 90)),
+            Err(EditError::InvalidPiece)
+        );
+        assert_eq!(score, with_snare);
+        assert_ne!(score, before);
+    }
+
+    #[test]
+    fn a_piece_moves_to_another_and_is_removed_by_its_key() {
+        let mut score = drum_score();
+        two_halves(&mut score, &[36, 42], &[38]);
+        apply_edit(&mut score, &move_pitch(0, 0, 42, 46)).unwrap();
+        assert_eq!(keys_of(&score, 0, 0), vec![36, 46]);
+        assert_eq!(
+            apply_edit(&mut score, &move_pitch(0, 0, 46, 36)),
+            Err(EditError::PitchTaken)
+        );
+        apply_edit(
+            &mut score,
+            &Edit::RemovePitch {
+                track: 0,
+                measure: 0,
+                beat: 0,
+                pitch: 36,
+            },
+        )
+        .unwrap();
+        assert_eq!(keys_of(&score, 0, 0), vec![46]);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn strings_and_tunings_are_refused_on_a_drum_track() {
+        let mut score = drum_score();
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &set_fret(0, 0, 1, 3)),
+            Err(EditError::NoStrings)
+        );
+        assert_eq!(
+            apply_edit(
+                &mut score,
+                &Edit::SetTuning {
+                    track: 0,
+                    tuning: GUITAR_STANDARD.to_vec()
+                }
+            ),
+            Err(EditError::NoStrings)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_paste_on_drums_keeps_only_drum_notes_without_technique() {
+        let mut score = drum_score();
+        let beat = Beat {
+            duration: dur(NoteValue::Quarter, 0),
+            notes: vec![
+                Note::fretted(1, 0),
+                Note::pitched(40),
+                Note {
+                    technique: Some(Technique::Bend),
+                    ..Note::percussion(38)
+                },
+            ],
+        };
+        apply_edit(&mut score, &paste_edit(0, 0, 0, vec![beat])).unwrap();
+        assert_eq!(beats(&score, 0)[0].notes, vec![Note::percussion(38)]);
+        assert_eq!(score.validate(), Ok(()));
+
+        let bad = Beat {
+            duration: dur(NoteValue::Quarter, 0),
+            notes: vec![Note::percussion(20)],
+        };
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &paste_edit(0, 0, 0, vec![bad])),
+            Err(EditError::InvalidPiece)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_track_with_notes_does_not_change_to_or_from_drums() {
+        let mut score = demo_score();
+        let before = score.clone();
+        let to_drums = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Drums,
+        };
+        assert_eq!(
+            apply_edit(&mut score, &to_drums),
+            Err(EditError::NotesOfAnotherKind)
+        );
+        assert_eq!(score, before);
+
+        let mut drums = drum_score();
+        apply_edit(&mut drums, &add_pitch(0, 0, 36)).unwrap();
+        let with_kick = drums.clone();
+        let to_piano = Edit::SetInstrument {
+            track: 0,
+            instrument: Instrument::Piano,
+        };
+        assert_eq!(
+            apply_edit(&mut drums, &to_piano),
+            Err(EditError::NotesOfAnotherKind)
+        );
+        assert_eq!(drums, with_kick);
+    }
+
+    #[test]
+    fn an_empty_drum_track_becomes_a_guitar_with_its_strings() {
+        let mut score = drum_score();
+        apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Guitar,
+            },
+        )
+        .unwrap();
+        assert_eq!(score.tracks[0].tuning, GUITAR_STANDARD.to_vec());
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_drum_hit_can_be_tied_to_the_same_piece_and_cleared_by_key_span() {
+        let mut score = drum_score();
+        two_halves(&mut score, &[36, 49], &[49]);
+        apply_edit(
+            &mut score,
+            &Edit::SetPitchTied {
+                track: 0,
+                measure: 0,
+                beat: 1,
+                pitch: 49,
+                tied: true,
+            },
+        )
+        .unwrap();
+        assert!(beats(&score, 0)[1].notes[0].tied);
+        apply_edit(
+            &mut score,
+            &Edit::ClearNotes {
+                track: 0,
+                from: at(0, 0),
+                to: at(0, 0),
+                strings: None,
+                pitches: Some(PitchSpan { low: 40, high: 60 }),
+            },
+        )
+        .unwrap();
+        assert_eq!(keys_of(&score, 0, 0), vec![36]);
+        assert_eq!(score.validate(), Ok(()));
     }
 
     /// Whatever sequence of edits is thrown at a score, it stays valid, and a refused edit
@@ -3064,7 +3418,17 @@ mod tests {
         )
         .unwrap();
 
-        for start in [demo_score(), blank_score("t"), with_piano] {
+        let mut with_drums = demo_score();
+        apply_edit(
+            &mut with_drums,
+            &Edit::AddTrack {
+                instrument: Instrument::Drums,
+                sound: None,
+            },
+        )
+        .unwrap();
+
+        for start in [demo_score(), blank_score("t"), with_piano, with_drums] {
             let mut score = start;
             let mut applied = 0;
             for step in 0..600 {
@@ -3194,6 +3558,10 @@ mod tests {
                             beat: next(4),
                         },
                     },
+                    12 if next(3) == 0 => Edit::SetClef {
+                        track,
+                        clef: Clef::ALL[next(Clef::ALL.len())],
+                    },
                     12 => Edit::RenameTrack {
                         track,
                         name: ["Lead", "", "  Bass  "][next(3)].to_string(),
@@ -3213,11 +3581,16 @@ mod tests {
                         beats: (0..1 + next(4))
                             .map(|_| Beat {
                                 duration: dur(values[next(6)], next(3) as u8),
-                                notes: match next(4) {
+                                notes: match next(5) {
                                     0 => vec![],
                                     1 => vec![Note {
                                         tied: next(4) == 0,
                                         ..Note::pitched(pitch)
+                                    }],
+                                    2 => vec![Note {
+                                        tied: next(4) == 0,
+                                        technique: [None, Some(Technique::Slide)][next(2)],
+                                        ..Note::percussion(pitch)
                                     }],
                                     _ => vec![Note {
                                         tied: next(4) == 0,

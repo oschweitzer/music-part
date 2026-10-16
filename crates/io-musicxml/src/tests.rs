@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use score_model::{Instrument, Note, Score, Sound, Technique, GUITAR_STANDARD};
+use score_model::{Clef, Instrument, Note, Score, Sound, Technique, GUITAR_STANDARD};
 
 use super::*;
 
@@ -342,7 +342,7 @@ fn grace_notes_and_notes_no_string_can_play_are_counted_not_imported() {
 }
 
 #[test]
-fn a_percussion_part_is_left_out() {
+fn a_percussion_part_becomes_a_drum_track() {
     let drums = r#"<part id="P2"><measure number="1"><attributes><divisions>2</divisions></attributes><note><unpitched><display-step>C</display-step><display-octave>5</display-octave></unpitched><duration>8</duration></note></measure></part>"#;
     let xml = score_xml("Guitar", FOUR_FOUR, &[&pitched("E", 4, 8, "")])
         .replace(
@@ -351,7 +351,74 @@ fn a_percussion_part_is_left_out() {
         )
         .replace("</score-partwise>", &format!("{drums}</score-partwise>"));
     let imported = ok(&xml);
-    assert_eq!(imported.score.tracks.len(), 1);
+    let [_, drums] = &imported.score.tracks[..] else {
+        panic!("two tracks expected")
+    };
+    assert_eq!(
+        (drums.instrument, drums.sound),
+        (Instrument::Drums, Sound::DrumsStandard)
+    );
+    // Written on the third line with a plain head: the snare.
+    assert_eq!(
+        drums.measures[0].voices[0].beats[0].notes,
+        vec![Note::percussion(38)]
+    );
+}
+
+#[test]
+fn drum_notes_of_two_voices_take_their_piece_from_their_instrument() {
+    // Hi-hat eighths in voice 1 and the kick on beats 1 and 3 in voice 2, on the power kit, as
+    // notation programs write a drum part.
+    let part_list = r#"<score-part id="P1"><part-name>Drum Set</part-name>
+        <score-instrument id="P1-X1"><instrument-name>Hat</instrument-name></score-instrument>
+        <score-instrument id="P1-X2"><instrument-name>Kick</instrument-name></score-instrument>
+        <midi-instrument id="P1-X1"><midi-channel>10</midi-channel><midi-program>17</midi-program><midi-unpitched>43</midi-unpitched></midi-instrument>
+        <midi-instrument id="P1-X2"><midi-channel>10</midi-channel><midi-program>17</midi-program><midi-unpitched>37</midi-unpitched></midi-instrument>
+        </score-part>"#;
+    let hit = |instrument: &str, voice: u32, duration: u32| {
+        format!(
+            r#"<note><unpitched><display-step>A</display-step><display-octave>3</display-octave></unpitched><duration>{duration}</duration><instrument id="{instrument}"/><voice>{voice}</voice></note>"#
+        )
+    };
+    let hats: String = (0..8).map(|_| hit("P1-X1", 1, 1)).collect();
+    let kicks = [hit("P1-X2", 2, 4), hit("P1-X2", 2, 4)].concat();
+    let notes = format!("{hats}<backup><duration>8</duration></backup>{kicks}");
+    let xml = score_xml("x", FOUR_FOUR, &[&notes]).replace(
+        r#"<score-part id="P1"><part-name>x</part-name></score-part>"#,
+        part_list,
+    );
+    let imported = ok(&xml);
+    assert_eq!(imported.skipped_notes, 0);
+    let drums = &imported.score.tracks[0];
+    assert_eq!(drums.sound, Sound::DrumsPower);
+    let beats = first_beats(&imported.score, 0);
+    assert_eq!(beats.len(), 8);
+    let keys: Vec<Vec<u8>> = beats
+        .iter()
+        .map(|b| b.notes.iter().map(Note::key).collect())
+        .collect();
+    assert_eq!(keys[0], vec![36, 42]);
+    assert_eq!(keys[1], vec![42]);
+    assert_eq!(keys[4], vec![36, 42]);
+    assert!(beats.iter().all(|b| b.duration.ticks() == 16));
+}
+
+#[test]
+fn an_empty_part_on_the_percussion_channel_is_a_drum_track() {
+    let xml = score_xml("Kit", FOUR_FOUR, &[&rest(8)]).replace(
+        "<part-name>Kit</part-name>",
+        "<part-name>Kit</part-name><midi-instrument id=\"i1\"><midi-channel>10</midi-channel></midi-instrument>",
+    );
+    assert_eq!(ok(&xml).score.tracks[0].instrument, Instrument::Drums);
+}
+
+#[test]
+fn pitched_notes_in_a_drum_part_and_drum_notes_in_a_pitched_part_are_counted() {
+    let unpitched = r#"<note><unpitched><display-step>C</display-step><display-octave>5</display-octave></unpitched><duration>4</duration></note>"#;
+    let mixed = format!("{}{unpitched}", pitched("E", 4, 4, ""));
+    let imported = ok(&score_xml("Guitar", FOUR_FOUR, &[&mixed]));
+    assert_eq!(imported.score.tracks[0].instrument, Instrument::Guitar);
+    assert_eq!(imported.skipped_notes, 1);
 }
 
 #[test]
@@ -398,6 +465,90 @@ fn the_midi_program_picks_the_closest_sound() {
     assert_eq!(ok(&with_program(1)).score.tracks[0].sound, Sound::Piano);
     let named_guitar = with_program(1).replace("<part-name>Part<", "<part-name>Guitar<");
     assert_eq!(ok(&named_guitar).score.tracks[0].sound, Sound::GuitarNylon);
+}
+
+#[test]
+fn keyboard_synth_and_voice_programs_win_over_the_part_name() {
+    let notes = pitched("C", 4, 8, "");
+    let with_program = |program: u8| {
+        score_xml("Part", FOUR_FOUR, &[&notes]).replace(
+            "<part-name>Part</part-name>",
+            &format!("<part-name>Part</part-name><midi-instrument id=\"i1\"><midi-program>{program}</midi-program></midi-instrument>"),
+        )
+    };
+    // Counted from 1 in the file.
+    assert_eq!(
+        ok(&with_program(5)).score.tracks[0].sound,
+        Sound::PianoElectric
+    );
+    assert_eq!(
+        ok(&with_program(20)).score.tracks[0].sound,
+        Sound::OrganChurch
+    );
+    assert_eq!(
+        ok(&with_program(82)).score.tracks[0].sound,
+        Sound::SynthSawLead
+    );
+    assert_eq!(
+        ok(&with_program(53)).score.tracks[0].sound,
+        Sound::VoiceAahs
+    );
+}
+
+#[test]
+fn part_names_find_voices_organs_synthesizers_and_electric_pianos() {
+    let notes = pitched("C", 4, 8, "");
+    let sound_of = |name: &str| ok(&score_xml(name, FOUR_FOUR, &[&notes])).score.tracks[0].sound;
+    for name in [
+        "Voice",
+        "Vocals",
+        "Soprano",
+        "Alto",
+        "Tenor",
+        "Bass Voice",
+        "Baritone",
+        "Choir",
+        "Lead vocal",
+    ] {
+        assert_eq!(sound_of(name), Sound::VoiceAahs, "{name}");
+    }
+    assert_eq!(sound_of("Synth Voice"), Sound::VoiceSynth);
+    // "Bass" alone stays the bass guitar, and a saxophone is no singer.
+    assert_eq!(sound_of("Bass"), Sound::BassFinger);
+    assert_eq!(sound_of("Alto Saxophone"), Sound::Piano);
+    assert_eq!(sound_of("Tenor Banjo"), Sound::Banjo);
+    assert_eq!(sound_of("Organ"), Sound::OrganDrawbar);
+    assert_eq!(sound_of("Church Organ"), Sound::OrganChurch);
+    assert_eq!(sound_of("Accordion"), Sound::OrganReed);
+    assert_eq!(sound_of("Synthesizer"), Sound::SynthSquareLead);
+    assert_eq!(sound_of("Synth Pad"), Sound::SynthWarmPad);
+    assert_eq!(sound_of("Synth Bass"), Sound::BassFinger);
+    assert_eq!(sound_of("Electric Piano"), Sound::PianoElectric);
+    assert_eq!(sound_of("Piano"), Sound::Piano);
+}
+
+#[test]
+fn a_voice_takes_the_clef_of_the_file_else_the_clef_of_its_range() {
+    let low = [pitched("C", 3, 4, ""), pitched("G", 2, 4, "")].concat();
+    let clef_of = |xml: String| ok(&xml).score.tracks[0].clef;
+    assert_eq!(
+        clef_of(score_xml("Voice", FOUR_FOUR, &[&low])),
+        Some(Clef::Bass)
+    );
+    let tenor = four_four_with(
+        "<clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>",
+    );
+    assert_eq!(
+        clef_of(score_xml("Voice", &tenor, &[&low])),
+        Some(Clef::Treble8vb)
+    );
+    let treble = four_four_with("<clef><sign>G</sign><line>2</line></clef>");
+    assert_eq!(
+        clef_of(score_xml("Voice", &treble, &[&low])),
+        Some(Clef::Treble)
+    );
+    // Only a voice has a clef of its own.
+    assert_eq!(clef_of(score_xml("Organ", &treble, &[&low])), None);
 }
 
 #[test]

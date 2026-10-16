@@ -29,8 +29,13 @@ impl std::error::Error for PlayerError {}
 
 /// The most tracks a score can have (see `Score::validate`); each gets its own channels.
 const MAX_TRACKS: usize = 64;
-/// Where the fallback channels start: after every track channel. Channel 9 (percussion) is skipped.
+/// Where the fallback channels start: after every track channel. Channel 9 (percussion) is skipped
+/// by the melodic tracks and given to the first drum track.
 const FALLBACK_BASE: usize = MAX_TRACKS + 6;
+/// The General MIDI percussion channel (MIDI channel 10).
+const PERCUSSION_CHANNEL: u8 = 9;
+/// The SoundFont bank of the drum kits.
+const DRUM_BANK: u32 = 128;
 /// Where the channels of the muted and harmonic timbres start, two by two (recording and
 /// fallback). A MIDI channel number is a byte, so there is room for 53 of these pairs: a score
 /// that needs more plays the rest with the open timbre.
@@ -54,9 +59,13 @@ struct Channel {
     muted: Option<Lane>,
     harmonic: Option<Lane>,
     legato: Option<Lane>,
-    /// General MIDI program of the sound, used when no sample bank is set for it.
+    /// General MIDI program of the sound, used when no sample bank is set for it; the kit for a
+    /// drum track.
     program: u8,
     sound: Sound,
+    /// A drum track: its channels play a kit of the SoundFont's bank 128, and sample banks never
+    /// apply to it.
+    is_percussion: bool,
 }
 
 impl Channel {
@@ -136,7 +145,10 @@ impl Program {
             .map_or(0, |last| last + RELEASE_TAIL_SECS * u64::from(sample_rate));
 
         // Two MIDI channels per track (the synthesizer is given enough of them), skipping the
-        // percussion channel 9, then two more for each timbre a track actually uses.
+        // percussion channel 9, then two more for each timbre a track actually uses. The first
+        // drum track plays on channel 9, as General MIDI has it; any other drum track selects
+        // the drum bank on its own channel (the synthesizer plays a kit on any channel).
+        let first_drums = score.tracks.iter().position(|t| t.sound.is_drum_kit());
         let mut voices: Vec<Channel> = score
             .tracks
             .iter()
@@ -144,7 +156,11 @@ impl Program {
             .enumerate()
             .map(|(i, track)| Channel {
                 open: Lane {
-                    channel: (i + usize::from(i >= 9)) as u8,
+                    channel: if Some(i) == first_drums {
+                        PERCUSSION_CHANNEL
+                    } else {
+                        (i + usize::from(i >= usize::from(PERCUSSION_CHANNEL))) as u8
+                    },
                     fallback: (FALLBACK_BASE + i) as u8,
                 },
                 muted: None,
@@ -152,6 +168,7 @@ impl Program {
                 legato: None,
                 program: track.sound.midi_program(),
                 sound: track.sound,
+                is_percussion: track.sound.is_drum_kit(),
             })
             .collect();
         let mut next_lane = TIMBRE_BASE;
@@ -453,6 +470,14 @@ impl Player {
             .map(|preset| preset.name().to_string())
     }
 
+    /// The SoundFont bank and program the open channel of `track` plays, and that channel.
+    #[cfg(test)]
+    pub(crate) fn bank_and_program_of_track(&self, track: usize) -> Option<(u8, u32, u32)> {
+        let channel = self.program.voices.get(track)?.open.channel;
+        let (_, bank, program) = self.synth.program(channel).ok()?;
+        Some((channel, bank, program))
+    }
+
     /// The SoundFont bank that plays `sound`, unless a later SFZ instrument does.
     fn bank_of(&self, sound: Sound) -> Option<&Bank> {
         if self.latest_kind(sound) != Some(BankKind::Font) {
@@ -470,6 +495,12 @@ impl Player {
         self.stop();
         self.sfz_voices.cut_all();
         for voice in &program.voices {
+            if voice.is_percussion {
+                for channel in voice.channels() {
+                    self.set_kit(channel, voice.program);
+                }
+                continue;
+            }
             // A sample bank for the sound sits at its own bank number, with the sound at
             // program 0; the fallback channel and sounds without a bank use the General MIDI
             // program of the base SoundFont.
@@ -486,6 +517,16 @@ impl Player {
             }
         }
         self.program = program;
+    }
+
+    /// Gives a channel a drum kit: the program of the SoundFont's drum bank, which a bank select
+    /// message cannot reach (it carries 0 to 127).
+    fn set_kit(&mut self, channel: u8, kit: u8) {
+        let _ = self.synth.select_bank(channel, DRUM_BANK);
+        let _ = self.synth.send_event(MidiEvent::ProgramChange {
+            channel,
+            program_id: kit,
+        });
     }
 
     fn set_sound(&mut self, channel: u8, bank: u8, program_id: u8) {
@@ -701,13 +742,21 @@ impl Player {
         if matches!(e.action, Action::NoteOn { .. }) && !self.is_audible(e.track) {
             return;
         }
-        let Some(sound) = self.program.voices.get(e.track).map(|v| v.sound) else {
+        let Some((sound, is_percussion)) = self
+            .program
+            .voices
+            .get(e.track)
+            .map(|v| (v.sound, v.is_percussion))
+        else {
             return;
         };
-        if self.dispatch_sfz(e, sound) {
+        // Sample banks are for melodic sounds: a drum kit always plays the SoundFont's.
+        if !is_percussion && self.dispatch_sfz(e, sound) {
             return;
         }
-        let keys = self.bank_of(sound).map(|b| b.keys.clone());
+        let keys = (!is_percussion)
+            .then(|| self.bank_of(sound).map(|b| b.keys.clone()))
+            .flatten();
         let Some(voice) = self.program.voices.get(e.track) else {
             return;
         };
@@ -778,6 +827,7 @@ pub(crate) mod tests {
                         }],
                     }],
                 }],
+                clef: None,
             }],
         }
     }
@@ -1176,6 +1226,130 @@ pub(crate) mod tests {
         assert!(buf.iter().any(|s| s.abs() > 0.01));
     }
 
+    /// A drum track (or, with `instrument` the piano, a pitched one) of one measure: the kick and
+    /// the closed hi-hat on every quarter note, with `sound`.
+    fn drum_score(instrument: Instrument, sound: Sound) -> Score {
+        let mut score = one_note_score();
+        let track = &mut score.tracks[0];
+        (track.instrument, track.sound) = (instrument, sound);
+        track.tuning.clear();
+        let quarter = Duration {
+            value: NoteValue::Quarter,
+            dots: 0,
+        };
+        let hit = |key| match instrument {
+            Instrument::Drums => Note::percussion(key),
+            _ => Note::pitched(key),
+        };
+        track.measures[0].voices[0].beats = (0..4)
+            .map(|_| Beat {
+                duration: quarter,
+                notes: vec![hit(36), hit(42)],
+            })
+            .collect();
+        score
+    }
+
+    fn render_score(base: &std::path::Path, score: &Score) -> Vec<f32> {
+        render_with_bank(base, None, score)
+    }
+
+    fn peak(buf: &[f32]) -> f32 {
+        buf.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn a_drum_track_plays_a_kit_on_the_percussion_channel() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
+        player.load_score(&drum_score(Instrument::Drums, Sound::DrumsStandard));
+        assert_eq!(
+            player.bank_and_program_of_track(0),
+            Some((PERCUSSION_CHANNEL, DRUM_BANK, 0))
+        );
+
+        let drums = render_score(&base, &drum_score(Instrument::Drums, Sound::DrumsStandard));
+        let peak_drums = peak(&drums);
+        assert!(peak_drums > 0.01, "the kit is nearly silent ({peak_drums})");
+        assert!(peak_drums <= 1.0, "the kit clips ({peak_drums})");
+        // The same keys on a melodic program sound otherwise: the kit is not a piano.
+        let piano = render_score(&base, &drum_score(Instrument::Piano, Sound::Piano));
+        let difference = drums
+            .iter()
+            .zip(&piano)
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(difference > 0.05, "the drums sound like the piano");
+    }
+
+    #[test]
+    fn each_drum_track_plays_its_own_kit() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut score = drum_score(Instrument::Drums, Sound::DrumsStandard);
+        let mut jazz = score.tracks[0].clone();
+        jazz.sound = Sound::DrumsJazz;
+        let guitar = one_note_score().tracks[0].clone();
+        score.tracks.extend([guitar, jazz]);
+        let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
+        player.load_score(&score);
+        assert_eq!(
+            player.bank_and_program_of_track(0),
+            Some((PERCUSSION_CHANNEL, DRUM_BANK, 0))
+        );
+        // The guitar keeps a melodic program; the second kit selects the drum bank on a
+        // channel of its own.
+        assert_eq!(player.bank_and_program_of_track(1), Some((1, 0, 24)));
+        assert_eq!(
+            player.bank_and_program_of_track(2),
+            Some((2, DRUM_BANK, 32))
+        );
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100];
+        player.render(&mut buf);
+        assert!(peak(&buf) > 0.01);
+    }
+
+    #[test]
+    fn a_muted_drum_track_stays_silent() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
+        player.load_score(&drum_score(Instrument::Drums, Sound::DrumsRoom));
+        player.set_audible(vec![false]);
+        player.play();
+        let mut buf = vec![0.0f32; 2 * 44_100];
+        player.render(&mut buf);
+        assert!(peak(&buf) < 1e-3, "a muted kit is audible");
+
+        // Seeking back and unmuting plays the next hit.
+        player.set_audible(vec![true]);
+        player.seek(0.0);
+        player.render(&mut buf);
+        assert!(peak(&buf) > 0.01);
+    }
+
+    #[test]
+    fn a_sample_bank_never_plays_a_drum_track() {
+        let Some(base) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        // A bank given to the kit's sound (here the base SoundFont itself, whose program 0 is a
+        // piano) must be ignored: the kit stays the SoundFont's drum bank.
+        let score = drum_score(Instrument::Drums, Sound::DrumsStandard);
+        let with_bank =
+            render_with_bank(&base, Some((Sound::DrumsStandard, &base, 0..=127)), &score);
+        let without = render_score(&base, &score);
+        assert_eq!(with_bank, without);
+    }
+
     /// The sounds of the packs committed in `assets/soundfonts/packs`, with the path of their
     /// sample file. The files are fetched by `pnpm fetch:soundfont`; callers skip missing ones.
     fn committed_banks() -> Vec<(crate::pack::PackSound, std::path::PathBuf)> {
@@ -1299,6 +1473,70 @@ pub(crate) mod tests {
                 bank.sound
             );
         }
+    }
+
+    /// A one-track score playing a C major chord around middle C with `sound`, whose instrument
+    /// is pitched (keyboards, synthesizer, voice).
+    fn pitched_chord(sound: Sound) -> Score {
+        let mut score = blank_score("chord");
+        let edits = [
+            Edit::SetInstrument {
+                track: 0,
+                instrument: sound.instrument(),
+            },
+            Edit::SetSound { track: 0, sound },
+        ];
+        let notes = [48, 60, 64, 67].map(|pitch| Edit::AddPitch {
+            track: 0,
+            measure: 0,
+            beat: 0,
+            pitch,
+        });
+        for edit in edits.iter().chain(&notes) {
+            apply_edit(&mut score, edit).unwrap();
+        }
+        score
+    }
+
+    #[test]
+    fn every_keyboard_synth_and_voice_sound_is_audible_and_distinct() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let pitched = [
+            Instrument::Piano,
+            Instrument::Organ,
+            Instrument::Synth,
+            Instrument::Voice,
+        ];
+        let mut presets: Vec<(Sound, String)> = Vec::new();
+        let mut renders: Vec<(Sound, Vec<f32>)> = Vec::new();
+        for sound in Sound::ALL
+            .into_iter()
+            .filter(|s| pitched.contains(&s.instrument()))
+        {
+            let mut player = Player::new(&mut File::open(&path).unwrap(), 44_100).unwrap();
+            player.load_score(&pitched_chord(sound));
+            player.play();
+            let mut buf = vec![0.0f32; 2 * 44_100];
+            player.render(&mut buf);
+            let peak = buf.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak > 0.01, "{sound:?} is nearly silent (peak {peak})");
+            assert!(peak <= 1.0, "{sound:?} clips (peak {peak})");
+            let preset = player.preset_of_track(0).expect("a preset");
+            if let Some((other, _)) = presets.iter().find(|(_, p)| *p == preset) {
+                panic!("{sound:?} and {other:?} both play {preset}");
+            }
+            presets.push((sound, preset));
+            // The same chord played by two sounds differs, beyond the noise of rounding.
+            for (other, earlier) in &renders {
+                let difference: f32 = buf.iter().zip(earlier).map(|(a, b)| (a - b).abs()).sum();
+                assert!(difference > 1.0, "{sound:?} sounds like {other:?}");
+            }
+            renders.push((sound, buf));
+        }
+        assert_eq!(presets.len(), 15);
     }
 
     #[test]

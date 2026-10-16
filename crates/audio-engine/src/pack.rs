@@ -276,6 +276,14 @@ fn check(manifest: &Manifest) -> Result<(), String> {
         {
             return Err(format!("{} is listed twice", sound.sound.id()));
         }
+        // A kit maps every key to another instrument; packs record one instrument across its
+        // keys, so drum kits stay those of the SoundFont for now.
+        if sound.sound.is_drum_kit() {
+            return Err(format!(
+                "{}: drum kits cannot come from a sound pack yet",
+                sound.sound.id()
+            ));
+        }
         // A plain name keeps every file the pack opens inside its own folder.
         let is_plain_name = !sound.file.is_empty()
             && !sound.file.contains(['/', '\\', ':'])
@@ -392,6 +400,12 @@ mod tests {
             r#"{ "sound": "guitar/nylon", "file": "nylon.sf2", "firstKey": 29, "lastKey": 88 }"#;
         let twice = NYLON.replace(line, &format!("{line}, {line}"));
         assert!(parse_manifest(&twice).unwrap_err().contains("listed twice"));
+    }
+
+    #[test]
+    fn a_pack_for_a_drum_kit_is_refused() {
+        let drums = NYLON.replace("guitar/nylon", "drums/standard");
+        assert!(parse_manifest(&drums).unwrap_err().contains("drum kits"));
     }
 
     #[test]

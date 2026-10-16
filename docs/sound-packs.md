@@ -38,6 +38,7 @@ freepats-nylon-guitar/
 | `licence`           | SPDX identifier of the samples' licence (`CC0-1.0`, `CC-BY-4.0`...).            |
 | `source`            | Optional: where the samples come from.                                          |
 | `sounds[].sound`    | A sound id of the built-in table, such as `"bass/slap"`. Each one at most once. |
+|                     | Not a drum kit: a pack that lists one is refused (see [`drums.md`](drums.md)).  |
 | `sounds[].file`     | A SoundFont (`.sf2`) or SFZ (`.sfz`) file in the pack folder, by its file name. |
 | `sounds[].firstKey` | First MIDI key the recordings cover.                                            |
 | `sounds[].lastKey`  | Last MIDI key the recordings cover.                                             |

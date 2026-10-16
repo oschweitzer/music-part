@@ -1,23 +1,37 @@
-import type { Instrument, SoundId, Track } from './score-types'
+import type { Instrument, SoundId, Track, TrackClef } from './score-types'
 
 /** Every instrument a track can have, in the order menus list them. */
-export const INSTRUMENTS: Instrument[] = ['Guitar', 'ElectricGuitar', 'Bass', 'Violin', 'Banjo', 'Piano']
+export const INSTRUMENTS: Instrument[] = ['Guitar', 'ElectricGuitar', 'Bass', 'Violin', 'Banjo', 'Piano', 'Organ', 'Synth', 'Voice', 'Drums']
 
 /**
  * How the notes of an instrument are stored, as `NoteKind` in `crates/score-model`: on strings and
- * frets (tablature, and a staff on request), or as pitches (a staff only).
+ * frets (tablature, and a staff on request), as pitches (a staff only), or as the pieces of a drum
+ * kit (a percussion staff).
  */
-export type NoteKind = 'fretted' | 'pitched'
+export type NoteKind = 'fretted' | 'pitched' | 'percussion'
 
-const PITCHED: readonly Instrument[] = ['Piano']
+const PITCHED: readonly Instrument[] = ['Piano', 'Organ', 'Synth', 'Voice']
+
+const PERCUSSION: readonly Instrument[] = ['Drums']
 
 export function noteKindOf(instrument: Instrument): NoteKind {
+  if (PERCUSSION.includes(instrument)) return 'percussion'
   return PITCHED.includes(instrument) ? 'pitched' : 'fretted'
 }
 
 /** True for a track whose notes are pitches, without strings. */
 export function isPitchedTrack(track: Pick<Track, 'instrument'>): boolean {
   return noteKindOf(track.instrument) === 'pitched'
+}
+
+/** True for a drum track: its notes are pieces of a kit (`drums.ts`). */
+export function isPercussionTrack(track: Pick<Track, 'instrument'>): boolean {
+  return noteKindOf(track.instrument) === 'percussion'
+}
+
+/** True for a track of a string instrument: it has a tuning and a tablature. */
+export function hasStrings(track: Pick<Track, 'instrument'>): boolean {
+  return noteKindOf(track.instrument) === 'fretted'
 }
 
 const LABELS: Record<Instrument, string> = {
@@ -27,6 +41,10 @@ const LABELS: Record<Instrument, string> = {
   Violin: 'Violin',
   Banjo: 'Banjo',
   Piano: 'Piano',
+  Organ: 'Organ',
+  Synth: 'Synthesizer',
+  Voice: 'Voice',
+  Drums: 'Drums',
 }
 
 /** The name shown to the user: the stored value is a code of the file format. */
@@ -54,6 +72,27 @@ export const SOUNDS: SoundInfo[] = [
   { id: 'violin/standard', name: 'Standard', program: 40, instrument: 'Violin' },
   { id: 'banjo/standard', name: 'Standard', program: 105, instrument: 'Banjo' },
   { id: 'piano/grand', name: 'Grand piano', program: 0, instrument: 'Piano' },
+  { id: 'piano/bright', name: 'Bright piano', program: 1, instrument: 'Piano' },
+  { id: 'piano/electric', name: 'Electric piano', program: 4, instrument: 'Piano' },
+  { id: 'piano/electric-fm', name: 'FM electric piano', program: 5, instrument: 'Piano' },
+  { id: 'organ/drawbar', name: 'Drawbar', program: 16, instrument: 'Organ' },
+  { id: 'organ/rock', name: 'Rock', program: 18, instrument: 'Organ' },
+  { id: 'organ/church', name: 'Church', program: 19, instrument: 'Organ' },
+  { id: 'organ/reed', name: 'Reed', program: 20, instrument: 'Organ' },
+  { id: 'synth/square-lead', name: 'Square lead', program: 80, instrument: 'Synth' },
+  { id: 'synth/saw-lead', name: 'Saw lead', program: 81, instrument: 'Synth' },
+  { id: 'synth/warm-pad', name: 'Warm pad', program: 89, instrument: 'Synth' },
+  { id: 'synth/choir-pad', name: 'Choir pad', program: 91, instrument: 'Synth' },
+  { id: 'voice/aahs', name: 'Choir aahs', program: 52, instrument: 'Voice' },
+  { id: 'voice/oohs', name: 'Voice oohs', program: 53, instrument: 'Voice' },
+  { id: 'voice/synth', name: 'Synth voice', program: 54, instrument: 'Voice' },
+  // Drum kits: the program is the kit on the percussion channel.
+  { id: 'drums/standard', name: 'Standard kit', program: 0, instrument: 'Drums' },
+  { id: 'drums/room', name: 'Room kit', program: 8, instrument: 'Drums' },
+  { id: 'drums/power', name: 'Power kit', program: 16, instrument: 'Drums' },
+  { id: 'drums/electronic', name: 'Electronic kit', program: 24, instrument: 'Drums' },
+  { id: 'drums/jazz', name: 'Jazz kit', program: 32, instrument: 'Drums' },
+  { id: 'drums/brush', name: 'Brush kit', program: 40, instrument: 'Drums' },
 ]
 
 /** The sounds of an instrument, its default sound first. */
@@ -66,3 +105,15 @@ export function soundLabel(id: SoundId): string {
   const sound = SOUNDS.find((s) => s.id === id)
   return sound ? `${instrumentLabel(sound.instrument)}: ${sound.name}` : id
 }
+
+/** True for an instrument whose track chooses its clef (`Track.clef`): a voice. */
+export function hasClefChoice(instrument: Instrument): boolean {
+  return instrument === 'Voice'
+}
+
+/** The clefs a voice can be written in, with the range each one suits. */
+export const CLEF_CHOICES: { clef: TrackClef; label: string }[] = [
+  { clef: 'treble', label: 'Treble (soprano, alto)' },
+  { clef: 'treble8vb', label: 'Treble 8vb (tenor)' },
+  { clef: 'bass', label: 'Bass (baritone, bass)' },
+]

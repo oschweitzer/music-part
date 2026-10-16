@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::{NoteKind, Place, Score, Track, Voice, MAX_FRET, MAX_PITCH};
+use crate::{NoteKind, Place, Score, Track, Voice, DRUM_PIECES, MAX_FRET, MAX_PITCH};
 
 const MAX_TRACKS: usize = 64;
 const MAX_STRINGS: usize = 12;
@@ -27,9 +27,10 @@ fn fail<T>(message: String) -> Result<T, ScoreError> {
 
 impl Score {
     /// Verifies the invariants the rest of the program relies on: sizes within limits, valid time
-    /// signatures and durations, a sound of the track's instrument, notes of the kind of the
-    /// instrument (on existing strings and frets, or at distinct pitches up to 127), and every
-    /// voice filling its measure.
+    /// signatures and durations, a sound of the track's instrument, a clef only where the
+    /// instrument has a clef choice, notes of the kind of the instrument (on existing strings and
+    /// frets, at distinct pitches up to 127, or on distinct drum pieces without technique), and
+    /// every voice filling its measure.
     pub fn validate(&self) -> Result<(), ScoreError> {
         if !(1..=MAX_TEMPO).contains(&self.tempo_bpm) {
             return fail(format!("the tempo must be between 1 and {MAX_TEMPO} bpm"));
@@ -46,6 +47,11 @@ impl Score {
                     track.sound.id()
                 ));
             }
+            if track.clef.is_some() != track.instrument.has_clef_choice() {
+                return fail(format!(
+                    "track \"{name}\" must have a clef exactly when its instrument lets it choose one"
+                ));
+            }
             let kind = track.instrument.note_kind();
             match kind {
                 NoteKind::Fretted if !(1..=MAX_STRINGS).contains(&track.tuning.len()) => {
@@ -53,7 +59,7 @@ impl Score {
                         "track \"{name}\" must have between 1 and {MAX_STRINGS} strings"
                     ));
                 }
-                NoteKind::Pitched if !track.tuning.is_empty() => {
+                NoteKind::Pitched | NoteKind::Percussion if !track.tuning.is_empty() => {
                     return fail(format!(
                         "track \"{name}\" has strings, but its instrument has none"
                     ));
@@ -109,6 +115,7 @@ fn check_notes(track: &Track, voice: &Voice, at: &str) -> Result<(), ScoreError>
                 let what = match kind {
                     NoteKind::Fretted => "a string and a fret",
                     NoteKind::Pitched => "a pitch",
+                    NoteKind::Percussion => "a drum piece",
                 };
                 return fail(format!(
                     "{at}: a note does not give {what}, as the instrument of the track needs"
@@ -137,6 +144,19 @@ fn check_notes(track: &Track, voice: &Voice, at: &str) -> Result<(), ScoreError>
                         return fail(format!("{at}: a beat has the pitch {pitch} twice"));
                     }
                 }
+                Place::Percussion { piece } => {
+                    if !DRUM_PIECES.contains(&piece) {
+                        return fail(format!(
+                            "{at}: a drum note has the key {piece}, which is no drum piece (35 to 81)"
+                        ));
+                    }
+                    if beat.notes[..i].iter().any(|n| n.key() == piece) {
+                        return fail(format!("{at}: a beat has the drum piece {piece} twice"));
+                    }
+                    if note.technique.is_some() {
+                        return fail(format!("{at}: a drum note has a technique of strings"));
+                    }
+                }
             }
         }
     }
@@ -147,7 +167,8 @@ fn check_notes(track: &Track, voice: &Voice, at: &str) -> Result<(), ScoreError>
 mod tests {
     use super::*;
     use crate::{
-        demo_score, Beat, Duration, Instrument, Measure, Note, NoteValue, Sound, TimeSignature,
+        demo_score, Beat, Clef, Duration, Instrument, Measure, Note, NoteValue, Sound,
+        TimeSignature,
     };
 
     fn error(score: &Score) -> String {
@@ -245,6 +266,61 @@ mod tests {
         let mut score = piano(&[60]);
         score.tracks[0].tuning = vec![64];
         assert!(error(&score).contains("has strings"));
+    }
+
+    /// A score with one drum track: one measure, a whole note on each piece given.
+    fn drums(pieces: &[u8]) -> Score {
+        let mut score = piano(&[]);
+        let track = &mut score.tracks[0];
+        track.instrument = Instrument::Drums;
+        track.sound = Sound::DrumsStandard;
+        track.measures[0].voices[0].beats[0].notes =
+            pieces.iter().map(|&p| Note::percussion(p)).collect();
+        score
+    }
+
+    #[test]
+    fn a_drum_track_with_distinct_pieces_is_valid() {
+        assert_eq!(drums(&[35, 38, 42, 81]).validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_drum_note_outside_the_pieces_twice_in_a_beat_or_with_a_technique_is_refused() {
+        assert!(error(&drums(&[34])).contains("key 34"));
+        assert!(error(&drums(&[82])).contains("key 82"));
+        assert!(error(&drums(&[36, 36])).contains("piece 36 twice"));
+        let mut score = drums(&[38]);
+        score.tracks[0].measures[0].voices[0].beats[0].notes[0].technique =
+            Some(crate::Technique::Bend);
+        assert!(error(&score).contains("technique"));
+    }
+
+    #[test]
+    fn a_drum_track_holds_only_drum_pieces_and_has_no_strings() {
+        let mut score = drums(&[38]);
+        score.tracks[0].measures[0].voices[0].beats[0].notes[0] = Note::pitched(38);
+        assert!(error(&score).contains("a drum piece"), "{}", error(&score));
+
+        let mut score = drums(&[38]);
+        score.tracks[0].tuning = vec![64];
+        assert!(error(&score).contains("has strings"));
+
+        let mut score = piano(&[60]);
+        score.tracks[0].measures[0].voices[0].beats[0].notes[0] = Note::percussion(38);
+        assert!(error(&score).contains("a pitch"));
+    }
+
+    #[test]
+    fn a_voice_has_a_clef_and_other_instruments_have_none() {
+        let mut score = piano(&[60]);
+        score.tracks[0].clef = Some(Clef::Bass);
+        assert!(error(&score).contains("clef"), "{}", error(&score));
+
+        let track = &mut score.tracks[0];
+        (track.instrument, track.sound) = (Instrument::Voice, Sound::VoiceAahs);
+        assert_eq!(score.validate(), Ok(()));
+        score.tracks[0].clef = None;
+        assert!(error(&score).contains("clef"));
     }
 
     #[test]

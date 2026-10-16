@@ -1,7 +1,8 @@
 //! Export a `Score` as a Standard MIDI File (format 1): a first track with the title, tempo and
 //! time signatures, then one track per score track on its own channel, with the General MIDI
-//! program of its sound. Ties become one long note. Techniques are not written: MIDI has
-//! no standard way to say them.
+//! program of its sound. A drum track plays on the percussion channel (10), its program choosing
+//! the kit, its notes on the keys of their pieces. Ties become one long note. Techniques are not
+//! written: MIDI has no standard way to say them.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -113,9 +114,12 @@ fn instrument_track<'a>(
     track: &'a Track,
     index: usize,
 ) -> Result<Vec<TrackEvent<'a>>, MidiExportError> {
-    // One channel per track, skipping the percussion channel, like the player does.
+    // One channel per track, skipping the percussion channel, like the player does; every drum
+    // track plays on the percussion channel.
     let channel = (index % 15) as u8;
-    let channel = u4::new(if channel >= PERCUSSION_CHANNEL {
+    let channel = u4::new(if track.sound.is_drum_kit() {
+        PERCUSSION_CHANNEL
+    } else if channel >= PERCUSSION_CHANNEL {
         channel + 1
     } else {
         channel
@@ -323,6 +327,7 @@ mod tests {
         for (a, b) in score.tracks.iter().zip(&imported.tracks) {
             assert_eq!(b.sound, a.sound);
             assert_eq!(b.tuning, a.tuning);
+            assert_eq!(b.clef, a.clef, "{:?}", a.sound);
             assert_eq!(sounding(a), sounding(b), "{:?}", a.sound);
         }
     }
@@ -404,6 +409,83 @@ mod tests {
             .collect();
         // 4/4 for two measures, then 3/4 (the denominator is stored as a power of two).
         assert_eq!(signatures, vec![(4, 2), (3, 2)]);
+    }
+
+    #[test]
+    fn every_drum_piece_survives_a_round_trip_on_the_percussion_channel() {
+        let mut score = blank_score("t");
+        score_model::apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::Drums,
+            },
+        )
+        .unwrap();
+        score_model::apply_edit(
+            &mut score,
+            &Edit::SetSound {
+                track: 0,
+                sound: Sound::DrumsBrush,
+            },
+        )
+        .unwrap();
+        // One quarter note per piece, in as many measures as it takes.
+        let pieces: Vec<u8> = score_model::DRUM_PIECES.collect();
+        let measures = pieces.len().div_ceil(4);
+        for at in score.tracks[0].measures.len()..measures {
+            score_model::apply_edit(&mut score, &Edit::InsertMeasure { at }).unwrap();
+        }
+        for measure in 0..measures {
+            for beat in 0..4 {
+                let quarter = score_model::Duration {
+                    value: score_model::NoteValue::Quarter,
+                    dots: 0,
+                };
+                score_model::apply_edit(
+                    &mut score,
+                    &Edit::SetDuration {
+                        track: 0,
+                        measure,
+                        beat,
+                        duration: quarter,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        for (i, &piece) in pieces.iter().enumerate() {
+            score_model::apply_edit(
+                &mut score,
+                &Edit::AddPitch {
+                    track: 0,
+                    measure: i / 4,
+                    beat: i % 4,
+                    pitch: piece,
+                },
+            )
+            .unwrap();
+        }
+
+        let bytes = export_midi(&score).unwrap();
+        let smf = midly::Smf::parse(&bytes).unwrap();
+        for event in &smf.tracks[1] {
+            if let TrackEventKind::Midi { channel, message } = event.kind {
+                assert_eq!(channel.as_int(), PERCUSSION_CHANNEL);
+                if let MidiMessage::ProgramChange { program } = message {
+                    assert_eq!(program.as_int(), 40);
+                }
+            }
+        }
+        let imported = import_midi(&bytes).unwrap();
+        assert_eq!(imported.skipped_notes, 0);
+        let drums = &imported.score.tracks[0];
+        assert_eq!(drums.instrument, Instrument::Drums);
+        assert_eq!(drums.sound, Sound::DrumsBrush);
+        let original = &score.tracks[0];
+        for (a, b) in original.measures.iter().zip(&drums.measures) {
+            assert_eq!(a.voices[0].beats, b.voices[0].beats);
+        }
     }
 
     #[test]

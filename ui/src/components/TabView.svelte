@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { piecePosition } from '../lib/drums'
   import { isBeatSelected, selectedRows, type Selection } from '../lib/selection'
   import {
     bassClefDots,
@@ -12,7 +13,7 @@
     trebleClefPath,
   } from '../lib/staff-glyphs'
   import { keySignatureGlyphs, positionY, STAFF_METRICS, staffIndexFor, staffPosition } from '../lib/staff-layout'
-  import type { Accidental, StaffBlock, StaffMeasure } from '../lib/staff-layout'
+  import type { Accidental, StaffBlock, StaffHead, StaffMeasure } from '../lib/staff-layout'
   import { clipLayout, hitTest, METRICS } from '../lib/tab-layout'
   import type { BeatLayout, CursorPosition, HitTarget, SystemLayout, TabLayout } from '../lib/tab-layout'
 
@@ -46,7 +47,8 @@
   } = $props()
 
   const drawn = $derived(visibleX ? clipLayout({ layout, left: visibleX.left, right: visibleX.right }) : layout)
-  const isPitchRows = $derived(layout.rowKind === 'pitch')
+  // The rows of a pitched or drum track are on its staff (pitches or pieces), not strings.
+  const isPitchRows = $derived(layout.rowKind !== 'string')
 
   /** What is under the mouse. The drawing is scaled if the page squeezes it, so map back to drawing units. */
   function targetAt(event: MouseEvent): HitTarget | null {
@@ -167,11 +169,31 @@
     return block.clef === 'bass' || block.clef === 'bass8vb'
   }
 
-  /** Where a pitch is written on the staves of a system: the y of its line or space. */
+  /** Where a pitch (on drums, a piece) is written on the staves of a system: the y of its line or space. */
   function pitchY(system: SystemLayout, pitch: number): number | null {
     const block = system.staves[staffIndexFor({ pitch, staffCount: system.staves.length })]
     if (!block) return null
+    if (block.clef === 'percussion') {
+      const position = piecePosition(pitch)
+      return position === null ? null : positionY({ position, bottom: block.bottom })
+    }
     return positionY({ position: staffPosition({ pitch, clef: block.clef, key: layout.key }), bottom: block.bottom })
+  }
+
+  /** The outline of a drum head that is not an oval: a diamond or a triangle. */
+  function headPolygon(head: StaffHead): string {
+    const { x, y } = head
+    const w = STAFF_METRICS.headHalfWidth + 0.4
+    return head.shape === 'diamond'
+      ? `${x - w},${y} ${x},${y - 4} ${x + w},${y} ${x},${y + 4}`
+      : `${x - w},${y + 3.6} ${x},${y - 4.2} ${x + w},${y + 3.6}`
+  }
+
+  /** The two strokes of a cross head, a little smaller inside a circle. */
+  function crossPath(head: StaffHead): string {
+    const d = head.shape === 'circleCross' ? 2.9 : 3.8
+    const { x, y } = head
+    return `M${x - d} ${y - d} L${x + d} ${y + d} M${x - d} ${y + d} L${x + d} ${y - d}`
   }
 
   /** The head of a staff that the selected row points at, on a beat. */
@@ -226,7 +248,11 @@
           {#each block.lineYs as y (y)}
             <line class="staff-line" x1={system.left} x2={system.right} y1={y} y2={y} />
           {/each}
-          {#if isBassClef(block)}
+          {#if block.clef === 'percussion'}
+            <!-- The percussion clef: two thick bars across the middle of the staff. -->
+            <rect class="clef-bar" x={system.left + 13} y={positionY({ position: 6, bottom: block.bottom })} width="3.4" height={STAFF_METRICS.lineGap * 2} />
+            <rect class="clef-bar" x={system.left + 20} y={positionY({ position: 6, bottom: block.bottom })} width="3.4" height={STAFF_METRICS.lineGap * 2} />
+          {:else if isBassClef(block)}
             <path class="clef-glyph" d={bassClefPath({ x: system.left + 16, bottom: block.bottom })} />
             {#each bassClefDots({ x: system.left + 16, bottom: block.bottom }) as dot, i (i)}
               <circle class="clef-dot" cx={dot.cx} cy={dot.cy} r={dot.r} />
@@ -239,7 +265,7 @@
           {#if block.clef === 'treble8vb' || block.clef === 'bass8vb'}
             <text class="octave" x={system.left + 18} y={block.bottom + (isBassClef(block) ? 12 : 30)} text-anchor="middle">8</text>
           {/if}
-          {#each keySignatureGlyphs({ key: layout.key, clef: block.clef, x: system.left + METRICS.clefWidth - 2, bottom: block.bottom }) as glyph, i (i)}
+          {#each block.clef === 'percussion' ? [] : keySignatureGlyphs({ key: layout.key, clef: block.clef, x: system.left + METRICS.clefWidth - 2, bottom: block.bottom }) as glyph, i (i)}
             <path class="accidental" d={glyph.kind === 'sharp' ? sharpPath(glyph) : flatPath(glyph)} />
           {/each}
         </g>
@@ -406,15 +432,26 @@
                 {#if head.accidental}
                   <path class="accidental" d={accidentalPath(head.accidental, head.accidentalX, head.y)} />
                 {/if}
-                <ellipse
-                  class="head"
-                  class:hollow={!head.isFilled}
-                  cx={head.x}
-                  cy={head.y}
-                  rx={STAFF_METRICS.headHalfWidth}
-                  ry="3.4"
-                  transform="rotate(-20 {head.x} {head.y})"
-                />
+                {#if head.shape === 'normal'}
+                  <ellipse
+                    class="head"
+                    class:hollow={!head.isFilled}
+                    cx={head.x}
+                    cy={head.y}
+                    rx={STAFF_METRICS.headHalfWidth}
+                    ry="3.4"
+                    transform="rotate(-20 {head.x} {head.y})"
+                  />
+                {:else if head.shape === 'cross' || head.shape === 'circleCross'}
+                  <g class="head cross-head" data-shape={head.shape}>
+                    {#if head.shape === 'circleCross'}
+                      <circle cx={head.x} cy={head.y} r={STAFF_METRICS.headHalfWidth} />
+                    {/if}
+                    <path d={crossPath(head)} />
+                  </g>
+                {:else}
+                  <polygon class="head" class:hollow={!head.isFilled} data-shape={head.shape} points={headPolygon(head)} />
+                {/if}
               {/each}
               {#if sb.stem}
                 <line class="stem" x1={sb.stem.x} x2={sb.stem.x} y1={sb.stem.y1} y2={sb.stem.y2} />
@@ -511,8 +548,17 @@
     stroke-linejoin: round;
   }
 
-  .clef-dot {
+  .clef-dot,
+  .clef-bar {
     fill: var(--ink);
+  }
+
+  .cross-head path,
+  .cross-head circle {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 1.5;
+    stroke-linecap: round;
   }
 
   .octave {
