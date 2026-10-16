@@ -1,0 +1,10 @@
+ganjo: samples of an SX six-string banjo (a guitar banjo, or banjitar), recorded, edited and
+mapped by itsclipping, version 1.000 (https://github.com/sfzinstruments/ganjo, tag v1.000,
+commit ccff5cd5cd3b513873a48994c07724d9d3c39e1c).
+
+Published under the Creative Commons CC0 1.0 public domain dedication
+(https://creativecommons.org/publicdomain/zero/1.0/): no permission, credit or fee is needed to
+use, change or distribute it.
+
+ganjo.sfz and its WAV samples are downloaded by `pnpm fetch:soundfont`, each with the checksum
+listed in files.sha256, and are not in git.

@@ -11,10 +11,15 @@ import { fileURLToPath } from 'node:url'
 import SevenZip from '7z-wasm'
 
 const GENERAL_USER_COMMIT = '97049183643d5fc5a9322a69c5b09efb667c6c3a'
+// Tag v1.000 of the ganjo SFZ instrument.
+const GANJO_COMMIT = 'ccff5cd5cd3b513873a48994c07724d9d3c39e1c'
 
 /**
  * `archive` entries are .7z files holding the sound bank at `entry`; two checksums are kept, of
  * the download and of the file that comes out, so a changed archive is caught either way.
+ * `files` entries are a folder of many files (an SFZ instrument and its samples) fetched one by
+ * one from `base`, a URL pinned to a commit, as listed with their checksum in `list`, a committed
+ * `sha256sum` file of the pack.
  */
 const ASSETS = [
   {
@@ -48,6 +53,22 @@ const ASSETS = [
       entry: 'FingerBassYR SF2-20190930/FingerBassYR 20190930.sf2',
     },
     sha256: 'bd1332696f61c0cb254ce7f202fb6b945ff46ccb1dcdd62e345a50bde3afb165',
+  },
+  {
+    name: 'packs/freepats-electric-bass-pick/picked-bass.sf2',
+    archive: {
+      url: 'https://github.com/freepats/electric-bass-YR/releases/download/2019-09-30/PickedBassYR-SF2-20190930.7z',
+      sha256: 'e6bff767c352cd27de2de8cfff326d0849a76bb38d876075eecd5ffd2dc5afd0',
+      entry: 'PickedBassYR SF2-20190930/PickedBassYR 20190930.sf2',
+    },
+    sha256: 'b16f6666486f42c6c4bde19a62462f0cda8b0f1d0ce72ad8ec51a557118d03ae',
+  },
+  {
+    name: 'packs/sfzinstruments-ganjo',
+    files: {
+      base: `https://raw.githubusercontent.com/sfzinstruments/ganjo/${GANJO_COMMIT}/`,
+      list: 'files.sha256',
+    },
   },
 ]
 
@@ -112,8 +133,28 @@ async function fetchAsset(asset) {
   console.log(`Saved ${asset.name} (${(bytes.length / 1024 / 1024).toFixed(1)} MB)`)
 }
 
+/** The files of a `files` entry, each as an asset of its own. */
+function listedFiles(asset) {
+  const list = readFileSync(join(targetDir, asset.name, asset.files.list), 'utf8')
+  return list
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => {
+      const match = /^([0-9a-f]{64}) {2}(.+)$/.exec(line)
+      if (!match || match[2].split('/').includes('..')) throw new Error(`bad line in ${asset.files.list}: ${line}`)
+      const path = match[2]
+      return { name: `${asset.name}/${path}`, url: asset.files.base + path.split('/').map(encodeURIComponent).join('/'), sha256: match[1] }
+    })
+}
+
 try {
-  for (const asset of ASSETS) await fetchAsset(asset)
+  for (const asset of ASSETS) {
+    if (asset.files) {
+      for (const file of listedFiles(asset)) await fetchAsset(file)
+    } else {
+      await fetchAsset(asset)
+    }
+  }
 } catch (error) {
   console.error(error instanceof Error ? error.message : error)
   process.exit(1)

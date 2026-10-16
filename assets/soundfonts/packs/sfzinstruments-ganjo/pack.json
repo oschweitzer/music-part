@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "sfzinstruments-ganjo",
+  "name": "ganjo, six-string banjo",
+  "author": "itsclipping",
+  "licence": "CC0-1.0",
+  "source": "https://github.com/sfzinstruments/ganjo",
+  "sounds": [
+    {
+      "sound": "banjo/standard",
+      "file": "ganjo.sfz",
+      "firstKey": 38,
+      "lastKey": 72
+    }
+  ]
+}

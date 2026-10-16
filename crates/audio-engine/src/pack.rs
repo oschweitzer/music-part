@@ -885,14 +885,32 @@ mod tests {
                 pack.dir.join("LICENSE.txt").is_file(),
                 "{folder} has no LICENSE.txt"
             );
+            // A pack of many files (an SFZ instrument and its samples) is bundled as a folder.
+            let folder_bundled = bundle.contains(&format!("\"soundfont/packs/{folder}/\""));
+            let is_bundled = |name: &str| {
+                folder_bundled || bundle.contains(&format!("\"soundfont/packs/{folder}/{name}\""))
+            };
             for name in ["pack.json", "LICENSE.txt"] {
-                let path = format!("packs/{folder}/{name}");
-                assert!(bundle.contains(&path), "{path} is not bundled");
+                assert!(is_bundled(name), "packs/{folder}/{name} is not bundled");
+            }
+            // ... and fetched file by file, from the checksums listed in its `files.sha256`.
+            let listed = fs::read_to_string(pack.dir.join("files.sha256")).ok();
+            if listed.is_some() {
+                assert!(
+                    fetch.contains(&format!("'packs/{folder}'")),
+                    "packs/{folder} is not fetched"
+                );
             }
             for sound in &pack.manifest.sounds {
                 let path = format!("packs/{folder}/{}", sound.file);
-                assert!(fetch.contains(&path), "{path} is not fetched");
-                assert!(bundle.contains(&path), "{path} is not bundled");
+                let is_fetched = match &listed {
+                    Some(list) => list
+                        .lines()
+                        .any(|line| line.ends_with(&format!("  {}", sound.file))),
+                    None => fetch.contains(&format!("'{path}'")),
+                };
+                assert!(is_fetched, "{path} is not fetched");
+                assert!(is_bundled(&sound.file), "{path} is not bundled");
             }
         }
     }

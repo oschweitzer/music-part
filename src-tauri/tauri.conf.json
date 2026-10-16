@@ -44,7 +44,11 @@
       "../assets/soundfonts/packs/freepats-electric-guitar-clean/electric-guitar.sf2": "soundfont/packs/freepats-electric-guitar-clean/electric-guitar.sf2",
       "../assets/soundfonts/packs/freepats-electric-bass-finger/pack.json": "soundfont/packs/freepats-electric-bass-finger/pack.json",
       "../assets/soundfonts/packs/freepats-electric-bass-finger/LICENSE.txt": "soundfont/packs/freepats-electric-bass-finger/LICENSE.txt",
-      "../assets/soundfonts/packs/freepats-electric-bass-finger/electric-bass.sf2": "soundfont/packs/freepats-electric-bass-finger/electric-bass.sf2"
+      "../assets/soundfonts/packs/freepats-electric-bass-finger/electric-bass.sf2": "soundfont/packs/freepats-electric-bass-finger/electric-bass.sf2",
+      "../assets/soundfonts/packs/freepats-electric-bass-pick/pack.json": "soundfont/packs/freepats-electric-bass-pick/pack.json",
+      "../assets/soundfonts/packs/freepats-electric-bass-pick/LICENSE.txt": "soundfont/packs/freepats-electric-bass-pick/LICENSE.txt",
+      "../assets/soundfonts/packs/freepats-electric-bass-pick/picked-bass.sf2": "soundfont/packs/freepats-electric-bass-pick/picked-bass.sf2",
+      "../assets/soundfonts/packs/sfzinstruments-ganjo/": "soundfont/packs/sfzinstruments-ganjo/"
     }
   }
 }

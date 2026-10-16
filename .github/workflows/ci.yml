@@ -49,8 +49,11 @@ jobs:
       - name: SoundFont cache
         uses: actions/cache@v4
         with:
-          path: assets/soundfonts/**/*.sf2
-          key: soundfont-${{ hashFiles('scripts/fetch-soundfont.mjs') }}
+          path: |
+            assets/soundfonts/**/*.sf2
+            assets/soundfonts/**/*.sfz
+            assets/soundfonts/**/*.wav
+          key: soundfont-${{ hashFiles('scripts/fetch-soundfont.mjs', 'assets/soundfonts/packs/*/files.sha256') }}
       - run: pnpm fetch:soundfont
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -77,8 +80,11 @@ jobs:
       - name: SoundFont cache
         uses: actions/cache@v4
         with:
-          path: assets/soundfonts/**/*.sf2
-          key: soundfont-${{ hashFiles('scripts/fetch-soundfont.mjs') }}
+          path: |
+            assets/soundfonts/**/*.sf2
+            assets/soundfonts/**/*.sfz
+            assets/soundfonts/**/*.wav
+          key: soundfont-${{ hashFiles('scripts/fetch-soundfont.mjs', 'assets/soundfonts/packs/*/files.sha256') }}
       - run: pnpm fetch:soundfont
       # Chrome is preinstalled on the runner; the tests find it on the PATH.
       - run: pnpm e2e

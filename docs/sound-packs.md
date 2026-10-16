@@ -172,11 +172,17 @@ committed; the samples are not (see [`soundfonts.md`](soundfonts.md)).
 2. Create `assets/soundfonts/packs/<id>/` with `pack.json` and `LICENSE.txt`.
 3. Add the sample file to `ASSETS` in `scripts/fetch-soundfont.mjs`, as
    `packs/<id>/<file>`, with its checksums. A `.7z` is unpacked by the `7z-wasm` dev dependency.
-4. Add the three files to `bundle.resources` in `src-tauri/tauri.conf.json`.
+   An SFZ instrument with many samples is a `files` entry instead: commit a `files.sha256`
+   (`sha256sum` format, paths relative to the pack) and give the URL of a pinned commit.
+4. Add the three files to `bundle.resources` in `src-tauri/tauri.conf.json`, or the pack folder
+   for a pack of many files.
 5. Run `pnpm fetch:soundfont`, then `cargo test -p audio-engine`:
    - `the_committed_packs_are_valid_and_their_files_are_fetched_and_bundled` checks steps 2 to 4;
-   - `the_declared_key_ranges_match_the_recordings` gives the real key range of the file;
-   - `every_bank_plays_its_instrument_over_the_whole_neck` checks it is audible and does not clip.
+   - `the_declared_key_ranges_match_the_recordings` gives the real key range of a SoundFont, and
+     `the_declared_key_ranges_of_sfz_packs_match_their_regions` that of an SFZ instrument;
+   - `every_bank_plays_its_instrument_over_the_whole_neck` and
+     `every_sfz_bank_plays_its_instrument_over_the_whole_neck` check it is audible and does not
+     clip.
 6. Listen with `cargo run -p audio-engine --release --example render_wav -- out.wav`.
 7. Add it to the table in [`soundfonts.md`](soundfonts.md) and to the changelog.
 

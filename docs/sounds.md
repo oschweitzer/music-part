@@ -54,10 +54,10 @@ that table. The file format did not change: a built-in sound is written exactly 
 | `electric-guitar/overdrive`  | Overdrive         | 29         | Electric guitar |                       |
 | `electric-guitar/distortion` | Distortion        | 30         | Electric guitar |                       |
 | `bass/finger`                | Finger            | 33         | Electric bass   | `electric-bass.sf2`   |
-| `bass/pick`                  | Pick              | 34         | Electric bass   |                       |
+| `bass/pick`                  | Pick              | 34         | Electric bass   | `picked-bass.sf2`     |
 | `bass/slap`                  | Slap              | 36         | Electric bass   |                       |
 | `violin/standard`            | Standard          | 40         | Violin          |                       |
-| `banjo/standard`             | Standard          | 105        | Banjo           |                       |
+| `banjo/standard`             | Standard          | 105        | Banjo           | `ganjo.sfz`           |
 | `piano/grand`                | Grand piano       | 0          | Piano           |                       |
 | `piano/bright`               | Bright piano      | 1          | Piano           |                       |
 | `piano/electric`             | Electric piano    | 4          | Piano           |                       |
@@ -194,7 +194,5 @@ Not done in Phase A, recorded here so they are picked up later:
 - **SFZ: done** as a subset played by our own Rust code, after evaluating sfizz; see
   [`sfz.md`](sfz.md). Still to do: key switches for technique-specific samples, release
   samples, FLAC and Ogg samples.
-- **Realistic sample downloads.** More CC0 or permissive banks (steel guitar, distorted guitar,
-  slap bass, violin, banjo) fetched by `pnpm fetch:soundfont` with pinned checksums. Hosts such as
-  freepats could not be reached from the environment this was written in, so no new bank was
-  added.
+- **Realistic samples** for the remaining sounds: the picked bass and the banjo have recordings
+  now; the survey of what is left, and why, is in [`soundfonts.md`](soundfonts.md#sounds-without-a-recording-yet).

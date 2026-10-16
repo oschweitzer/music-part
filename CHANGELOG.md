@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Playback with recordings: the bass played with a pick (FreePats Picked Bass YR) and the banjo
+  (ganjo, a six-string banjo from sfzinstruments, the first bundled SFZ pack) now play recorded
+  samples, both CC0. The sounds still without a free recording are listed in
+  `docs/soundfonts.md`.
+
 - Sound packs can declare new sounds of an existing instrument (a twelve-string guitar as
   `"guitar/twelve-string"`), with a name and the General MIDI program that stands in for them.
   The Sound and `+ Track` menus list them after the built-in sounds, and the `Sounds` panel marks

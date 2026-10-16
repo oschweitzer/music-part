@@ -1,0 +1,9 @@
+picked-bass.sf2: Picked Bass YR, version 2019-09-30, from the FreePats project
+(https://freepats.zenvoid.org/). Samples created by Andrea Biasior from a Yamaha RBX bass
+guitar played with a pick, with small edits by roberto@zenvoid.org.
+
+Published under the Creative Commons CC0 1.0 public domain dedication
+(https://creativecommons.org/publicdomain/zero/1.0/): no permission, credit or fee is needed to
+use, change or distribute it.
+
+The .sf2 file is downloaded by `pnpm fetch:soundfont` with a pinned checksum and is not in git.
