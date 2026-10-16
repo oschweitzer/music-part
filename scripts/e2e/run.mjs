@@ -6,7 +6,7 @@
 //        pnpm e2e --keep     (leave the screenshots of passing scenarios in target/e2e)
 
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
@@ -18,11 +18,37 @@ const out = join(root, 'target', 'e2e')
 const bridge = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'tauri-bridge.js'), 'utf8')
 const uiPort = 14201
 
+const packsFolder = join(root, 'target', 'e2e-packs')
+
+/**
+ * The packs the backend lists: the committed manifests of the bundled packs, and a test pack that
+ * declares a new sound. The backend has no audio, so it reads no sample: manifests are enough.
+ */
+function writePacks() {
+  rmSync(packsFolder, { recursive: true, force: true })
+  const bundled = join(root, 'assets', 'soundfonts', 'packs')
+  for (const id of readdirSync(bundled)) {
+    if (!existsSync(join(bundled, id, 'pack.json'))) continue
+    mkdirSync(join(packsFolder, id), { recursive: true })
+    cpSync(join(bundled, id, 'pack.json'), join(packsFolder, id, 'pack.json'))
+  }
+  const twelve = {
+    format: 1,
+    id: 'e2e-twelve-string',
+    name: 'Test twelve-string',
+    author: 'The end-to-end tests',
+    licence: 'CC0-1.0',
+    sounds: [{ sound: 'guitar/twelve-string', name: 'Twelve-string', program: 25, file: 'twelve-string.sfz', firstKey: 40, lastKey: 88 }],
+  }
+  mkdirSync(join(packsFolder, twelve.id), { recursive: true })
+  writeFileSync(join(packsFolder, twelve.id, 'pack.json'), JSON.stringify(twelve, null, 2))
+}
+
 class Backend {
-  constructor(args = []) {
+  /** `hasPacks` false starts the backend without any pack, as on a machine that lacks them. */
+  constructor(args = [], { hasPacks = true } = {}) {
     this.waiting = new Map()
-    // The committed manifests of the bundled packs: the backend lists them, it reads no sample.
-    const env = { ...process.env, MUSIC_PART_PACKS: join(root, 'assets', 'soundfonts', 'packs') }
+    const env = { ...process.env, MUSIC_PART_PACKS: hasPacks ? packsFolder : join(packsFolder, 'none') }
     this.process = spawn(join(root, 'target', 'debug', 'examples', 'headless'), args, { stdio: ['pipe', 'pipe', 'inherit'], env })
     createInterface({ input: this.process.stdout }).on('line', (line) => {
       const answer = JSON.parse(line)
@@ -67,6 +93,7 @@ async function startVite() {
 async function main() {
   rmSync(out, { recursive: true, force: true })
   mkdirSync(out, { recursive: true })
+  writePacks()
 
   console.log('Building the headless backend…')
   execFileSync('cargo', ['build', '-q', '-p', 'music-part-app', '--example', 'headless'], { cwd: root, stdio: 'inherit' })
@@ -86,10 +113,10 @@ async function main() {
     }
   })
 
-  /** A new backend (the demo score, or `file`) and a freshly loaded page. */
-  context.fresh = async (file) => {
+  /** A new backend (the demo score, or `file`; with the test packs unless `hasPacks` is false) and a freshly loaded page. */
+  context.fresh = async (file, { hasPacks = true } = {}) => {
     context.backend?.stop()
-    context.backend = new Backend(file ? [file] : [])
+    context.backend = new Backend(file ? [file] : [], { hasPacks })
     await page.goto(`http://127.0.0.1:${uiPort}/`)
     await page.waitFor(`document.querySelector('svg.tab text.fret, svg.tab line.string, svg.tab line.staff-line')`, { what: 'the score to appear' })
   }

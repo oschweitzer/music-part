@@ -1,21 +1,31 @@
 <script lang="ts">
   import type { SoundPacks } from '../lib/document-api'
-  import type { SoundId } from '../lib/score-types'
+  import type { Track } from '../lib/score-types'
   import { soundsPanel } from '../lib/sound-packs'
 
-  let { load, sound }: { load: () => Promise<SoundPacks>; sound: SoundId | null } = $props()
+  let {
+    load,
+    track,
+    onloaded,
+  }: {
+    load: () => Promise<SoundPacks>
+    track: Pick<Track, 'instrument' | 'sound' | 'fallback_program'> | null
+    /** Told the packs each time they are asked again, so the Sound menu lists the same. */
+    onloaded?: (packs: SoundPacks) => void
+  } = $props()
 
   let packs = $state<SoundPacks | null>(null)
   let error = $state<string | null>(null)
   let details = $state<HTMLDetailsElement>()
 
-  const panel = $derived(packs ? soundsPanel({ packs, sound }) : null)
+  const panel = $derived(packs ? soundsPanel({ packs, track }) : null)
 
   // Asked again at each opening: a pack file that fails is only found out when a score uses it.
   async function refresh() {
     if (!details?.open) return
     try {
       packs = await load()
+      onloaded?.(packs)
       error = null
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason)
@@ -59,8 +69,10 @@
               </div>
               <ul class="pack-sounds">
                 {#each pack.sounds as packSound (packSound.label)}
-                  <li>
-                    {packSound.label} <span class="muted">({packSound.keys})</span>
+                  <li class="pack-sound">
+                    {packSound.label}
+                    {#if packSound.isNew}<span class="new" title="A sound this pack adds to the built-in ones">new sound</span>{/if}
+                    <span class="muted">({packSound.keys})</span>
                     {#if packSound.replacedBy}<span class="muted"> replaced by {packSound.replacedBy}</span>{/if}
                   </li>
                 {/each}
@@ -164,6 +176,15 @@
 
   .pack-sounds {
     margin-top: 3px;
+  }
+
+  .new {
+    margin-left: 2px;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .muted {

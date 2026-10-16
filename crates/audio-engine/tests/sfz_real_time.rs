@@ -83,7 +83,7 @@ fn playing_sfz_voices_does_not_allocate() {
     let mut budget = sfz::MAX_PACK_SAMPLE_BYTES;
     let (instrument, _) = sfz::load(&dir.join("a.sfz"), &dir, &mut budget).unwrap();
     let mut sounds = vec![SfzSound {
-        sound: Sound::GuitarNylon,
+        sound: Sound::GUITAR_NYLON,
         keys: 0..=127,
         instrument,
     }];

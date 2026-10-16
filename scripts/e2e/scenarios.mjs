@@ -661,7 +661,8 @@ export const scenarios = [
 
       // The nylon guitar of the demo offers the sounds of an acoustic guitar only.
       assert.equal(await page.eval(`${soundSelect}.value`), 'guitar/nylon')
-      assert.equal(await options(), 'guitar/nylon guitar/steel')
+      // The test pack adds a sound of its own after the built-in ones.
+      assert.equal(await options(), 'guitar/nylon guitar/steel guitar/twelve-string')
       await choose('Sound of this track', 'guitar/steel')
       assert.equal((await document_(context)).score.tracks[0].sound, 'guitar/steel')
       assert.equal(await isDirty(page), true)
@@ -1173,6 +1174,52 @@ export const scenarios = [
       // A press elsewhere closes it.
       await clickOn(page, 'svg.tab')
       assert.equal(await page.eval(`document.querySelector('.sounds-menu').open`), false)
+    },
+  ],
+
+  [
+    'a sound a pack declares is offered, keeps its fallback program, and shows as missing without the pack',
+    async (context) => {
+      const { page, out } = context
+      const soundSelect = `document.querySelector('select[aria-label="Sound of this track"]')`
+      const selectedText = () => page.eval(`${soundSelect}.selectedOptions[0].textContent.trim()`)
+      await page.waitFor(`[...${soundSelect}.options].some(o => o.value === 'guitar/twelve-string')`, { what: 'the pack sound in the menu' })
+      assert.equal(await page.eval(`[...${soundSelect}.options].find(o => o.value === 'guitar/twelve-string').textContent.trim()`), 'Twelve-string')
+
+      await page.eval(`(() => { const s = ${soundSelect}; s.value = 'guitar/twelve-string'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      const track = (await document_(context)).score.tracks[0]
+      assert.equal(track.sound, 'guitar/twelve-string')
+      assert.equal(track.fallback_program, 25, 'the track records the program the pack declared')
+
+      // The Sounds panel marks the pack's sound as new, and names it for the track.
+      await page.eval(`document.querySelector('.sounds-menu summary').click()`)
+      await page.waitFor(`document.querySelector('.sounds-panel .pack-sound .new')`, { what: 'a new sound in the panel' })
+      assert.match(await text(page, '.sounds-panel .current'), /Acoustic guitar: Twelve-string: Test twelve-string \(CC0-1\.0\)/)
+      await clickOn(page, 'svg.tab')
+
+      // The "+ Track" menu offers it too.
+      assert.ok(await exists(page, '.add-track button[aria-label="Acoustic guitar: Twelve-string"]'), 'the add-track menu lists the pack sound')
+
+      // Opened where the pack is not installed, the score still loads and says what plays instead.
+      const file = join(out, 'twelve-string.mpart')
+      await context.backend.request('save_file', { path: file })
+      await context.fresh(file, { hasPacks: false })
+      assert.equal(await page.eval(`${soundSelect}.value`), 'guitar/twelve-string')
+      assert.equal(await selectedText(), 'twelve-string (pack missing), plays General MIDI program 25')
+      await page.eval(`document.querySelector('.sounds-menu summary').click()`)
+      await page.waitFor(`document.querySelector('.sounds-panel .current')`, { what: 'the current sound' })
+      assert.match(await text(page, '.sounds-panel .current'), /twelve-string \(pack missing\): General MIDI \(pack missing\)/)
+      assert.match(await text(page, '.sounds-panel .current'), /General MIDI program 25 \(Acoustic guitar: Steel strings\)/)
+      await clickOn(page, 'svg.tab')
+
+      // Another sound can be chosen, and the missing one no longer shows.
+      await page.eval(`(() => { const s = ${soundSelect}; s.value = 'guitar/steel'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      const steel = (await document_(context)).score.tracks[0]
+      assert.equal(steel.sound, 'guitar/steel')
+      assert.equal(steel.fallback_program, undefined)
+      assert.equal(await page.eval(`[...${soundSelect}.options].map(o => o.value).join(' ')`), 'guitar/nylon guitar/steel')
     },
   ],
 

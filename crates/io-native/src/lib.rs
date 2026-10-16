@@ -148,6 +148,7 @@ mod tests {
             let edit = Edit::AddTrack {
                 instrument: sound.instrument(),
                 sound: Some(sound),
+                fallback_program: None,
             };
             apply_edit(&mut score, &edit).unwrap();
         }
@@ -155,6 +156,25 @@ mod tests {
         let sounds: Vec<Sound> = back.tracks.iter().skip(1).map(|t| t.sound).collect();
         assert_eq!(sounds, Sound::ALL);
         assert_eq!(back, score);
+    }
+
+    #[test]
+    fn a_pack_sound_and_its_fallback_program_survive_a_round_trip_without_the_pack() {
+        let mut score = demo_score();
+        let edit = Edit::SetSound {
+            track: 0,
+            sound: Sound::parse("guitar/twelve-string").unwrap(),
+            fallback_program: Some(25),
+        };
+        apply_edit(&mut score, &edit).unwrap();
+        let text = to_string(&score);
+        assert!(text.contains(r#""fallback_program":25"#), "{text}");
+        assert_eq!(from_str(&text).unwrap(), score);
+    }
+
+    #[test]
+    fn a_file_with_built_in_sounds_is_written_as_before() {
+        assert!(!to_string(&demo_score()).contains("fallback_program"));
     }
 
     #[test]
@@ -194,6 +214,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Voice,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -214,6 +235,7 @@ mod tests {
         let add = Edit::AddTrack {
             instrument: Instrument::Voice,
             sound: None,
+            fallback_program: None,
         };
         apply_edit(&mut score, &add).unwrap();
         let mut json: serde_json::Value = serde_json::from_str(&to_string(&score)).unwrap();
@@ -232,8 +254,8 @@ mod tests {
             track.as_object_mut().unwrap().remove("sound");
         }
         let score = from_str(&json.to_string()).unwrap();
-        assert_eq!(score.tracks[0].sound, Sound::GuitarNylon);
-        assert_eq!(score.tracks[1].sound, Sound::BassFinger);
+        assert_eq!(score.tracks[0].sound, Sound::GUITAR_NYLON);
+        assert_eq!(score.tracks[1].sound, Sound::BASS_FINGER);
     }
 
     #[test]

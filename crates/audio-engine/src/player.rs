@@ -166,7 +166,7 @@ impl Program {
                 muted: None,
                 harmonic: None,
                 legato: None,
-                program: track.sound.midi_program(),
+                program: track.midi_program(),
                 sound: track.sound,
                 is_percussion: track.sound.is_drum_kit(),
             })
@@ -810,7 +810,8 @@ pub(crate) mod tests {
             tracks: vec![Track {
                 name: "g".into(),
                 instrument: Instrument::Guitar,
-                sound: Sound::GuitarNylon,
+                sound: Sound::GUITAR_NYLON,
+                fallback_program: None,
                 tuning: GUITAR_STANDARD.to_vec(),
                 measures: vec![Measure {
                     time_signature: TimeSignature {
@@ -1265,18 +1266,18 @@ pub(crate) mod tests {
             return;
         };
         let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
-        player.load_score(&drum_score(Instrument::Drums, Sound::DrumsStandard));
+        player.load_score(&drum_score(Instrument::Drums, Sound::DRUMS_STANDARD));
         assert_eq!(
             player.bank_and_program_of_track(0),
             Some((PERCUSSION_CHANNEL, DRUM_BANK, 0))
         );
 
-        let drums = render_score(&base, &drum_score(Instrument::Drums, Sound::DrumsStandard));
+        let drums = render_score(&base, &drum_score(Instrument::Drums, Sound::DRUMS_STANDARD));
         let peak_drums = peak(&drums);
         assert!(peak_drums > 0.01, "the kit is nearly silent ({peak_drums})");
         assert!(peak_drums <= 1.0, "the kit clips ({peak_drums})");
         // The same keys on a melodic program sound otherwise: the kit is not a piano.
-        let piano = render_score(&base, &drum_score(Instrument::Piano, Sound::Piano));
+        let piano = render_score(&base, &drum_score(Instrument::Piano, Sound::PIANO));
         let difference = drums
             .iter()
             .zip(&piano)
@@ -1290,9 +1291,9 @@ pub(crate) mod tests {
             eprintln!("no SoundFont available, test skipped");
             return;
         };
-        let mut score = drum_score(Instrument::Drums, Sound::DrumsStandard);
+        let mut score = drum_score(Instrument::Drums, Sound::DRUMS_STANDARD);
         let mut jazz = score.tracks[0].clone();
-        jazz.sound = Sound::DrumsJazz;
+        jazz.sound = Sound::DRUMS_JAZZ;
         let guitar = one_note_score().tracks[0].clone();
         score.tracks.extend([guitar, jazz]);
         let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
@@ -1321,7 +1322,7 @@ pub(crate) mod tests {
             return;
         };
         let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
-        player.load_score(&drum_score(Instrument::Drums, Sound::DrumsRoom));
+        player.load_score(&drum_score(Instrument::Drums, Sound::DRUMS_ROOM));
         player.set_audible(vec![false]);
         player.play();
         let mut buf = vec![0.0f32; 2 * 44_100];
@@ -1343,9 +1344,9 @@ pub(crate) mod tests {
         };
         // A bank given to the kit's sound (here the base SoundFont itself, whose program 0 is a
         // piano) must be ignored: the kit stays the SoundFont's drum bank.
-        let score = drum_score(Instrument::Drums, Sound::DrumsStandard);
+        let score = drum_score(Instrument::Drums, Sound::DRUMS_STANDARD);
         let with_bank =
-            render_with_bank(&base, Some((Sound::DrumsStandard, &base, 0..=127)), &score);
+            render_with_bank(&base, Some((Sound::DRUMS_STANDARD, &base, 0..=127)), &score);
         let without = render_score(&base, &score);
         assert_eq!(with_bank, without);
     }
@@ -1395,12 +1396,12 @@ pub(crate) mod tests {
 
     #[test]
     fn a_palm_muted_note_of_a_sample_bank_is_duller_than_the_bank_open() {
-        let (Some(base), Some((_, nylon))) = (test_soundfont(), test_bank(Sound::GuitarNylon))
+        let (Some(base), Some((_, nylon))) = (test_soundfont(), test_bank(Sound::GUITAR_NYLON))
         else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
         };
-        let bank = || Some((Sound::GuitarNylon, nylon.as_path(), 29..=88));
+        let bank = || Some((Sound::GUITAR_NYLON, nylon.as_path(), 29..=88));
         let muted = render_with_bank(&base, bank(), &two_notes(Some(Technique::PalmMute)));
         let general_midi = render_with_bank(&base, None, &two_notes(Some(Technique::PalmMute)));
 
@@ -1413,7 +1414,7 @@ pub(crate) mod tests {
             let mut player = Player::new(&mut File::open(&base).unwrap(), 44_100).unwrap();
             player
                 .add_bank(
-                    Sound::GuitarNylon,
+                    Sound::GUITAR_NYLON,
                     &mut File::open(&nylon).unwrap(),
                     29..=88,
                 )
@@ -1484,7 +1485,11 @@ pub(crate) mod tests {
                 track: 0,
                 instrument: sound.instrument(),
             },
-            Edit::SetSound { track: 0, sound },
+            Edit::SetSound {
+                track: 0,
+                sound,
+                fallback_program: None,
+            },
         ];
         let notes = [48, 60, 64, 67].map(|pitch| Edit::AddPitch {
             track: 0,
@@ -1543,24 +1548,24 @@ pub(crate) mod tests {
     fn the_sound_of_a_track_picks_its_general_midi_program() {
         let mut score = one_note_score();
         score.tracks[0].instrument = Instrument::ElectricGuitar;
-        score.tracks[0].sound = Sound::ElectricGuitarDistortion;
+        score.tracks[0].sound = Sound::ELECTRIC_GUITAR_DISTORTION;
         assert_eq!(Program::new(&score, 44_100).voices[0].program, 30);
-        score.tracks[0].sound = Sound::ElectricGuitarClean;
+        score.tracks[0].sound = Sound::ELECTRIC_GUITAR_CLEAN;
         assert_eq!(Program::new(&score, 44_100).voices[0].program, 27);
     }
 
     #[test]
     fn a_sample_bank_plays_only_the_sound_it_recorded() {
         let (Some(base), Some((_, electric))) =
-            (test_soundfont(), test_bank(Sound::ElectricGuitarClean))
+            (test_soundfont(), test_bank(Sound::ELECTRIC_GUITAR_CLEAN))
         else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
         };
         let mut score = one_note_score();
         score.tracks[0].instrument = Instrument::ElectricGuitar;
-        score.tracks[0].sound = Sound::ElectricGuitarDistortion;
-        let bank = Some((Sound::ElectricGuitarClean, electric.as_path(), 0..=127));
+        score.tracks[0].sound = Sound::ELECTRIC_GUITAR_DISTORTION;
+        let bank = Some((Sound::ELECTRIC_GUITAR_CLEAN, electric.as_path(), 0..=127));
         // The clean recordings leave the distorted guitar on its General MIDI program.
         assert_eq!(
             render_with_bank(&base, bank.clone(), &score),
@@ -1570,7 +1575,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_sample_bank_changes_the_sound_of_its_instrument_and_nothing_else() {
-        let (Some(base), Some((_, nylon))) = (test_soundfont(), test_bank(Sound::GuitarNylon))
+        let (Some(base), Some((_, nylon))) = (test_soundfont(), test_bank(Sound::GUITAR_NYLON))
         else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
@@ -1578,11 +1583,12 @@ pub(crate) mod tests {
         let guitar = one_note_score();
         let mut bass = one_note_score();
         bass.tracks[0].instrument = Instrument::Bass;
-        bass.tracks[0].sound = Sound::BassFinger;
+        bass.tracks[0].sound = Sound::BASS_FINGER;
         bass.tracks[0].tuning = Instrument::Bass.standard_tuning().to_vec();
 
         let plain = render_with_bank(&base, None, &guitar);
-        let sampled = render_with_bank(&base, Some((Sound::GuitarNylon, &nylon, 0..=127)), &guitar);
+        let sampled =
+            render_with_bank(&base, Some((Sound::GUITAR_NYLON, &nylon, 0..=127)), &guitar);
         assert_ne!(plain, sampled, "the recorded guitar sounds different");
         let peak = sampled.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak > 0.01 && peak <= 1.0, "peak {peak}");
@@ -1590,7 +1596,7 @@ pub(crate) mod tests {
         // A bank for the guitar leaves the bass on the base SoundFont.
         let bass_plain = render_with_bank(&base, None, &bass);
         let bass_with_guitar_bank =
-            render_with_bank(&base, Some((Sound::GuitarNylon, &nylon, 0..=127)), &bass);
+            render_with_bank(&base, Some((Sound::GUITAR_NYLON, &nylon, 0..=127)), &bass);
         assert_eq!(bass_plain, bass_with_guitar_bank);
     }
 
@@ -1632,14 +1638,14 @@ pub(crate) mod tests {
     #[test]
     fn a_note_the_bank_did_not_record_is_played_with_the_base_sound() {
         let (Some(base), Some((bank, bass_bank))) =
-            (test_soundfont(), test_bank(Sound::BassFinger))
+            (test_soundfont(), test_bank(Sound::BASS_FINGER))
         else {
             eprintln!("no SoundFont or sample bank available, test skipped");
             return;
         };
         let mut score = one_note_score();
         score.tracks[0].instrument = Instrument::Bass;
-        score.tracks[0].sound = Sound::BassFinger;
+        score.tracks[0].sound = Sound::BASS_FINGER;
         score.tracks[0].tuning = Instrument::Bass.standard_tuning().to_vec();
         let note = &mut score.tracks[0].measures[0].voices[0].beats[0].notes[0];
         // G2 string at the 24th fret is G4 (67), above the recorded keys.
@@ -1651,7 +1657,7 @@ pub(crate) mod tests {
 
         let with_bank = render_with_bank(
             &base,
-            Some((Sound::BassFinger, &bass_bank, bank.keys())),
+            Some((Sound::BASS_FINGER, &bass_bank, bank.keys())),
             &score,
         );
         let without = render_with_bank(&base, None, &score);
@@ -1723,9 +1729,9 @@ pub(crate) mod tests {
         let mut player = Player::new(&mut File::open(base).unwrap(), 44_100).unwrap();
         let mut junk = std::io::Cursor::new(vec![1u8; 100]);
         assert!(matches!(
-            player.add_bank(Sound::BassFinger, &mut junk, 0..=127),
+            player.add_bank(Sound::BASS_FINGER, &mut junk, 0..=127),
             Err(PlayerError::SoundFont(_))
         ));
-        assert!(player.bank_of(Sound::BassFinger).is_none());
+        assert!(player.bank_of(Sound::BASS_FINGER).is_none());
     }
 }

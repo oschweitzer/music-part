@@ -14,14 +14,14 @@ export type Edit =
   | { type: 'setTempo'; bpm: number }
   | { type: 'setTied'; track: number; measure: number; beat: number; string: number; tied: boolean }
   | { type: 'setTechnique'; track: number; measure: number; beat: number; string: number; technique: Technique | null }
-  | { type: 'addTrack'; instrument: Instrument; sound?: SoundId }
+  | { type: 'addTrack'; instrument: Instrument; sound?: SoundId; fallbackProgram?: number }
   | { type: 'removeTrack'; index: number }
   | { type: 'setTuning'; track: number; tuning: number[] }
   | { type: 'paste'; track: number; measure: number; beat: number; beats: Beat[] }
   | { type: 'setTimeSignature'; measure: number; numerator: number; denominator: number }
   | { type: 'renameTrack'; track: number; name: string }
   | { type: 'setInstrument'; track: number; instrument: Instrument }
-  | { type: 'setSound'; track: number; sound: SoundId }
+  | { type: 'setSound'; track: number; sound: SoundId; fallbackProgram?: number }
   | {
       type: 'clearNotes'
       track: number
@@ -57,8 +57,12 @@ export type OpenedDocument = {
   notice: string | null
 }
 
-/** A sound a pack plays, and the MIDI keys its recordings cover (General MIDI plays the others). */
-export type PackSound = { sound: SoundId; firstKey: number; lastKey: number }
+/**
+ * A sound a pack plays, and the MIDI keys its recordings cover (General MIDI plays the others).
+ * A new sound the pack declares has a `name` and the General MIDI `program` that plays it
+ * without the pack; both are null for a sound of the built-in table.
+ */
+export type PackSound = { sound: SoundId; firstKey: number; lastKey: number; name: string | null; program: number | null }
 
 /** A sound pack in use. Mirrors `PackInfo` in `src-tauri/src/service.rs`. */
 export type SoundPack = {

@@ -316,6 +316,7 @@ fn build_track(
         name,
         instrument,
         sound,
+        fallback_program: None,
         tuning,
         measures: split_into_measures(segments, ts)?,
         clef: None,
@@ -653,7 +654,7 @@ mod tests {
             panic!("one track expected")
         };
         assert_eq!(drums.instrument, Instrument::Drums);
-        assert_eq!(drums.sound, Sound::DrumsJazz);
+        assert_eq!(drums.sound, Sound::DRUMS_JAZZ);
         assert!(drums.tuning.is_empty());
         let beats = &drums.measures[0].voices[0].beats;
         assert_eq!(
@@ -669,7 +670,7 @@ mod tests {
     fn a_percussion_channel_without_a_program_plays_the_standard_kit() {
         let events = vec![on_channel(9, 0, 38, true), on_channel(9, 480, 38, false)];
         let result = import_midi(&write(PPQ, vec![events])).unwrap();
-        assert_eq!(result.score.tracks[0].sound, Sound::DrumsStandard);
+        assert_eq!(result.score.tracks[0].sound, Sound::DRUMS_STANDARD);
     }
 
     #[test]
@@ -728,7 +729,7 @@ mod tests {
         ];
         let score = import(&write(PPQ, vec![events])).unwrap();
         assert_eq!(score.tracks[0].instrument, Instrument::ElectricGuitar);
-        assert_eq!(score.tracks[0].sound, Sound::ElectricGuitarDistortion);
+        assert_eq!(score.tracks[0].sound, Sound::ELECTRIC_GUITAR_DISTORTION);
     }
 
     #[test]
@@ -744,16 +745,16 @@ mod tests {
         let organ = one_note(19);
         assert_eq!(
             (organ.instrument, organ.sound),
-            (Instrument::Organ, Sound::OrganChurch)
+            (Instrument::Organ, Sound::ORGAN_CHURCH)
         );
         assert!(organ.tuning.is_empty());
         assert_eq!(organ.clef, None);
-        assert_eq!(one_note(91).sound, Sound::SynthChoirPad);
-        assert_eq!(one_note(5).sound, Sound::PianoElectricFm);
+        assert_eq!(one_note(91).sound, Sound::SYNTH_CHOIR_PAD);
+        assert_eq!(one_note(5).sound, Sound::PIANO_ELECTRIC_FM);
         let voice = one_note(53);
         assert_eq!(
             (voice.instrument, voice.sound),
-            (Instrument::Voice, Sound::VoiceOohs)
+            (Instrument::Voice, Sound::VOICE_OOHS)
         );
     }
 
@@ -782,7 +783,7 @@ mod tests {
         ];
         let score = import(&write(PPQ, vec![events])).unwrap();
         let banjo = &score.tracks[0];
-        assert_eq!(banjo.sound, Sound::Banjo);
+        assert_eq!(banjo.sound, Sound::BANJO);
         assert_eq!(banjo.tuning.len(), 5);
         let note = &banjo.measures[0].voices[0].beats[0].notes[0];
         assert_eq!(banjo.pitch(note), Some(68));

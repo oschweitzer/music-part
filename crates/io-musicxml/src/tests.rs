@@ -356,7 +356,7 @@ fn a_percussion_part_becomes_a_drum_track() {
     };
     assert_eq!(
         (drums.instrument, drums.sound),
-        (Instrument::Drums, Sound::DrumsStandard)
+        (Instrument::Drums, Sound::DRUMS_STANDARD)
     );
     // Written on the third line with a plain head: the snare.
     assert_eq!(
@@ -390,7 +390,7 @@ fn drum_notes_of_two_voices_take_their_piece_from_their_instrument() {
     let imported = ok(&xml);
     assert_eq!(imported.skipped_notes, 0);
     let drums = &imported.score.tracks[0];
-    assert_eq!(drums.sound, Sound::DrumsPower);
+    assert_eq!(drums.sound, Sound::DRUMS_POWER);
     let beats = first_beats(&imported.score, 0);
     assert_eq!(beats.len(), 8);
     let keys: Vec<Vec<u8>> = beats
@@ -454,17 +454,17 @@ fn the_midi_program_picks_the_closest_sound() {
     // MusicXML counts programs from 1: 31 is General MIDI program 30.
     assert_eq!(
         ok(&with_program(31)).score.tracks[0].sound,
-        Sound::ElectricGuitarDistortion
+        Sound::ELECTRIC_GUITAR_DISTORTION
     );
     assert_eq!(
         ok(&with_program(26)).score.tracks[0].sound,
-        Sound::GuitarSteel
+        Sound::GUITAR_STEEL
     );
-    assert_eq!(ok(&with_program(106)).score.tracks[0].sound, Sound::Banjo);
+    assert_eq!(ok(&with_program(106)).score.tracks[0].sound, Sound::BANJO);
     // A piano is not a string instrument: the part name decides, else the part is a piano.
-    assert_eq!(ok(&with_program(1)).score.tracks[0].sound, Sound::Piano);
+    assert_eq!(ok(&with_program(1)).score.tracks[0].sound, Sound::PIANO);
     let named_guitar = with_program(1).replace("<part-name>Part<", "<part-name>Guitar<");
-    assert_eq!(ok(&named_guitar).score.tracks[0].sound, Sound::GuitarNylon);
+    assert_eq!(ok(&named_guitar).score.tracks[0].sound, Sound::GUITAR_NYLON);
 }
 
 #[test]
@@ -479,19 +479,19 @@ fn keyboard_synth_and_voice_programs_win_over_the_part_name() {
     // Counted from 1 in the file.
     assert_eq!(
         ok(&with_program(5)).score.tracks[0].sound,
-        Sound::PianoElectric
+        Sound::PIANO_ELECTRIC
     );
     assert_eq!(
         ok(&with_program(20)).score.tracks[0].sound,
-        Sound::OrganChurch
+        Sound::ORGAN_CHURCH
     );
     assert_eq!(
         ok(&with_program(82)).score.tracks[0].sound,
-        Sound::SynthSawLead
+        Sound::SYNTH_SAW_LEAD
     );
     assert_eq!(
         ok(&with_program(53)).score.tracks[0].sound,
-        Sound::VoiceAahs
+        Sound::VOICE_AAHS
     );
 }
 
@@ -510,21 +510,21 @@ fn part_names_find_voices_organs_synthesizers_and_electric_pianos() {
         "Choir",
         "Lead vocal",
     ] {
-        assert_eq!(sound_of(name), Sound::VoiceAahs, "{name}");
+        assert_eq!(sound_of(name), Sound::VOICE_AAHS, "{name}");
     }
-    assert_eq!(sound_of("Synth Voice"), Sound::VoiceSynth);
+    assert_eq!(sound_of("Synth Voice"), Sound::VOICE_SYNTH);
     // "Bass" alone stays the bass guitar, and a saxophone is no singer.
-    assert_eq!(sound_of("Bass"), Sound::BassFinger);
-    assert_eq!(sound_of("Alto Saxophone"), Sound::Piano);
-    assert_eq!(sound_of("Tenor Banjo"), Sound::Banjo);
-    assert_eq!(sound_of("Organ"), Sound::OrganDrawbar);
-    assert_eq!(sound_of("Church Organ"), Sound::OrganChurch);
-    assert_eq!(sound_of("Accordion"), Sound::OrganReed);
-    assert_eq!(sound_of("Synthesizer"), Sound::SynthSquareLead);
-    assert_eq!(sound_of("Synth Pad"), Sound::SynthWarmPad);
-    assert_eq!(sound_of("Synth Bass"), Sound::BassFinger);
-    assert_eq!(sound_of("Electric Piano"), Sound::PianoElectric);
-    assert_eq!(sound_of("Piano"), Sound::Piano);
+    assert_eq!(sound_of("Bass"), Sound::BASS_FINGER);
+    assert_eq!(sound_of("Alto Saxophone"), Sound::PIANO);
+    assert_eq!(sound_of("Tenor Banjo"), Sound::BANJO);
+    assert_eq!(sound_of("Organ"), Sound::ORGAN_DRAWBAR);
+    assert_eq!(sound_of("Church Organ"), Sound::ORGAN_CHURCH);
+    assert_eq!(sound_of("Accordion"), Sound::ORGAN_REED);
+    assert_eq!(sound_of("Synthesizer"), Sound::SYNTH_SQUARE_LEAD);
+    assert_eq!(sound_of("Synth Pad"), Sound::SYNTH_WARM_PAD);
+    assert_eq!(sound_of("Synth Bass"), Sound::BASS_FINGER);
+    assert_eq!(sound_of("Electric Piano"), Sound::PIANO_ELECTRIC);
+    assert_eq!(sound_of("Piano"), Sound::PIANO);
 }
 
 #[test]
@@ -597,7 +597,7 @@ fn the_staves_of_a_piano_part_are_merged_into_one_voice_of_tied_chords() {
 fn a_banjo_part_is_found_by_its_name_and_gets_five_strings() {
     let banjo = ok(&score_xml("Banjo", FOUR_FOUR, &[&pitched("G", 4, 8, "")]));
     let track = &banjo.score.tracks[0];
-    assert_eq!(track.sound, Sound::Banjo);
+    assert_eq!(track.sound, Sound::BANJO);
     assert_eq!(track.tuning, score_model::BANJO_STANDARD);
 }
 

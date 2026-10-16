@@ -416,7 +416,8 @@ mod tests {
             tracks: vec![Track {
                 name: "g".into(),
                 instrument: Instrument::Guitar,
-                sound: Sound::GuitarNylon,
+                sound: Sound::GUITAR_NYLON,
+                fallback_program: None,
                 tuning: GUITAR_STANDARD.to_vec(),
                 measures: vec![Measure {
                     time_signature: TimeSignature {
@@ -449,7 +450,7 @@ mod tests {
     fn a_pitched_track_plays_its_pitches_and_holds_its_ties() {
         let mut score = score_with(vec![]);
         let track = &mut score.tracks[0];
-        (track.instrument, track.sound) = (Instrument::Piano, Sound::Piano);
+        (track.instrument, track.sound) = (Instrument::Piano, Sound::PIANO);
         track.tuning.clear();
         let half = |notes| Beat {
             duration: Duration {
@@ -483,7 +484,7 @@ mod tests {
     fn a_drum_hit_rings_until_its_piece_is_struck_again_or_the_track_ends() {
         let mut score = score_with(vec![]);
         let track = &mut score.tracks[0];
-        (track.instrument, track.sound) = (Instrument::Drums, Sound::DrumsStandard);
+        (track.instrument, track.sound) = (Instrument::Drums, Sound::DRUMS_STANDARD);
         track.tuning.clear();
         let eighth = |notes| Beat {
             duration: Duration {

@@ -12,8 +12,9 @@ string instruments, played with General MIDI programs.
 - `Instrument` (`score-model`) stays the family: `Guitar`, `ElectricGuitar`, `Bass`, `Violin`,
   and now `Banjo`. `Guitar` is the acoustic guitar; its stored name predates the steel sound and
   is kept so that old files load.
-- `Sound` is a field of `Track`, always one of the sounds of the track's instrument
-  (`Score::validate` refuses anything else).
+- `Sound` is a field of `Track`, always a sound of the track's instrument (`Score::validate`
+  refuses anything else): one of the built-in table below, or one a sound pack declares (see
+  [`sound-packs.md`](sound-packs.md#new-sounds)).
 - **Steel-string guitar is a sound, not an instrument.** It has the strings, the tuning and the
   notation of the nylon guitar; only the timbre differs, which is exactly what a sound is. The
   banjo, on the other hand, has other strings, a re-entrant tuning and a short string: it is an
@@ -22,15 +23,25 @@ string instruments, played with General MIDI programs.
 ### Sound ids
 
 In files and over IPC a sound is a stable id, `"<instrument>/<sound>"` in kebab-case, for
-instance `"electric-guitar/distortion"`. The prefix names the family, so an id read alone says
-which instrument it belongs to. In Rust the sounds are an enum serialized to these ids, which
-keeps matches exhaustive; when sounds can come from packs (below) it can become a string newtype
-without changing the file format.
+instance `"electric-guitar/distortion"`. The prefix names the family (`Instrument::sound_prefix`),
+so an id read alone says which instrument it belongs to.
+
+In Rust, `Sound` is a checked id rather than an enum, so that packs can add sounds without a
+change of `score-model`. It keeps the id inline (at most 62 bytes), which makes it `Copy` and lets
+the audio callback compare sounds without allocating. The built-in sounds are a static table,
+`BUILT_IN_SOUNDS`, with a constant each (`Sound::GUITAR_NYLON`); their name and program come from
+that table. The file format did not change: a built-in sound is written exactly as before.
 
 - A track saved before sounds existed has no `sound`: it gets the default sound of its instrument,
   which is the sound it always had (`TrackFile` in `score-model`). The format version stays 1.
-- An unknown id makes the file invalid, as an unknown instrument already does. Ids are therefore
-  never renamed once released.
+- `score-model` does not know the packs, so it cannot tell a sound of a pack that is not installed
+  from a mistake. It accepts any well-formed id whose prefix is the track's instrument, and refuses
+  an id that is malformed, names no instrument, or names another instrument than the track's. A
+  score made with a pack therefore opens without it (see
+  [`sound-packs.md`](sound-packs.md#a-score-whose-pack-is-missing)).
+- Drum kits are the exception: an unknown `drums/...` id is refused, since packs never play kits
+  (see [`drums.md`](drums.md)).
+- Built-in ids are never renamed once released: files name them.
 
 ### The sounds
 
@@ -85,13 +96,17 @@ Salamander) belongs to the sample banks of [issue #7](https://github.com/oschwei
 
 ### Editing
 
-- `Edit::SetSound { track, sound }` changes the sound, refused for a sound of another instrument.
+- `Edit::SetSound { track, sound, fallbackProgram }` changes the sound, refused for a sound of
+  another instrument. For a pack's sound the app fills `fallbackProgram` from the pack that
+  declares it, and refuses a sound no pack declares (unless the track already has it).
 - `Edit::SetInstrument` gives the track the default sound of its new instrument (setting the same
   instrument keeps the sound).
 - `Edit::AddTrack` takes an optional `sound`; without it the track gets the default sound.
 
 In the toolbar, the Sound menu next to the Instrument menu lists the sounds of the current
-instrument. The "+ Track" menu lists every sound under its instrument.
+instrument, then those the packs declare for it, then the track's own sound when no pack has it
+("twelve-string (pack missing), plays General MIDI program 25"). The "+ Track" menu lists every
+sound under its instrument, pack sounds included.
 
 ## The banjo and its short fifth string
 
@@ -137,7 +152,8 @@ Both importers map a General MIDI program to the closest sound (`Sound::from_mid
 | 88 to 103 but 91   | `synth/warm-pad` (the other pads and the effects)                   |
 | any other          | `piano/grand`: chromatic percussion, winds, brass, other strings... |
 
-- MIDI writes the program of the sound; reading it back gives the same sound.
+- MIDI writes the program of the sound; reading it back gives the same sound. A pack's sound is
+  written with its fallback program, so it comes back as the built-in sound of that program.
 - MusicXML writes it in `midi-program` (counted from 1). On import, a program that has a sound
   of its own family wins (a string instrument, a keyboard other than the grand piano, a
   synthesizer, a voice); the grand piano and the programs of no family come after the part name,
@@ -157,10 +173,10 @@ Both importers map a General MIDI program to the closest sound (`Sound::from_mid
 
 ## Playback
 
-The sound's General MIDI program plays the track. A sound pack (see
-[`sound-packs.md`](sound-packs.md)) replaces the program of the sounds it lists, not of a whole
-instrument: the clean electric guitar plays the recorded Fender, the distorted one the General MIDI
-program.
+The sound's General MIDI program plays the track (`Track::midi_program`: for a pack's sound, the
+fallback program the track recorded). A sound pack (see [`sound-packs.md`](sound-packs.md))
+replaces the program of the sounds it lists, not of a whole instrument: the clean electric guitar
+plays the recorded Fender, the distorted one the General MIDI program.
 
 ## Phase B: instruments without strings
 
@@ -172,11 +188,9 @@ how organ, synthesizers, drums and voice fit in.
 
 Not done in Phase A, recorded here so they are picked up later:
 
-- **Sound packs: done** for the built-in sounds, see [`sound-packs.md`](sound-packs.md). Still to
-  do: packs that declare new sounds (`Sound` then becomes a string id checked against the loaded
-  table, and a track whose pack is missing falls back to the General MIDI program of the closest
-  built-in sound), listing the packs and their licences in the UI, and loading only the packs a
-  score uses.
+- **Sound packs: done**, see [`sound-packs.md`](sound-packs.md): packs give samples to the
+  built-in sounds or declare new ones, the `Sounds` panel lists them with their licences, and only
+  the packs a score uses are loaded.
 - **SFZ: done** as a subset played by our own Rust code, after evaluating sfizz; see
   [`sfz.md`](sfz.md). Still to do: key switches for technique-specific samples, release
   samples, FLAC and Ogg samples.

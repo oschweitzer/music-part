@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     decompose_ticks, fret_pitch, pitch_fret, place_chord, place_pitch, Beat, Clef, Duration,
     Instrument, Measure, Note, NoteKind, Place, Score, Sound, Technique, TimeSignature, Track,
-    Voice, DRUM_PIECES, MAX_FRET, MAX_PITCH,
+    Voice, DRUM_PIECES, MAX_FRET, MAX_PITCH, MAX_PROGRAM,
 };
 
 /// A beat of the first voice of a track.
@@ -100,11 +100,15 @@ pub enum Edit {
     },
     /// Appends a track with the standard tuning, as many empty measures as the first track, and
     /// `sound` (the default sound of the instrument when not given). Refused if the sound is not
-    /// one of the instrument.
+    /// one of the instrument. `fallback_program` is the General MIDI program that plays a pack's
+    /// sound when the pack is missing (see `Track::fallback_program`); it is ignored for a
+    /// built-in sound.
     AddTrack {
         instrument: Instrument,
         #[serde(default)]
         sound: Option<Sound>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_program: Option<u8>,
     },
     RemoveTrack {
         index: usize,
@@ -144,10 +148,15 @@ pub enum Edit {
         track: usize,
         instrument: Instrument,
     },
-    /// Changes the sound of a track, among the sounds of its instrument.
+    /// Changes the sound of a track, among the sounds of its instrument: a built-in one or one a
+    /// pack declares, with the General MIDI program that plays it when the pack is missing
+    /// (`fallback_program`, ignored for a built-in sound). This crate does not know the packs: the
+    /// app checks that a pack declares the sound and gives its program.
     SetSound {
         track: usize,
         sound: Sound,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_program: Option<u8>,
     },
     /// Retunes a track, highest string first. Refused if a note would no longer be playable, and on
     /// a track without strings.
@@ -264,6 +273,8 @@ pub enum EditError {
     NotesOfAnotherKind,
     /// The instrument of the track has no clef choice: its clefs follow from the instrument.
     NoClefChoice,
+    /// The fallback program of a pack's sound is not a General MIDI program (0 to 127).
+    InvalidProgram,
 }
 
 impl fmt::Display for EditError {
@@ -321,6 +332,7 @@ impl fmt::Display for EditError {
                 f,
                 "the clef of this instrument cannot be changed: only a voice chooses its clef"
             ),
+            Self::InvalidProgram => write!(f, "a General MIDI program is 0 to 127"),
         }
     }
 }
@@ -494,7 +506,11 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             Ok(())
         }
         Edit::SetInstrument { track, instrument } => set_instrument(score, track, instrument),
-        Edit::SetSound { track, sound } => {
+        Edit::SetSound {
+            track,
+            sound,
+            fallback_program,
+        } => {
             let target = score
                 .tracks
                 .get_mut(track)
@@ -502,15 +518,21 @@ pub fn apply_edit(score: &mut Score, edit: &Edit) -> Result<(), EditError> {
             if sound.instrument() != target.instrument {
                 return Err(EditError::SoundOfAnotherInstrument);
             }
+            target.fallback_program = fallback_of(sound, fallback_program)?;
             target.sound = sound;
             Ok(())
         }
-        Edit::AddTrack { instrument, sound } => {
+        Edit::AddTrack {
+            instrument,
+            sound,
+            fallback_program,
+        } => {
             let sound = sound.unwrap_or_else(|| instrument.default_sound());
             if sound.instrument() != instrument {
                 return Err(EditError::SoundOfAnotherInstrument);
             }
-            add_track(score, sound)
+            let fallback = fallback_of(sound, fallback_program)?;
+            add_track(score, sound, fallback)
         }
         Edit::RemoveTrack { index } => {
             if index >= score.tracks.len() {
@@ -1042,6 +1064,7 @@ fn set_instrument(
     let mut changed = target.clone();
     changed.instrument = instrument;
     changed.sound = instrument.default_sound();
+    changed.fallback_program = None;
     match (target.instrument.note_kind(), instrument.note_kind()) {
         (NoteKind::Fretted, NoteKind::Fretted) => {
             let is_playable = changed
@@ -1112,7 +1135,18 @@ fn beats_of_mut(track: &mut Track) -> impl Iterator<Item = &mut Beat> {
         .flat_map(|v| &mut v.beats)
 }
 
-fn add_track(score: &mut Score, sound: Sound) -> Result<(), EditError> {
+/// The fallback program a track keeps with `sound`: none for a built-in sound, which has its own.
+fn fallback_of(sound: Sound, program: Option<u8>) -> Result<Option<u8>, EditError> {
+    if sound.is_built_in() {
+        return Ok(None);
+    }
+    match program {
+        Some(p) if p > MAX_PROGRAM => Err(EditError::InvalidProgram),
+        _ => Ok(program),
+    }
+}
+
+fn add_track(score: &mut Score, sound: Sound, fallback: Option<u8>) -> Result<(), EditError> {
     let instrument = sound.instrument();
     if score.tracks.len() >= MAX_TRACKS {
         return Err(EditError::TooManyTracks);
@@ -1149,6 +1183,7 @@ fn add_track(score: &mut Score, sound: Sound) -> Result<(), EditError> {
         name,
         instrument,
         sound,
+        fallback_program: fallback,
         tuning: instrument.standard_tuning().to_vec(),
         measures,
         clef: instrument.default_clef(),
@@ -1784,6 +1819,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -1925,6 +1961,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -1947,6 +1984,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -1978,6 +2016,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -2153,6 +2192,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -2161,6 +2201,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Bass,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -2169,7 +2210,7 @@ mod tests {
         let added = &score.tracks[tracks];
         assert_eq!(added.measures.len(), measures);
         assert_eq!(added.tuning, Instrument::Bass.standard_tuning());
-        assert_eq!(added.sound, Sound::BassFinger);
+        assert_eq!(added.sound, Sound::BASS_FINGER);
         assert_ne!(added.name, score.tracks[tracks + 1].name);
         assert_eq!(score.validate(), Ok(()));
     }
@@ -2180,16 +2221,17 @@ mod tests {
         let add = |sound| Edit::AddTrack {
             instrument: Instrument::ElectricGuitar,
             sound: Some(sound),
+            fallback_program: None,
         };
-        apply_edit(&mut score, &add(Sound::ElectricGuitarDistortion)).unwrap();
+        apply_edit(&mut score, &add(Sound::ELECTRIC_GUITAR_DISTORTION)).unwrap();
         assert_eq!(
             score.tracks.last().unwrap().sound,
-            Sound::ElectricGuitarDistortion
+            Sound::ELECTRIC_GUITAR_DISTORTION
         );
 
         let before = score.clone();
         assert_eq!(
-            apply_edit(&mut score, &add(Sound::BassSlap)),
+            apply_edit(&mut score, &add(Sound::BASS_SLAP)),
             Err(EditError::SoundOfAnotherInstrument)
         );
         assert_eq!(score, before);
@@ -2203,12 +2245,13 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Banjo,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
         let banjo = score.tracks.last().unwrap();
         assert_eq!(banjo.tuning, crate::BANJO_STANDARD);
-        assert_eq!(banjo.sound, Sound::Banjo);
+        assert_eq!(banjo.sound, Sound::BANJO);
         assert_eq!(score.validate(), Ok(()));
     }
 
@@ -2322,6 +2365,7 @@ mod tests {
             Edit::AddTrack {
                 instrument: Instrument::Violin,
                 sound: None,
+                fallback_program: None,
             }
         );
         let edit: Edit =
@@ -2330,7 +2374,20 @@ mod tests {
             edit,
             Edit::SetSound {
                 track: 1,
-                sound: Sound::BassSlap
+                sound: Sound::BASS_SLAP,
+                fallback_program: None,
+            }
+        );
+        let edit: Edit = serde_json::from_str(
+            r#"{"type":"setSound","track":0,"sound":"guitar/twelve-string","fallbackProgram":25}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            edit,
+            Edit::SetSound {
+                track: 0,
+                sound: Sound::parse("guitar/twelve-string").unwrap(),
+                fallback_program: Some(25),
             }
         );
     }
@@ -2467,17 +2524,17 @@ mod tests {
     fn a_new_instrument_brings_its_default_sound() {
         let mut score = demo_score();
         score.tracks[0].instrument = Instrument::ElectricGuitar;
-        score.tracks[0].sound = Sound::ElectricGuitarDistortion;
+        score.tracks[0].sound = Sound::ELECTRIC_GUITAR_DISTORTION;
         let set = |instrument| Edit::SetInstrument {
             track: 0,
             instrument,
         };
 
         apply_edit(&mut score, &set(Instrument::ElectricGuitar)).unwrap();
-        assert_eq!(score.tracks[0].sound, Sound::ElectricGuitarDistortion);
+        assert_eq!(score.tracks[0].sound, Sound::ELECTRIC_GUITAR_DISTORTION);
 
         apply_edit(&mut score, &set(Instrument::Guitar)).unwrap();
-        assert_eq!(score.tracks[0].sound, Sound::GuitarNylon);
+        assert_eq!(score.tracks[0].sound, Sound::GUITAR_NYLON);
         assert_eq!(score.validate(), Ok(()));
     }
 
@@ -2504,15 +2561,19 @@ mod tests {
     #[test]
     fn the_sound_of_a_track_changes_among_those_of_its_instrument() {
         let mut score = demo_score();
-        let set = |sound| Edit::SetSound { track: 1, sound };
+        let set = |sound| Edit::SetSound {
+            track: 1,
+            sound,
+            fallback_program: None,
+        };
 
-        apply_edit(&mut score, &set(Sound::BassSlap)).unwrap();
-        assert_eq!(score.tracks[1].sound, Sound::BassSlap);
+        apply_edit(&mut score, &set(Sound::BASS_SLAP)).unwrap();
+        assert_eq!(score.tracks[1].sound, Sound::BASS_SLAP);
         assert_eq!(score.tracks[1].instrument, Instrument::Bass);
 
         let before = score.clone();
         assert_eq!(
-            apply_edit(&mut score, &set(Sound::Violin)),
+            apply_edit(&mut score, &set(Sound::VIOLIN)),
             Err(EditError::SoundOfAnotherInstrument)
         );
         assert_eq!(
@@ -2520,12 +2581,93 @@ mod tests {
                 &mut score,
                 &Edit::SetSound {
                     track: 9,
-                    sound: Sound::BassPick
+                    sound: Sound::BASS_PICK,
+                    fallback_program: None,
                 }
             ),
             Err(EditError::OutOfRange("track"))
         );
         assert_eq!(score, before);
+    }
+
+    fn twelve_string() -> Sound {
+        Sound::parse("guitar/twelve-string").unwrap()
+    }
+
+    #[test]
+    fn a_track_takes_a_pack_sound_of_its_instrument_with_its_fallback_program() {
+        let mut score = demo_score();
+        let set = |sound, fallback_program| Edit::SetSound {
+            track: 0,
+            sound,
+            fallback_program,
+        };
+        apply_edit(&mut score, &set(twelve_string(), Some(25))).unwrap();
+        assert_eq!(score.tracks[0].sound, twelve_string());
+        assert_eq!(score.tracks[0].fallback_program, Some(25));
+        assert_eq!(score.tracks[0].midi_program(), 25);
+        assert_eq!(score.validate(), Ok(()));
+
+        // Back to a built-in sound: it has its own program.
+        apply_edit(&mut score, &set(Sound::GUITAR_STEEL, Some(3))).unwrap();
+        assert_eq!(score.tracks[0].fallback_program, None);
+
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &set(twelve_string(), Some(128))),
+            Err(EditError::InvalidProgram)
+        );
+        assert_eq!(
+            apply_edit(
+                &mut score,
+                &Edit::SetSound {
+                    track: 1,
+                    sound: twelve_string(),
+                    fallback_program: Some(25),
+                }
+            ),
+            Err(EditError::SoundOfAnotherInstrument)
+        );
+        assert_eq!(score, before);
+    }
+
+    #[test]
+    fn a_track_is_added_with_a_pack_sound_and_its_fallback_program() {
+        let mut score = demo_score();
+        apply_edit(
+            &mut score,
+            &Edit::AddTrack {
+                instrument: Instrument::Guitar,
+                sound: Some(twelve_string()),
+                fallback_program: Some(25),
+            },
+        )
+        .unwrap();
+        let added = score.tracks.last().unwrap();
+        assert_eq!(
+            (added.sound, added.fallback_program),
+            (twelve_string(), Some(25))
+        );
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_new_instrument_drops_the_fallback_program_of_a_pack_sound() {
+        let mut score = demo_score();
+        score.tracks[0].sound = twelve_string();
+        score.tracks[0].fallback_program = Some(25);
+        apply_edit(
+            &mut score,
+            &Edit::SetInstrument {
+                track: 0,
+                instrument: Instrument::ElectricGuitar,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (score.tracks[0].sound, score.tracks[0].fallback_program),
+            (Sound::ELECTRIC_GUITAR_CLEAN, None)
+        );
     }
 
     #[test]
@@ -2536,6 +2678,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Banjo,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -3018,7 +3161,7 @@ mod tests {
         .unwrap();
         let piano = &score.tracks[0];
         assert!(piano.tuning.is_empty());
-        assert_eq!(piano.sound, Sound::Piano);
+        assert_eq!(piano.sound, Sound::PIANO);
         for (g, p) in guitar.measures.iter().zip(&piano.measures) {
             for (a, b) in g.voices[0].beats.iter().zip(&p.voices[0].beats) {
                 let mut pitches: Vec<u8> = a.notes.iter().filter_map(|n| guitar.pitch(n)).collect();
@@ -3072,11 +3215,12 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Piano,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
         let piano = &score.tracks[1];
-        assert_eq!((piano.name.as_str(), piano.sound), ("Piano", Sound::Piano));
+        assert_eq!((piano.name.as_str(), piano.sound), ("Piano", Sound::PIANO));
         assert!(piano.tuning.is_empty());
         assert_eq!(score.validate(), Ok(()));
     }
@@ -3088,6 +3232,7 @@ mod tests {
             let add = Edit::AddTrack {
                 instrument,
                 sound: None,
+                fallback_program: None,
             };
             apply_edit(&mut score, &add).unwrap();
             let track = score.tracks.last().unwrap();
@@ -3144,7 +3289,7 @@ mod tests {
             instrument,
         };
         apply_edit(&mut score, &to(Instrument::Voice)).unwrap();
-        assert_eq!(score.tracks[1].sound, Sound::VoiceAahs);
+        assert_eq!(score.tracks[1].sound, Sound::VOICE_AAHS);
         assert_eq!(score.tracks[1].clef, Some(Clef::Bass));
         apply_edit(&mut score, &to(Instrument::Organ)).unwrap();
         assert_eq!(score.tracks[1].clef, None);
@@ -3203,7 +3348,7 @@ mod tests {
     fn an_empty_track_becomes_a_drum_kit_without_strings() {
         let score = drum_score();
         let drums = &score.tracks[0];
-        assert_eq!(drums.sound, Sound::DrumsStandard);
+        assert_eq!(drums.sound, Sound::DRUMS_STANDARD);
         assert!(drums.tuning.is_empty());
         assert_eq!(score.validate(), Ok(()));
     }
@@ -3424,6 +3569,7 @@ mod tests {
             &Edit::AddTrack {
                 instrument: Instrument::Drums,
                 sound: None,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -3493,6 +3639,7 @@ mod tests {
                     9 => Edit::AddTrack {
                         instrument: Instrument::ALL[next(Instrument::ALL.len())],
                         sound: [None, Some(Sound::ALL[next(Sound::ALL.len())])][next(2)],
+                        fallback_program: None,
                     },
                     10 => Edit::RemoveTrack {
                         index: next(score.tracks.len() + 1),
@@ -3569,6 +3716,7 @@ mod tests {
                     13 if next(2) == 0 => Edit::SetSound {
                         track,
                         sound: Sound::ALL[next(Sound::ALL.len())],
+                        fallback_program: None,
                     },
                     13 => Edit::SetInstrument {
                         track,

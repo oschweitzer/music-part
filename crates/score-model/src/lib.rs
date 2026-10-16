@@ -15,7 +15,7 @@ pub use fretting::{place_chord, place_pitch};
 pub use percussion::{
     drum_piece, drum_piece_at, is_played_by_foot, DrumPiece, NoteHead, DRUM_PIECES, PIECES,
 };
-pub use sound::Sound;
+pub use sound::{BuiltInSound, Sound, SoundIdError, BUILT_IN_SOUNDS, MAX_SOUND_ID_LEN};
 pub use validate::ScoreError;
 
 use serde::{Deserialize, Serialize};
@@ -32,8 +32,14 @@ pub struct Score {
 pub struct Track {
     pub name: String,
     pub instrument: Instrument,
-    /// How the track sounds; always one of the sounds of `instrument`.
+    /// How the track sounds; always a sound of `instrument`: a built-in one, or one a sound pack
+    /// declares (which may not be installed where the score is opened).
     pub sound: Sound,
+    /// The General MIDI program that plays a pack's sound when its pack is not there, as the pack
+    /// declared it. `None` for a built-in sound, which has its own program. Left out of files when
+    /// `None`, so tracks with a built-in sound are written as before. See `Track::midi_program`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_program: Option<u8>,
     /// MIDI pitches of the open strings, from string 1 to the last. String 1 is the highest
     /// except on a banjo, whose short fifth string is tuned higher (see `Instrument::first_fret`).
     /// Empty for an instrument without strings (`NoteKind::Pitched`, `NoteKind::Percussion`).
@@ -59,14 +65,19 @@ struct TrackFile {
     measures: Vec<Measure>,
     #[serde(default)]
     clef: Option<Clef>,
+    #[serde(default)]
+    fallback_program: Option<u8>,
 }
 
 impl From<TrackFile> for Track {
     fn from(file: TrackFile) -> Self {
+        let sound = file
+            .sound
+            .unwrap_or_else(|| file.instrument.default_sound());
         Track {
-            sound: file
-                .sound
-                .unwrap_or_else(|| file.instrument.default_sound()),
+            // A built-in sound has its own program: a fallback written next to one means nothing.
+            fallback_program: file.fallback_program.filter(|_| !sound.is_built_in()),
+            sound,
             name: file.name,
             instrument: file.instrument,
             tuning: file.tuning,
@@ -78,7 +89,7 @@ impl From<TrackFile> for Track {
 
 /// An instrument family: it decides how its notes are stored (`NoteKind`), the strings, how
 /// frets are counted and the default tuning. How it sounds is the track's `Sound`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Instrument {
     /// Acoustic guitar, with nylon or steel strings (the name predates the steel sound).
     Guitar,
@@ -353,6 +364,17 @@ pub fn decompose_ticks(mut len: u32) -> Option<Vec<Duration>> {
 }
 
 impl Track {
+    /// The General MIDI program that plays the track when no sound pack does: the program of a
+    /// built-in sound, else the fallback the pack declared, else (a file that names none) the
+    /// program of the default sound of the instrument. For drums it is the kit.
+    pub fn midi_program(&self) -> u8 {
+        self.sound
+            .midi_program()
+            .or(self.fallback_program)
+            .or(self.instrument.default_sound().midi_program())
+            .unwrap_or(0)
+    }
+
     /// MIDI pitch of a note, or `None` if the string or the fret does not exist, or the pitch is
     /// above 127. A drum note gives the key of its piece, which is what the percussion channel
     /// plays, and `None` for a key that is no piece.
@@ -369,6 +391,9 @@ impl Track {
 
 /// Highest MIDI pitch.
 pub const MAX_PITCH: u8 = 127;
+
+/// Highest General MIDI program (they are counted from 0).
+pub const MAX_PROGRAM: u8 = 127;
 
 /// MIDI pitch of a fret of a string (1 is the first) of an instrument, or `None` if the string or
 /// the fret does not exist.
@@ -556,7 +581,8 @@ mod tests {
         Track {
             name: "Guitar".into(),
             instrument: Instrument::Guitar,
-            sound: Sound::GuitarNylon,
+            sound: Sound::GUITAR_NYLON,
+            fallback_program: None,
             tuning: GUITAR_STANDARD.to_vec(),
             measures: vec![],
             clef: None,
@@ -599,7 +625,8 @@ mod tests {
         Track {
             name: "Banjo".into(),
             instrument: Instrument::Banjo,
-            sound: Sound::Banjo,
+            sound: Sound::BANJO,
+            fallback_program: None,
             tuning: BANJO_STANDARD.to_vec(),
             measures: vec![],
             clef: None,
@@ -649,20 +676,61 @@ mod tests {
     fn a_track_without_a_sound_gets_the_default_sound_of_its_instrument() {
         let json = r#"{"name":"B","instrument":"Bass","tuning":[43,38,33,28],"measures":[]}"#;
         let track: Track = serde_json::from_str(json).unwrap();
-        assert_eq!(track.sound, Sound::BassFinger);
+        assert_eq!(track.sound, Sound::BASS_FINGER);
     }
 
     #[test]
     fn the_sound_of_a_track_is_saved_and_read_back() {
         let mut track = guitar();
         track.instrument = Instrument::ElectricGuitar;
-        track.sound = Sound::ElectricGuitarDistortion;
+        track.sound = Sound::ELECTRIC_GUITAR_DISTORTION;
         let json = serde_json::to_string(&track).unwrap();
         assert!(
             json.contains(r#""sound":"electric-guitar/distortion""#),
             "{json}"
         );
         assert_eq!(serde_json::from_str::<Track>(&json).unwrap(), track);
+    }
+
+    #[test]
+    fn a_track_with_a_built_in_sound_is_written_without_a_fallback_program() {
+        let json = serde_json::to_string(&guitar()).unwrap();
+        assert!(!json.contains("fallback_program"), "{json}");
+    }
+
+    #[test]
+    fn a_pack_sound_and_its_fallback_program_are_saved_and_read_back() {
+        let mut track = guitar();
+        track.sound = Sound::parse("guitar/twelve-string").unwrap();
+        track.fallback_program = Some(25);
+        let json = serde_json::to_string(&track).unwrap();
+        assert!(
+            json.contains(r#""sound":"guitar/twelve-string","fallback_program":25"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<Track>(&json).unwrap(), track);
+    }
+
+    #[test]
+    fn a_pack_sound_plays_its_fallback_program_or_the_default_one_of_its_instrument() {
+        let mut track = guitar();
+        assert_eq!(track.midi_program(), 24);
+        track.instrument = Instrument::ElectricGuitar;
+        track.sound = Sound::parse("electric-guitar/fuzz").unwrap();
+        assert_eq!(track.midi_program(), 27, "the clean electric guitar");
+        track.fallback_program = Some(30);
+        assert_eq!(track.midi_program(), 30);
+    }
+
+    #[test]
+    fn a_fallback_program_next_to_a_built_in_sound_is_dropped_on_reading() {
+        let json = r#"{"name":"G","instrument":"Guitar","sound":"guitar/steel","fallback_program":3,
+            "tuning":[64,59,55,50,45,40],"measures":[]}"#;
+        let track: Track = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            (track.sound, track.fallback_program),
+            (Sound::GUITAR_STEEL, None)
+        );
     }
 
     #[test]
@@ -797,7 +865,8 @@ mod tests {
         let piano = Track {
             name: "Piano".into(),
             instrument: Instrument::Piano,
-            sound: Sound::Piano,
+            sound: Sound::PIANO,
+            fallback_program: None,
             tuning: vec![],
             measures: vec![],
             clef: None,
@@ -824,7 +893,8 @@ mod tests {
         let drums = Track {
             name: "Drums".into(),
             instrument: Instrument::Drums,
-            sound: Sound::DrumsStandard,
+            sound: Sound::DRUMS_STANDARD,
+            fallback_program: None,
             tuning: vec![],
             measures: vec![],
             clef: None,

@@ -124,7 +124,7 @@ fn instrument_track<'a>(
     } else {
         channel
     });
-    let program = track.sound.midi_program();
+    let program = track.midi_program();
 
     let mut events: Vec<(u32, TrackEventKind<'_>)> = vec![
         (
@@ -268,6 +268,24 @@ mod tests {
     }
 
     #[test]
+    fn a_pack_sound_is_written_with_its_fallback_program() {
+        let mut original = demo_score();
+        let edit = Edit::SetSound {
+            track: 0,
+            sound: Sound::parse("guitar/twelve-string").unwrap(),
+            fallback_program: Some(25),
+        };
+        score_model::apply_edit(&mut original, &edit).unwrap();
+
+        let imported = import_midi(&export_midi(&original).unwrap()).unwrap().score;
+
+        // A MIDI file only knows General MIDI: the track comes back as the steel guitar.
+        assert_eq!(imported.tracks[0].sound, Sound::GUITAR_STEEL);
+        assert_eq!(sounding(&imported.tracks[0]), sounding(&original.tracks[0]));
+        assert_eq!(imported.validate(), Ok(()));
+    }
+
+    #[test]
     fn exporting_then_importing_gives_back_the_same_notes() {
         let original = demo_score();
         let imported = import_midi(&export_midi(&original).unwrap()).unwrap().score;
@@ -290,6 +308,7 @@ mod tests {
                 &Edit::AddTrack {
                     instrument: sound.instrument(),
                     sound: Some(sound),
+                    fallback_program: None,
                 },
             )
             .unwrap();
@@ -426,7 +445,8 @@ mod tests {
             &mut score,
             &Edit::SetSound {
                 track: 0,
-                sound: Sound::DrumsBrush,
+                sound: Sound::DRUMS_BRUSH,
+                fallback_program: None,
             },
         )
         .unwrap();
@@ -481,7 +501,7 @@ mod tests {
         assert_eq!(imported.skipped_notes, 0);
         let drums = &imported.score.tracks[0];
         assert_eq!(drums.instrument, Instrument::Drums);
-        assert_eq!(drums.sound, Sound::DrumsBrush);
+        assert_eq!(drums.sound, Sound::DRUMS_BRUSH);
         let original = &score.tracks[0];
         for (a, b) in original.measures.iter().zip(&drums.measures) {
             assert_eq!(a.voices[0].beats, b.voices[0].beats);
@@ -497,6 +517,7 @@ mod tests {
                 &Edit::AddTrack {
                     instrument: Instrument::Bass,
                     sound: None,
+                    fallback_program: None,
                 },
             )
             .unwrap();

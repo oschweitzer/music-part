@@ -416,7 +416,7 @@ fn sound_for(info: Option<&PartInfo>, has_tab: bool) -> Sound {
     // for every part.
     let program = info.and_then(|i| i.midi_program);
     if let Some(program) = program
-        .filter(|p| (24..=40).contains(p) || Sound::from_midi_program(Some(*p)) != Sound::Piano)
+        .filter(|p| (24..=40).contains(p) || Sound::from_midi_program(Some(*p)) != Sound::PIANO)
     {
         return Sound::from_midi_program(Some(program));
     }
@@ -435,7 +435,7 @@ fn sound_for(info: Option<&PartInfo>, has_tab: bool) -> Sound {
     } else if name.contains("banjo") {
         Instrument::Banjo.default_sound()
     } else if name.contains("steel") {
-        Sound::GuitarSteel
+        Sound::GUITAR_STEEL
     } else if name.contains("guitar") || has_tab {
         Instrument::Guitar.default_sound()
     } else {
@@ -479,32 +479,32 @@ fn keyboard_or_voice_for(name: &str) -> Option<Sound> {
     let has_word = |list: &[&str]| words.iter().any(|w| list.contains(w));
     if has_word(&VOICE_WORDS) && !NOT_A_VOICE.iter().any(|w| name.contains(w)) {
         return Some(if name.contains("synth") {
-            Sound::VoiceSynth
+            Sound::VOICE_SYNTH
         } else if name.contains("ooh") {
-            Sound::VoiceOohs
+            Sound::VOICE_OOHS
         } else {
             Instrument::Voice.default_sound()
         });
     }
     if name.contains("organ") || name.contains("harmonium") || name.contains("accordion") {
         return Some(if name.contains("church") || name.contains("pipe") {
-            Sound::OrganChurch
+            Sound::ORGAN_CHURCH
         } else if name.contains("rock") {
-            Sound::OrganRock
+            Sound::ORGAN_ROCK
         } else if name.contains("harmonium") || name.contains("accordion") || name.contains("reed")
         {
-            Sound::OrganReed
+            Sound::ORGAN_REED
         } else {
             Instrument::Organ.default_sound()
         });
     }
     if name.contains("synth") && !name.contains("bass") {
         return Some(if name.contains("choir") {
-            Sound::SynthChoirPad
+            Sound::SYNTH_CHOIR_PAD
         } else if name.contains("pad") {
-            Sound::SynthWarmPad
+            Sound::SYNTH_WARM_PAD
         } else if name.contains("saw") {
-            Sound::SynthSawLead
+            Sound::SYNTH_SAW_LEAD
         } else {
             Instrument::Synth.default_sound()
         });
@@ -515,7 +515,7 @@ fn keyboard_or_voice_for(name: &str) -> Option<Sound> {
         || name.contains("e. piano")
         || (name.contains("electric") && name.contains("piano"))
     {
-        return Some(Sound::PianoElectric);
+        return Some(Sound::PIANO_ELECTRIC);
     }
     None
 }
@@ -759,6 +759,7 @@ fn read_part(
         name,
         instrument,
         sound,
+        fallback_program: None,
         tuning,
         measures,
         clef: None,
