@@ -331,6 +331,40 @@ fn techniques_are_mapped() {
 }
 
 #[test]
+fn a_bend_is_read_with_the_amount_the_file_gives_it() {
+    let bend = |inner: &str| {
+        pitched(
+            "E",
+            4,
+            2,
+            &format!("<notations><technical><bend>{inner}</bend></technical></notations>"),
+        )
+    };
+    let notes = [
+        bend("<bend-alter>0.5</bend-alter>"),
+        bend("<bend-alter>1</bend-alter>"),
+        bend("<bend-alter>2</bend-alter>"),
+        bend(""),
+    ]
+    .concat();
+    let imported = ok(&score_xml("Guitar", FOUR_FOUR, &[&notes]));
+
+    let techniques: Vec<Option<Technique>> = first_beats(&imported.score, 0)
+        .iter()
+        .map(|b| b.notes[0].technique)
+        .collect();
+    assert_eq!(
+        techniques,
+        vec![
+            Some(Technique::BendQuarter),
+            Some(Technique::BendHalf),
+            Some(Technique::Bend),
+            Some(Technique::Bend)
+        ]
+    );
+}
+
+#[test]
 fn grace_notes_and_notes_no_string_can_play_are_counted_not_imported() {
     let grace = "<note><grace/><pitch><step>E</step><octave>4</octave></pitch></note>";
     let too_low = pitched("C", 1, 2, "");

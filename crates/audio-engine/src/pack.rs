@@ -854,6 +854,8 @@ mod tests {
             Technique::HammerOn,
             Technique::PullOff,
             Technique::Bend,
+            Technique::BendHalf,
+            Technique::BendQuarter,
             Technique::Slide,
         ] {
             let buf = render_sfz(&base, &packs, &score(Some(technique)), |_| {});

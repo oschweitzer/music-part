@@ -15,8 +15,6 @@ const TICKS_PER_QUARTER: f64 = 32.0;
 /// the same range on every channel.
 pub const BEND_CENTER: u16 = 8192;
 pub const BEND_RANGE_SEMITONES: i32 = 12;
-/// A bend reaches this many semitones above the note (a whole tone).
-const BEND_SEMITONES: i32 = 2;
 /// Granularity of bend and slide ramps: a 32nd note.
 const RAMP_STEP: u32 = 4;
 /// A slide only travels this far; a wider jump is played as two plain notes.
@@ -174,14 +172,15 @@ pub fn schedule(score: &Score) -> Vec<Event> {
 
                     let mut bends = Vec::new();
                     match note.technique {
-                        Some(Technique::Bend) => {
+                        Some(technique) if technique.is_bend() => {
                             let rise = (beat.duration.ticks() / 3).min(4 * RAMP_STEP);
-                            bends = ramp(start, rise, BEND_SEMITONES);
+                            let semitones = technique.bend_semitones().unwrap_or_default();
+                            bends = ramp(start, rise, f64::from(semitones));
                         }
                         Some(Technique::Slide) => {
                             if let Some(delta) = slide_target(track, note, beats.get(i + 1)) {
                                 let half = beat.duration.ticks() / 2;
-                                bends = ramp(start + half, half, delta);
+                                bends = ramp(start + half, half, f64::from(delta));
                                 next_slid_onto.extend(note.string());
                             }
                         }
@@ -331,12 +330,12 @@ fn slide_target(track: &Track, note: &Note, next: Option<&(u32, &Beat)>) -> Opti
 
 /// Pitch wheel steps rising linearly to `semitones` over `length` ticks from `start`, as
 /// (tick, wheel value). The last step lands exactly on the target.
-fn ramp(start: u32, length: u32, semitones: i32) -> Vec<(u32, u16)> {
+fn ramp(start: u32, length: u32, semitones: f64) -> Vec<(u32, u16)> {
     let steps = (length / RAMP_STEP).max(1);
     (1..=steps)
         .map(|k| {
             let progress = f64::from(k) / f64::from(steps);
-            let offset = f64::from(semitones) * progress / f64::from(BEND_RANGE_SEMITONES);
+            let offset = semitones * progress / f64::from(BEND_RANGE_SEMITONES);
             let value = (f64::from(BEND_CENTER) + offset * f64::from(BEND_CENTER)).round();
             let tick = start + length * k / steps;
             (tick, value.clamp(0.0, 16383.0) as u16)
@@ -757,6 +756,32 @@ mod tests {
         };
         // High E string is 64: the harmonics are an octave, an octave and a fifth, two octaves.
         assert_eq!((at(12), at(7), at(5)), (76, 83, 88));
+    }
+
+    #[test]
+    fn a_bend_rises_as_far_as_its_amount_says() {
+        let wheel_for = |semitones: f64| {
+            BEND_CENTER
+                + (BEND_CENTER as f64 * semitones / BEND_RANGE_SEMITONES as f64).round() as u16
+        };
+        for (technique, semitones) in [
+            (Technique::BendQuarter, 0.5),
+            (Technique::BendHalf, 1.0),
+            (Technique::Bend, 2.0),
+        ] {
+            let events = schedule(&score_with(vec![with_technique(1, 5, technique)]));
+            let bends = bends(&events);
+            assert_eq!(
+                bends.iter().map(|b| b.1).max(),
+                Some(wheel_for(semitones)),
+                "{technique:?}"
+            );
+            assert_eq!(
+                bends.last(),
+                Some(&(32, BEND_CENTER)),
+                "{technique:?} is released"
+            );
+        }
     }
 
     #[test]

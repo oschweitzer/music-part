@@ -413,7 +413,10 @@ fn write_technique(out: &mut String, note: &Note, next: Option<&Note>) -> std::f
     match note.technique {
         Some(Technique::HammerOn) => write!(out, r#"<hammer-on type="stop" number="1"/>"#)?,
         Some(Technique::PullOff) => write!(out, r#"<pull-off type="stop" number="1"/>"#)?,
-        Some(Technique::Bend) => write!(out, "<bend><bend-alter>2</bend-alter></bend>")?,
+        Some(bend @ (Technique::Bend | Technique::BendHalf | Technique::BendQuarter)) => {
+            let alter = bend.bend_semitones().unwrap_or_default();
+            write!(out, "<bend><bend-alter>{alter}</bend-alter></bend>")?
+        }
         Some(Technique::Harmonic) => write!(out, "<harmonic><natural/></harmonic>")?,
         Some(Technique::PalmMute) => write!(out, "<other-technical>palm mute</other-technical>")?,
         Some(Technique::Slide) | None => {}
@@ -758,6 +761,43 @@ mod tests {
         });
         assert_eq!(score.validate(), Ok(()));
 
+        assert_same_music(&roundtrip(&score), &score);
+    }
+
+    #[test]
+    fn a_bend_keeps_its_amount_in_the_file() {
+        let mut score = blank_score("bends");
+        for (measure, technique) in [
+            (0, Technique::BendQuarter),
+            (1, Technique::BendHalf),
+            (2, Technique::Bend),
+        ] {
+            for edit in [
+                Edit::SetFret {
+                    track: 0,
+                    measure,
+                    beat: 0,
+                    string: 1,
+                    fret: 5,
+                },
+                Edit::SetTechnique {
+                    track: 0,
+                    measure,
+                    beat: 0,
+                    string: 1,
+                    technique: Some(technique),
+                },
+            ] {
+                apply_edit(&mut score, &edit).unwrap();
+            }
+        }
+        let xml = export_musicxml(&score);
+        for alter in ["0.5", "1", "2"] {
+            assert!(
+                xml.contains(&format!("<bend-alter>{alter}</bend-alter>")),
+                "no bend of {alter}"
+            );
+        }
         assert_same_music(&roundtrip(&score), &score);
     }
 

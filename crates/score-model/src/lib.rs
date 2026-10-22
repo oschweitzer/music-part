@@ -277,9 +277,36 @@ pub enum Technique {
     HammerOn,
     PullOff,
     Slide,
+    /// A bend of a whole tone ("full"). It is the bend files wrote before amounts existed, so its
+    /// name stays; the smaller bends are `BendHalf` and `BendQuarter`.
     Bend,
+    /// A bend of a half tone (a semitone).
+    BendHalf,
+    /// A bend of a quarter tone (half a semitone).
+    BendQuarter,
     PalmMute,
     Harmonic,
+}
+
+impl Technique {
+    /// True for the three bends, whatever their amount.
+    pub fn is_bend(self) -> bool {
+        self.bend_semitones().is_some()
+    }
+
+    /// How far a bend rises above the note, in semitones; `None` for the other techniques.
+    pub fn bend_semitones(self) -> Option<f32> {
+        match self {
+            Technique::Bend => Some(2.0),
+            Technique::BendHalf => Some(1.0),
+            Technique::BendQuarter => Some(0.5),
+            Technique::HammerOn
+            | Technique::PullOff
+            | Technique::Slide
+            | Technique::PalmMute
+            | Technique::Harmonic => None,
+        }
+    }
 }
 
 impl NoteValue {
@@ -950,5 +977,38 @@ mod tests {
         let json = serde_json::to_string(&score).unwrap();
         let back: Score = serde_json::from_str(&json).unwrap();
         assert_eq!(score, back);
+    }
+
+    #[test]
+    fn a_bend_written_before_amounts_existed_is_a_whole_tone() {
+        let note: Note =
+            serde_json::from_str(r#"{"string":1,"fret":3,"technique":"Bend"}"#).unwrap();
+        assert_eq!(note.technique, Some(Technique::Bend));
+        assert_eq!(Technique::Bend.bend_semitones(), Some(2.0));
+    }
+
+    #[test]
+    fn bends_of_three_amounts_round_trip_and_the_other_techniques_are_no_bend() {
+        for (technique, name, semitones) in [
+            (Technique::BendQuarter, "BendQuarter", 0.5),
+            (Technique::BendHalf, "BendHalf", 1.0),
+            (Technique::Bend, "Bend", 2.0),
+        ] {
+            let json = serde_json::to_string(&technique).unwrap();
+            assert_eq!(json, format!("\"{name}\""));
+            assert_eq!(serde_json::from_str::<Technique>(&json).unwrap(), technique);
+            assert!(technique.is_bend());
+            assert_eq!(technique.bend_semitones(), Some(semitones));
+        }
+        for technique in [
+            Technique::HammerOn,
+            Technique::PullOff,
+            Technique::Slide,
+            Technique::PalmMute,
+            Technique::Harmonic,
+        ] {
+            assert!(!technique.is_bend());
+            assert_eq!(technique.bend_semitones(), None);
+        }
     }
 }

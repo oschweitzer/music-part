@@ -806,6 +806,18 @@ fn read_signature(time: Node) -> Option<TimeSignature> {
     signature.is_valid().then_some(signature)
 }
 
+/// The bend nearest to what `bend-alter` asks, in semitones: up to three quarters of a semitone is
+/// a quarter tone, up to one and a half a half tone, more (or nothing said) a whole tone. The
+/// direction is ignored: the model has no release.
+fn bend_of(element: Node) -> Technique {
+    let alter: Option<f64> = child_text(element, "bend-alter").and_then(|t| t.parse().ok());
+    match alter.map(f64::abs) {
+        Some(semitones) if semitones < 0.75 => Technique::BendQuarter,
+        Some(semitones) if semitones < 1.5 => Technique::BendHalf,
+        _ => Technique::Bend,
+    }
+}
+
 fn technique_of(note: Node) -> Option<Technique> {
     let notations = child(note, "notations")?;
     if let Some(technical) = child(notations, "technical") {
@@ -815,7 +827,7 @@ fn technique_of(note: Node) -> Option<Technique> {
                 "hammer-on" if ends => return Some(Technique::HammerOn),
                 "pull-off" if ends => return Some(Technique::PullOff),
                 "harmonic" => return Some(Technique::Harmonic),
-                "bend" => return Some(Technique::Bend),
+                "bend" => return Some(bend_of(element)),
                 "other-technical" if element.text().map(str::trim) == Some("palm mute") => {
                     return Some(Technique::PalmMute)
                 }
