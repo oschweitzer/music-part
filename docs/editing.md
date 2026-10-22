@@ -51,6 +51,7 @@ Double-click a line to strike its drum, Up and Down move a hit to the next line.
 | `.`                         | Adds or removes a dot                                                         |
 | `L`                         | Ties the note to the one before it on the same string (again: unties)         |
 | `B` `M` `/`                 | Bend, palm mute, slide on the note (again: clears). Others are in the toolbar |
+| `+` / `-`                   | On a bent note: a bigger or smaller bend (1/4, 1/2, full)                     |
 | `Ctrl+Enter`                | Inserts a measure after the selected one                                      |
 | `Ctrl+Delete`               | Deletes the selected measure, or all the measures a range of beats touches    |
 | `Alt+Up` / `Alt+Down`       | Moves the selection to the track above or below, at the same moment           |
@@ -125,8 +126,9 @@ A measure is always exactly full. Changing the length of a beat keeps it that wa
 - Ties and techniques apply to a note; on a rest the app asks for a note first.
 - Inserting or deleting a measure applies to every track, so tracks always have the same length. The
   last measure cannot be deleted.
-- Right-click the tablature for a menu: cut, copy, paste, insert a measure before or after, and
-  delete the measure. When a range of beats is selected (Shift+arrows, or dragging the mouse) and
+- Right-click the tablature for a menu: cut, copy, paste, the bend of the note under the click
+  (a "Bend" submenu with 1/4, 1/2 and full, and "Remove the bend" on a bent note), insert a measure
+  before or after, and delete the measure. When a range of beats is selected (Shift+arrows, or dragging the mouse) and
   the click is inside it, the menu acts on the whole range: "Delete 3 measures" removes every
   measure the range touches, in one undo step. A right-click outside the range selects that spot first.
 
@@ -140,7 +142,8 @@ The player turns techniques into MIDI (`audio-engine/src/sequencer.rs`):
 | Slide               | Glides, in the second half of the note, to the note on the same string that      |
 |                     | follows (up to an octave away), which is then played softly. Nothing to reach:   |
 |                     | a plain note                                                                     |
-| Bend                | Rises a whole tone over the start of the note and is held until it ends          |
+| Bend 1/4, 1/2, full | Rises a quarter, a half or a whole tone over the start of the note (the amount   |
+|                     | comes from the bend menu, or `+` and `-`) and is held until it ends              |
 | Palm mute           | Quieter, dull, and cut to half its length; the string stops ringing at once      |
 | Harmonic            | Natural harmonic: frets 12 and 24 an octave above the open string, 7 and 19 an   |
 |                     | octave and a fifth, 5 two octaves, 4 two octaves and a third, 9 an octave and a  |
@@ -168,7 +171,10 @@ channels. A MIDI channel number is a byte, which leaves room for 53 such pairs; 
 more plays the rest with the open timbre. The pitch wheel moves every channel of a track.
 
 Bends and slides move the pitch wheel of the track's MIDI channel, so they bend every note sounding
-on that track at the same time. A bend always rises a whole tone: the model has no bend amount yet.
+on that track at the same time. A bend rises by its amount, a quarter tone, a half tone or a whole tone, set by the technique
+(`BendQuarter`, `BendHalf`, `Bend`). `Bend` is the whole tone, the only bend there was before amounts
+existed, so older scores keep sounding the same. The toolbar's bend menu, the right-click menu and
+`+` / `-` on a bent note choose the amount; a new bend is a whole tone.
 
 ## Track views
 

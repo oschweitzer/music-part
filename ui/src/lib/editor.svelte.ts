@@ -1,11 +1,12 @@
 import type { DocumentApi, DocumentState, Edit, ExportFormat, OpenedDocument } from './document-api'
+import { bendAmount, bendTechnique, steppedBend } from './bend'
 import { fileNameFor, type FilePrompts } from './files'
 import type { Command } from './keymap'
 import type { Playback } from './playback.svelte'
 import { DEFAULT_PIECE, pieceOfDigit, stepPiece } from './drums'
 import { isPercussionTrack, isPitchedTrack, noteKindOf } from './instruments'
 import { notePitch, noteRow } from './notes'
-import type { Beat, Instrument, Note, NoteValue, SoundId, TimeSignature, TrackClef } from './score-types'
+import type { Beat, Instrument, Note, NoteValue, SoundId, Technique, TimeSignature, TrackClef } from './score-types'
 import {
   canGrowPastEnd,
   clampSelection,
@@ -249,12 +250,23 @@ export class Editor {
           this.message = { tone: 'info', text: 'Techniques are for notes played on strings.' }
           return Promise.resolve()
         }
+        // B on a bent note clears it, whatever its amount.
         return this.#withNote(({ row, ...at }, note) => ({
           type: 'setTechnique',
           ...at,
           string: row,
-          technique: note.technique === command.technique ? null : command.technique,
+          technique:
+            note.technique === command.technique || (command.technique === 'Bend' && bendAmount(note.technique) !== null)
+              ? null
+              : command.technique,
         }))
+      case 'bend':
+        return this.#setBend(bendTechnique(command.amount))
+      case 'bendStep': {
+        // Plus and minus mean nothing off a bent note, so they say nothing there.
+        const to = steppedBend({ technique: this.currentNote?.technique ?? null, step: command.step })
+        return to === null ? Promise.resolve() : this.#setBend(to)
+      }
       case 'insertMeasure':
         return this.insertMeasure()
       case 'deleteMeasure':
@@ -605,6 +617,16 @@ export class Editor {
       }
       await this.#apply(await this.#api.edit(build(at, note)))
     })
+  }
+
+  /** Gives the selected note this bend, unless it has it already. */
+  #setBend(technique: Technique): Promise<void> {
+    if (this.#hasStaffRows) {
+      this.message = { tone: 'info', text: 'Techniques are for notes played on strings.' }
+      return Promise.resolve()
+    }
+    if (this.currentNote?.technique === technique) return Promise.resolve()
+    return this.#withNote(({ row, ...at }) => ({ type: 'setTechnique', ...at, string: row, technique }))
   }
 
   #typeFret(digit: number): Promise<void> {

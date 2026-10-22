@@ -782,7 +782,8 @@ export const scenarios = [
       })()`)
       await page.mouseRightClick(point.x, point.y)
       await page.waitFor(`document.querySelector('.context-menu')`, { what: 'the menu opens' })
-      assert.equal(await page.eval(`document.querySelectorAll('.context-menu hr').length`), 1)
+      // Clipboard, then the bend of the note under the click, then the measures.
+      assert.equal(await page.eval(`document.querySelectorAll('.context-menu hr').length`), 2)
 
       // Escape closes the menu and keeps the selection.
       await page.press('Escape')
@@ -824,6 +825,68 @@ export const scenarios = [
       await clickButton(page, 'Insert measure before')
       await settle()
       assert.equal(await count(), before)
+    },
+  ],
+
+  [
+    'a bend gets its amount from the bend menu, from + and -, and from the right-click menu',
+    async (context) => {
+      const { page } = context
+      const bendOf = async () => beatsOf(await document_(context), 0)[1].notes.find((n) => n.string === 4).technique
+      const label = () => text(page, 'svg.tab text.technique')
+      const clickMatching = async (selector, start) => {
+        const found = await page.eval(`(() => {
+          const b = [...document.querySelectorAll(${JSON.stringify(selector)})].find(b => b.textContent.trim().startsWith(${JSON.stringify(start)}))
+          b?.click()
+          return Boolean(b)
+        })()`)
+        assert.ok(found, `no ${selector} starting with "${start}"`)
+        await settle()
+      }
+
+      await clickFret(page, 0)
+      await page.press('ArrowRight')
+      await page.press('ArrowUp') // the note of string 4 in beat 1
+      await page.eval(`document.querySelector('.bend-menu summary').click()`)
+      await page.screenshot(join(context.out, 'bend-menu.png'))
+      await clickMatching('.bend-menu .menu button', '1/4')
+      assert.equal(await bendOf(), 'BendQuarter')
+      assert.equal(await label(), '¼', 'the tab shows the amount')
+
+      await page.press('+')
+      await settle()
+      assert.equal(await bendOf(), 'BendHalf')
+      assert.equal(await label(), '½')
+      await page.press('+')
+      await page.press('+') // already full: stays
+      await settle()
+      assert.equal(await bendOf(), 'Bend')
+      assert.equal(await label(), 'full')
+      await page.press('-')
+      await settle()
+      assert.equal(await bendOf(), 'BendHalf')
+
+      await page.press('b') // B clears a bend of any amount
+      await settle()
+      assert.equal(await bendOf(), null)
+      await page.press('+') // nothing to step on a plain note
+      await settle()
+      assert.equal(await bendOf(), null)
+
+      const rightClickNote = async () => {
+        const point = await selection(page)
+        await page.mouseRightClick(point.x, point.y)
+        await page.waitFor(`document.querySelector('.context-menu')`)
+      }
+      await rightClickNote()
+      await clickMatching('.context-menu button', 'Bend')
+      await page.screenshot(join(context.out, 'bend-context-menu.png'))
+      await clickMatching('.context-menu.submenu button', '1/2')
+      assert.equal(await bendOf(), 'BendHalf')
+
+      await rightClickNote()
+      await clickMatching('.context-menu button', 'Remove the bend')
+      assert.equal(await bendOf(), null)
     },
   ],
 

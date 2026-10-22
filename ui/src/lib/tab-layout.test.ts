@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
-import type { Beat, Measure, Score, Track } from './score-types'
+import type { Beat, Measure, Score, Technique, Track } from './score-types'
 import {
   clipLayout,
   durationTicks,
@@ -134,6 +134,15 @@ describe('rests and notes', () => {
     const measure = layoutTab({ track: guitar, width: 900 }).systems.flatMap((s) => s.measures)[5]!
     expect(measure.beats[0]!.stem).toBeNull()
     expect(measure.beats[0]!.notes).toHaveLength(5)
+  })
+
+  it('should label a bend with its amount', () => {
+    const labelOf = (technique: Technique) => {
+      const bent = structuredClone(guitar)
+      bent.measures[0]!.voices[0]!.beats[0]!.notes[0]!.technique = technique
+      return layoutTab({ track: bent, width: 900 }).systems[0]!.measures[0]!.beats[0]!.notes[0]!.techniqueLabel
+    }
+    expect([labelOf('BendQuarter'), labelOf('BendHalf'), labelOf('Bend')]).toEqual(['¼', '½', 'full'])
   })
 
   it('should label a hammer-on', () => {

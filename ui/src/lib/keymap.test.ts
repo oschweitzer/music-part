@@ -59,6 +59,14 @@ describe('interpretKey', () => {
     expect(press('q', { altKey: true })).toBeNull()
   })
 
+  it('should read plus and minus as a step of the bend amount, shifted or not, but not as browser zoom', () => {
+    expect(press('+')).toEqual({ type: 'bendStep', step: 1 })
+    expect(press('+', { shiftKey: true })).toEqual({ type: 'bendStep', step: 1 })
+    expect(press('-')).toEqual({ type: 'bendStep', step: -1 })
+    expect(press('+', { ctrlKey: true })).toBeNull()
+    expect(press('-', { ctrlKey: true })).toBeNull()
+  })
+
   it('should read space as play and pause, and escape as clearing the selection', () => {
     expect(press(' ')).toEqual({ type: 'togglePlayback' })
     expect(press('Escape')).toEqual({ type: 'clearSelection' })

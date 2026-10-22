@@ -4,6 +4,7 @@
   import SoundsPanel from './components/SoundsPanel.svelte'
   import TabView from './components/TabView.svelte'
   import TrackRows from './components/TrackRows.svelte'
+  import { BEND_AMOUNTS, bendAmount } from './lib/bend'
   import { createDocumentApi, NO_SOUND_PACKS, type ExportFormat, type SoundPacks } from './lib/document-api'
   import { Editor } from './lib/editor.svelte'
   import { createFilePrompts, guardWindowClose, isScoreFile, onFilesDropped, setWindowTitle } from './lib/files'
@@ -234,11 +235,30 @@
   const menuItems = $derived.by((): MenuItem[] => {
     const measures = editor.selectedMeasures
     const count = measures?.count ?? 1
+    // The amounts of a bend are for a note played on a string.
+    const note = editor.currentNote
+    const current = bendAmount(note?.technique ?? null)
+    const bendItems: MenuItem[] =
+      note && !editor.isPitched && !editor.isPercussion
+        ? [
+            {
+              label: 'Bend',
+              submenu: BEND_AMOUNTS.map((option) => ({
+                label: `${option.label}  ${option.name}`,
+                checked: current === option.amount,
+                onselect: () => void editor.run({ type: 'bend', amount: option.amount }),
+              })),
+            },
+            ...(current ? [{ label: 'Remove the bend', onselect: () => void editor.run({ type: 'technique', technique: 'Bend' }) } satisfies MenuItem] : []),
+            'separator' as const,
+          ]
+        : []
     return [
       { label: 'Cut', onselect: () => void editor.run({ type: 'cut' }) },
       { label: 'Copy', onselect: () => void editor.run({ type: 'copy' }) },
       { label: 'Paste', disabled: !editor.clipboard, onselect: () => void editor.run({ type: 'paste' }) },
       'separator',
+      ...bendItems,
       { label: 'Insert measure before', onselect: () => void editor.insertMeasure({ before: true }) },
       { label: 'Insert measure after', onselect: () => void editor.insertMeasure() },
       {

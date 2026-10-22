@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { BEND_AMOUNTS, bendAmount } from '../lib/bend'
+  import type { BendAmount } from '../lib/bend'
   import { DRUM_PIECES, PALETTE, pieceName } from '../lib/drums'
   import type { Editor } from '../lib/editor.svelte'
   import { noteRow } from '../lib/notes'
@@ -37,6 +39,18 @@
     if (Number.isInteger(piece) && piece > 0) void editor.togglePiece(piece)
   }
   const note = $derived(editor.currentNote)
+  const bent = $derived(bendAmount(note?.technique ?? null))
+
+  let bendMenu = $state<HTMLDetailsElement>()
+
+  function chooseBend(amount: BendAmount) {
+    if (bendMenu) bendMenu.open = false
+    void editor.run({ type: 'bend', amount })
+  }
+
+  function closeBendMenu(event: PointerEvent) {
+    if (bendMenu?.open && !bendMenu.contains(event.target as Node)) bendMenu.open = false
+  }
   const canEdit = $derived(editor.canEdit)
 
   const denominators = [1, 2, 4, 8, 16, 32]
@@ -62,6 +76,8 @@
     event.preventDefault()
   }
 </script>
+
+<svelte:window onpointerdown={closeBendMenu} />
 
 <div class="edit-bar" role="toolbar" aria-label="Editing">
   <div class="group">
@@ -157,18 +173,53 @@
       Tie
     </button>
     {#each isDrums ? [] : techniques as t (t.value)}
-      <button
-        type="button"
-        class="tool text"
-        class:active={note?.technique === t.value}
-        aria-pressed={note?.technique === t.value}
-        title={t.name}
-        disabled={!canEdit}
-        onmousedown={keepFocus}
-        onclick={() => editor.run({ type: 'technique', technique: t.value })}
-      >
-        {t.label}
-      </button>
+      {#if t.value === 'Bend'}
+        <span class="split">
+          <button
+            type="button"
+            class="tool text"
+            class:active={bent !== null}
+            aria-pressed={bent !== null}
+            title="{t.name}: a bent note is cleared. + and - change its amount"
+            disabled={!canEdit}
+            onmousedown={keepFocus}
+            onclick={() => editor.run({ type: 'technique', technique: t.value })}
+          >
+            {t.label}
+          </button>
+          <details class="bend-menu" class:disabled={!canEdit} bind:this={bendMenu}>
+            <summary class="tool caret" class:active={bent !== null} aria-label="Bend amount" title="Amount of the bend" onmousedown={keepFocus}>▾</summary>
+            <div class="menu" role="menu" aria-label="Bend amount">
+              {#each BEND_AMOUNTS as option (option.amount)}
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={bent === option.amount}
+                  class:current={bent === option.amount}
+                  onmousedown={keepFocus}
+                  onclick={() => chooseBend(option.amount)}
+                >
+                  <span>{option.label}</span>
+                  <small>{option.name}{bent === option.amount ? ' ✓' : ''}</small>
+                </button>
+              {/each}
+            </div>
+          </details>
+        </span>
+      {:else}
+        <button
+          type="button"
+          class="tool text"
+          class:active={note?.technique === t.value}
+          aria-pressed={note?.technique === t.value}
+          title={t.name}
+          disabled={!canEdit}
+          onmousedown={keepFocus}
+          onclick={() => editor.run({ type: 'technique', technique: t.value })}
+        >
+          {t.label}
+        </button>
+      {/if}
     {/each}
   </div>
 
@@ -313,5 +364,81 @@
   .tool:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
+  }
+
+  /* The bend button and the caret that opens its amounts read as one control. */
+  .split {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .split > .tool {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  .bend-menu summary.caret {
+    min-width: 18px;
+    padding: 0 3px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    font-size: 11px;
+    list-style: none;
+  }
+
+  .bend-menu summary.caret::-webkit-details-marker {
+    display: none;
+  }
+
+  .bend-menu.disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+
+  .bend-menu .menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    min-width: 170px;
+    margin-top: 4px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .bend-menu .menu button {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .bend-menu .menu button:hover {
+    background: var(--surface-2);
+  }
+
+  .bend-menu .menu button.current {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .bend-menu .menu small {
+    color: var(--ink-muted);
+    font-size: 12px;
+    font-weight: 400;
   }
 </style>

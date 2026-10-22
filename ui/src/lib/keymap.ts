@@ -1,3 +1,4 @@
+import type { BendAmount } from './bend'
 import type { NoteValue, Technique } from './score-types'
 import type { Direction } from './selection'
 
@@ -19,6 +20,10 @@ export type Command =
   | { type: 'dot' }
   | { type: 'tie' }
   | { type: 'technique'; technique: Technique }
+  /** Gives the bent note this amount of bend. */
+  | { type: 'bend'; amount: BendAmount }
+  /** A bent note goes one amount up (1) or down (-1). */
+  | { type: 'bendStep'; step: 1 | -1 }
   | { type: 'insertMeasure' }
   | { type: 'deleteMeasure' }
   | { type: 'undo' }
@@ -89,6 +94,8 @@ export function interpretKey(input: KeyInput): Command | null {
 
   if (key === ' ') return { type: 'togglePlayback' }
   if (key === 'Home') return { type: 'rewind' }
+  if (key === '+') return { type: 'bendStep', step: 1 }
+  if (key === '-') return { type: 'bendStep', step: -1 }
   if (/^[0-9]$/.test(key)) return { type: 'digit', digit: Number(key) }
   if (shiftKey && (key === 'ArrowLeft' || key === 'ArrowRight')) {
     return { type: 'extend', direction: key === 'ArrowLeft' ? 'left' : 'right' }

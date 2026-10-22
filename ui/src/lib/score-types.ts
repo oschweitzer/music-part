@@ -2,7 +2,8 @@
 
 export type NoteValue = 'Whole' | 'Half' | 'Quarter' | 'Eighth' | 'Sixteenth' | 'ThirtySecond'
 
-export type Technique = 'HammerOn' | 'PullOff' | 'Slide' | 'Bend' | 'PalmMute' | 'Harmonic'
+/** `Bend` is the whole-tone bend, the one files wrote before bend amounts existed. */
+export type Technique = 'HammerOn' | 'PullOff' | 'Slide' | 'Bend' | 'BendHalf' | 'BendQuarter' | 'PalmMute' | 'Harmonic'
 
 export type Instrument = 'Guitar' | 'ElectricGuitar' | 'Bass' | 'Violin' | 'Banjo' | 'Piano' | 'Organ' | 'Synth' | 'Voice' | 'Drums'
 

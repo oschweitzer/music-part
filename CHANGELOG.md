@@ -9,6 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Bends have an amount: a quarter tone (1/4), a half tone (1/2) or a whole tone (full, the default).
+  The arrow next to `B` in the toolbar and a "Bend" submenu of the right-click menu on a note choose
+  it, and `+` / `-` on a bent note step through the three. The tablature shows the amount above the
+  note instead of "b", the playback and the MusicXML export (`bend-alter`) follow it, and the
+  MusicXML import reads it. `.mpart`: two new techniques, `BendHalf` and `BendQuarter`; the existing
+  `Bend` stays the whole tone, so older files load and play unchanged.
 - Playback with recordings: the bass played with a pick (FreePats Picked Bass YR) and the banjo
   (ganjo, a six-string banjo from sfzinstruments, the first bundled SFZ pack) now play recorded
   samples, both CC0. The sounds still without a free recording are listed in

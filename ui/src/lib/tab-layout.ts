@@ -56,7 +56,9 @@ const TECHNIQUE_LABELS: Record<Technique, string> = {
   HammerOn: 'H',
   PullOff: 'P',
   Slide: '/',
-  Bend: 'b',
+  Bend: 'full',
+  BendHalf: '½',
+  BendQuarter: '¼',
   PalmMute: 'P.M.',
   Harmonic: 'Harm.',
 }

@@ -3,7 +3,7 @@ import demo from '../../public/demo-score.json'
 import type { DocumentApi, DocumentState, Edit, OpenedDocument } from './document-api'
 import { Editor } from './editor.svelte'
 import type { FilePrompts } from './files'
-import type { Score } from './score-types'
+import type { Score, Technique } from './score-types'
 
 const score = demo as Score
 
@@ -392,6 +392,84 @@ describe('Editor', () => {
       await editor.run({ type: 'technique', technique: 'Bend' })
 
       expect(edits.map((e) => (e.type === 'setTechnique' ? e.technique : null))).toEqual(['Slide', null])
+    })
+
+    describe('bends', () => {
+      /** An editor on a score whose note on string 4 of beat 1 carries `technique`. */
+      async function withBend(technique: Technique | null) {
+        const marked = structuredClone(score)
+        marked.tracks[0]!.measures[0]!.voices[0]!.beats[1]!.notes[0]!.technique = technique
+        const edits: Edit[] = []
+        const { api } = fakeApi({
+          startup: async () => opened({ document: state({ score: marked }) }),
+          edit: async (edit) => {
+            edits.push(edit)
+            return state({ score: marked })
+          },
+        })
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: 0, beat: 1, row: 4 })
+        return { editor, edits }
+      }
+      const techniques = (edits: Edit[]) => edits.map((e) => (e.type === 'setTechnique' ? e.technique : null))
+
+      it('should clear a bend of any amount when B is pressed on it', async () => {
+        const { editor, edits } = await withBend('BendHalf')
+        await editor.run({ type: 'technique', technique: 'Bend' })
+
+        expect(techniques(edits)).toEqual([null])
+      })
+
+      it('should set the bend of the amount chosen in a menu', async () => {
+        const { editor, edits } = await withBend(null)
+        await editor.run({ type: 'bend', amount: 'quarter' })
+
+        expect(techniques(edits)).toEqual(['BendQuarter'])
+      })
+
+      it('should send nothing when the note already has the bend chosen', async () => {
+        const { editor, edits } = await withBend('BendHalf')
+        await editor.run({ type: 'bend', amount: 'half' })
+
+        expect(edits).toEqual([])
+      })
+
+      it('should step a bend down and up, and stop at the ends', async () => {
+        const full = await withBend('Bend')
+        await full.editor.run({ type: 'bendStep', step: 1 })
+        expect(full.edits).toEqual([])
+        await full.editor.run({ type: 'bendStep', step: -1 })
+        expect(techniques(full.edits)).toEqual(['BendHalf'])
+
+        const quarter = await withBend('BendQuarter')
+        await quarter.editor.run({ type: 'bendStep', step: -1 })
+        expect(quarter.edits).toEqual([])
+        await quarter.editor.run({ type: 'bendStep', step: 1 })
+        expect(techniques(quarter.edits)).toEqual(['BendHalf'])
+      })
+
+      it('should leave a note without a bend alone when plus or minus is pressed', async () => {
+        const plain = await withBend(null)
+        await plain.editor.run({ type: 'bendStep', step: 1 })
+        const slid = await withBend('Slide')
+        await slid.editor.run({ type: 'bendStep', step: -1 })
+
+        expect(plain.edits).toEqual([])
+        expect(slid.edits).toEqual([])
+        expect(plain.editor.message).toBeNull()
+      })
+
+      it('should ask for a note when a bend amount is chosen on a rest', async () => {
+        const { api, edits } = fakeApi()
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: 0, beat: 0, row: 6 })
+        await editor.run({ type: 'bend', amount: 'full' })
+
+        expect(edits).toEqual([])
+        expect(editor.message?.text).toMatch(/Select a note/)
+      })
     })
 
     it('should tell the user a rest has no tie or technique, and send nothing', async () => {
