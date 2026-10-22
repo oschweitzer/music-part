@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use score_model::{Beat, Note, NoteKind, Score, Technique, Track};
+use score_model::{
+    Beat, Duration, Measure, Note, NoteKind, NoteValue, Score, Technique, TimeSignature, Track,
+    Voice,
+};
 
 /// MIDI velocity used until the model has dynamics.
 const DEFAULT_VELOCITY: u8 = 90;
@@ -213,6 +216,58 @@ pub fn schedule(score: &Score) -> Vec<Event> {
     }
 
     events.sort_by_key(|e| (e.tick, e.action.order()));
+    events
+}
+
+/// Tempo the ticks of a preview are counted at, whatever the tempo of the score: a preview lasts
+/// as long as a quarter note at this tempo.
+pub const PREVIEW_TEMPO_BPM: u16 = 120;
+/// Length of a previewed note, in ticks.
+pub const PREVIEW_TICKS: u32 = 32;
+
+/// The events that sound `notes` together on track `track_index`, for a preview heard while
+/// writing, with ticks counted at [`PREVIEW_TEMPO_BPM`]. It is the same as `schedule` for one
+/// beat of fixed length, so the notes keep their technique (a bend rises, a palm mute is muted),
+/// but a tie means nothing here: each note is struck. A slide has no note to glide to.
+pub fn preview(track_index: usize, track: &Track, notes: &[Note]) -> Vec<Event> {
+    let beat = Beat {
+        duration: Duration {
+            value: NoteValue::Quarter,
+            dots: 0,
+        },
+        notes: notes
+            .iter()
+            .map(|note| Note {
+                tied: false,
+                ..note.clone()
+            })
+            .collect(),
+    };
+    // Only what pitch and sound depend on is copied: the measures of the track are not needed.
+    let one_beat = Track {
+        name: String::new(),
+        instrument: track.instrument,
+        sound: track.sound,
+        fallback_program: track.fallback_program,
+        tuning: track.tuning.clone(),
+        measures: vec![Measure {
+            time_signature: TimeSignature {
+                numerator: 4,
+                denominator: 4,
+            },
+            voices: vec![Voice { beats: vec![beat] }],
+        }],
+        clef: track.clef,
+    };
+    let score = Score {
+        title: String::new(),
+        tempo_bpm: PREVIEW_TEMPO_BPM,
+        tracks: vec![one_beat],
+    };
+    let mut events = schedule(&score);
+    for event in &mut events {
+        event.track = track_index;
+    }
     events
 }
 
@@ -839,5 +894,97 @@ mod tests {
 
         assert_eq!(note_events(&events), vec![(0, true, 69), (64, false, 69)]);
         assert_eq!(bends(&events).last(), Some(&(64, BEND_CENTER)));
+    }
+
+    fn guitar() -> Track {
+        score_with(Vec::new()).tracks.remove(0)
+    }
+
+    #[test]
+    fn a_preview_sounds_the_notes_together_for_a_fixed_length_on_the_track_it_names() {
+        let notes = [Note::fretted(2, 1), Note::fretted(3, 0)];
+        let events = preview(3, &guitar(), &notes);
+
+        assert_eq!(
+            note_events(&events),
+            vec![
+                (0, true, 60),
+                (0, true, 55),
+                (PREVIEW_TICKS, false, 60),
+                (PREVIEW_TICKS, false, 55),
+            ]
+        );
+        assert!(events.iter().all(|e| e.track == 3));
+    }
+
+    #[test]
+    fn a_preview_does_not_last_as_long_as_the_beat_it_was_written_in() {
+        // The same note in a whole-note beat of a score lasts 128 ticks.
+        let long = Beat {
+            duration: Duration {
+                value: NoteValue::Whole,
+                dots: 0,
+            },
+            notes: vec![Note::fretted(1, 0)],
+        };
+        let in_score = schedule(&score_with(vec![long.clone()]));
+        let heard = preview(0, &guitar(), &long.notes);
+
+        let last = |events: &[Event]| events.iter().map(|e| e.tick).max();
+        assert_eq!(last(&in_score), Some(128));
+        assert_eq!(last(&heard), Some(PREVIEW_TICKS));
+    }
+
+    #[test]
+    fn a_previewed_note_keeps_its_technique() {
+        let mut bent = Note::fretted(1, 5);
+        bent.technique = Some(Technique::Bend);
+        let events = preview(0, &guitar(), &[bent]);
+        assert!(bends(&events).iter().any(|b| b.1 > BEND_CENTER));
+        assert_eq!(
+            bends(&events).last(),
+            Some(&(PREVIEW_TICKS, BEND_CENTER)),
+            "the wheel goes back to centre at the end of the preview"
+        );
+
+        let mut muted = Note::fretted(1, 5);
+        muted.technique = Some(Technique::PalmMute);
+        let events = preview(0, &guitar(), &[muted]);
+        assert!(events.iter().any(|e| matches!(
+            e.action,
+            Action::NoteOn {
+                timbre: Timbre::Muted,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn a_tied_note_is_previewed_as_a_note_of_its_own() {
+        let mut tied = Note::fretted(1, 0);
+        tied.tied = true;
+        let events = preview(0, &guitar(), &[tied]);
+        assert_eq!(
+            note_events(&events),
+            vec![(0, true, 64), (PREVIEW_TICKS, false, 64)]
+        );
+    }
+
+    #[test]
+    fn a_note_with_no_pitch_is_left_out_of_a_preview() {
+        let off_the_neck = Note::fretted(9, 0);
+        assert!(preview(0, &guitar(), &[off_the_neck]).is_empty());
+    }
+
+    #[test]
+    fn a_drum_hit_is_previewed_too() {
+        let mut kit = guitar();
+        kit.instrument = Instrument::Drums;
+        kit.sound = Sound::DRUMS_STANDARD;
+        kit.tuning = Vec::new();
+        let events = preview(0, &kit, &[Note::percussion(38)]);
+        assert!(events
+            .iter()
+            .any(|e| matches!(e.action, Action::NoteOn { pitch: 38, .. })));
     }
 }

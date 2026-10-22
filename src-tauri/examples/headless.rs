@@ -64,6 +64,19 @@ fn call(
         }
         "undo" => to_value(service::undo(document)),
         "redo" => to_value(service::redo(document)),
+        // There is no audio to sound it on: this checks what the app would be asked to sound.
+        "preview_notes" => {
+            let track = args
+                .get("track")
+                .and_then(Value::as_u64)
+                .ok_or("missing argument \"track\"")?;
+            let notes = serde_json::from_value::<Vec<score_model::Note>>(
+                args.get("notes").cloned().unwrap_or(Value::Null),
+            )
+            .map_err(|e| format!("invalid notes: {e}"))?;
+            service::preview_events(document, track as usize, &notes)?;
+            Ok(Value::Null)
+        }
         "sound_packs" => to_value(service::sound_packs(packs, &[])),
         other => Err(format!("unknown command \"{other}\"")),
     }

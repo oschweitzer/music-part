@@ -8,8 +8,9 @@ use serde::Serialize;
 
 use crate::document::{Document, DocumentState};
 use crate::files;
+use audio_engine::sequencer::{self, Event};
 use audio_engine::{pack, DeclaredSound, PackError, PackFailure, SoundPack};
-use score_model::{blank_score, demo_score, Edit, Sound};
+use score_model::{blank_score, demo_score, Edit, Note, Sound};
 
 /// A document that was just opened, with what the UI should tell the user about it.
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +117,21 @@ pub fn edit_score(
     let edit = with_fallback_program(document, edit, packs)?;
     document.edit(&edit).map_err(|e| e.to_string())?;
     Ok(document.state())
+}
+
+/// What to sound to let the user hear `notes` of a track as they are written: the same notes and
+/// techniques as in the score, for a fixed length (see `sequencer::preview`).
+pub fn preview_events(
+    document: &Document,
+    track: usize,
+    notes: &[Note],
+) -> Result<Vec<Event>, String> {
+    let found = document
+        .score()
+        .tracks
+        .get(track)
+        .ok_or_else(|| format!("there is no track {track}"))?;
+    Ok(sequencer::preview(track, found, notes))
 }
 
 /// `edit` with the fallback program of a pack's sound filled in from the pack that declares it.
@@ -314,6 +330,20 @@ mod tests {
 
     fn demo() -> Document {
         Document::new(demo_score(), None)
+    }
+
+    #[test]
+    fn a_preview_sounds_the_notes_it_is_given_on_the_track_it_names() {
+        let document = demo();
+        let events = preview_events(&document, 1, &[Note::fretted(1, 0)]).unwrap();
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| e.track == 1));
+    }
+
+    #[test]
+    fn a_preview_of_a_track_that_does_not_exist_is_refused() {
+        let error = preview_events(&demo(), 99, &[Note::fretted(1, 0)]).unwrap_err();
+        assert_eq!(error, "there is no track 99");
     }
 
     #[test]

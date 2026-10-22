@@ -1,6 +1,6 @@
 import { audibleTracks, resized } from './mix'
 import { ticksPerSecond, totalTicks } from './score-time'
-import type { Score } from './score-types'
+import type { Note, Score } from './score-types'
 import type { Transport } from './transport'
 
 /**
@@ -63,6 +63,16 @@ export class Playback {
     this.tick = target
     this.#lastReport = { tick: target, at: performance.now() }
     return this.#run(() => this.#transport.seek(target))
+  }
+
+  /**
+   * Lets the user hear notes of a track as they are written. A muted track stays silent, a solo
+   * on another track does not matter, and nothing is heard over the playback. It never waits for
+   * the engine and never reports a failure: a preview must not get in the way of writing.
+   */
+  preview({ track, notes }: { track: number; notes: Note[] }): void {
+    if (this.isPlaying || this.muted[track] || notes.length === 0) return
+    this.#transport.preview({ track, notes }).catch(() => {})
   }
 
   toggleMute(track: number): Promise<void> {

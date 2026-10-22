@@ -7,11 +7,15 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use audio_engine::{AudioOutput, PackBanks, PackFailure, Player, Program, SharedState, SoundPack};
+use audio_engine::sequencer::Event;
+use audio_engine::{
+    AudioOutput, PackBanks, PackFailure, Player, Preview, Program, SharedState, SoundPack,
+};
 use score_model::Score;
 
 enum Command {
     Load(Box<Score>),
+    Preview(Vec<Event>),
     Play,
     Pause,
     Stop,
@@ -72,6 +76,11 @@ impl AudioController {
                                 banks.failures().to_vec();
                         }
                     }
+                    Command::Preview(events) => {
+                        if let Some(preview) = Preview::new(events, sample_rate) {
+                            output.preview(preview);
+                        }
+                    }
                     Command::Play => output.play(),
                     Command::Pause => output.pause(),
                     Command::Stop => output.stop(),
@@ -105,6 +114,12 @@ impl AudioController {
 
     pub fn load(&self, score: Score) -> Result<(), String> {
         self.send(Command::Load(Box::new(score)))
+    }
+
+    /// Sounds a few notes right away, outside the score (see `sequencer::preview`). Nothing is
+    /// heard while the score plays.
+    pub fn preview(&self, events: Vec<Event>) -> Result<(), String> {
+        self.send(Command::Preview(events))
     }
 
     pub fn play(&self) -> Result<(), String> {
@@ -184,6 +199,7 @@ mod tests {
             audio.load(score_model::demo_score()),
             Err("no SoundFont".into())
         );
+        assert_eq!(audio.preview(Vec::new()), Err("no SoundFont".into()));
     }
 
     #[test]
@@ -231,5 +247,6 @@ mod tests {
         assert_eq!(state.position_ticks(), 0.0);
         assert_eq!(audio.load(score_model::demo_score()), Ok(()));
         assert_eq!(audio.stop(), Ok(()));
+        assert_eq!(audio.preview(Vec::new()), Ok(()));
     }
 }

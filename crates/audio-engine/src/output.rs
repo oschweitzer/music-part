@@ -5,13 +5,14 @@ use std::sync::Arc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::banks::{self, BankChange};
-use crate::player::{Player, Program, RemovedBank};
+use crate::player::{Player, Preview, Program, RemovedBank};
 
 enum Command {
     Play,
     Pause,
     Stop,
     Load(Box<Program>),
+    Preview(Box<Preview>),
     Seek(f64),
     SetAudible(Vec<bool>),
     ChangeBank(Box<BankChange>),
@@ -47,7 +48,7 @@ impl SharedState {
 ///
 /// Loading a score swaps a prebuilt [`Program`] in the callback. The old one is freed there,
 /// which is the one allocation-related exception to the real-time rule: it only happens on a
-/// user action, while playback is stopped. Sample banks are read before they reach the callback,
+/// user action, while playback is stopped. A [`Preview`] is handed over and freed the same way. Sample banks are read before they reach the callback,
 /// and the samples of a removed bank are sent back to be freed by the next call to
 /// [`AudioOutput::change_banks`], not in the callback.
 pub struct AudioOutput {
@@ -95,6 +96,7 @@ impl AudioOutput {
                         Command::Pause => player.pause(),
                         Command::Stop => player.stop(),
                         Command::Load(program) => player.load(*program),
+                        Command::Preview(preview) => player.preview(*preview),
                         Command::Seek(ticks) => player.seek(ticks),
                         Command::SetAudible(audible) => player.set_audible(audible),
                         Command::ChangeBank(change) => {
@@ -144,6 +146,11 @@ impl AudioOutput {
 
     pub fn load(&self, program: Program) {
         let _ = self.commands.send(Command::Load(Box::new(program)));
+    }
+
+    /// Sounds a preview, outside the score. Ignored while the score plays.
+    pub fn preview(&self, preview: Preview) {
+        let _ = self.commands.send(Command::Preview(Box::new(preview)));
     }
 
     pub fn play(&self) {

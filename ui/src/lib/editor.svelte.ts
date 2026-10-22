@@ -53,7 +53,7 @@ export class Editor {
   clipboard = $state<Beat[] | null>(null)
 
   #api: DocumentApi
-  #playback: Pick<Playback, 'setScore' | 'dropTrackMix'>
+  #playback: Pick<Playback, 'setScore' | 'dropTrackMix' | 'preview'>
   #prompts: FilePrompts
   #now: () => number
   /** Edits are sent one at a time, in the order they were made. */
@@ -67,7 +67,7 @@ export class Editor {
     now = () => performance.now(),
   }: {
     api: DocumentApi
-    playback: Pick<Playback, 'setScore' | 'dropTrackMix'>
+    playback: Pick<Playback, 'setScore' | 'dropTrackMix' | 'preview'>
     prompts: FilePrompts
     now?: () => number
   }) {
@@ -132,7 +132,13 @@ export class Editor {
    * Selects a spot, in `track` when given; with `extend`, selects the beats from the current spot to
    * it instead. A range stays in one track, so extending into another track selects the spot alone.
    */
-  select(selection: Selection, { extend = false, track = this.track }: { extend?: boolean; track?: number } = {}): void {
+  select(selection: Selection, options: { extend?: boolean; track?: number } = {}): void {
+    this.#select(selection, options)
+    // Clicking a note lets the user hear it; extending a range, or clicking a rest, is silent.
+    if (!options.extend) this.#hear({ track: this.track, ...selection })
+  }
+
+  #select(selection: Selection, { extend = false, track = this.track }: { extend?: boolean; track?: number } = {}): void {
     const current = track === this.track ? this.selection : null
     this.track = track
     this.selection =
@@ -181,6 +187,7 @@ export class Editor {
       this.selection = { measure, beat, row: note ? noteRow(note) : (this.selection?.row ?? 1) }
       this.#typed = null
       await this.#apply(state)
+      if (note) this.#hear({ track, measure, beat, row: noteRow(note) })
     })
   }
 
@@ -203,6 +210,7 @@ export class Editor {
       this.selection = { measure: at.measure, beat: at.beat, row: piece }
       this.#typed = null
       await this.#apply(state)
+      if (!hasPiece) this.#hear({ ...spot, row: piece })
     })
   }
 
@@ -242,8 +250,10 @@ export class Editor {
       case 'dot':
         return this.#setDuration((beat) => ({ value: beat.duration.value, dots: beat.duration.dots === 0 ? 1 : 0 }))
       case 'tie':
-        return this.#withNote(({ row, ...at }, note) =>
-          this.#hasStaffRows ? { type: 'setPitchTied', ...at, pitch: row, tied: !note.tied } : { type: 'setTied', ...at, string: row, tied: !note.tied },
+        return this.#withNote(
+          ({ row, ...at }, note) =>
+            this.#hasStaffRows ? { type: 'setPitchTied', ...at, pitch: row, tied: !note.tied } : { type: 'setTied', ...at, string: row, tied: !note.tied },
+          { hear: false },
         )
       case 'technique':
         if (this.#hasStaffRows) {
@@ -329,7 +339,7 @@ export class Editor {
   /** Right-clicking inside the selection keeps it (the menu acts on all of it); elsewhere it selects the spot. */
   selectForMenu(target: Selection, { track = this.track }: { track?: number } = {}): void {
     const isInside = track === this.track && isBeatSelected({ selection: this.selection, measure: target.measure, beat: target.beat })
-    if (!isInside) this.select(target, { track })
+    if (!isInside) this.#select(target, { track })
   }
 
   /** The time signature of the selected measure (the first one when nothing is selected). */
@@ -605,7 +615,7 @@ export class Editor {
    * Looks at the note when the edit's turn comes, not when the key was pressed: a note typed just
    * before may not have come back from the desktop app yet.
    */
-  #withNote(build: (at: Where, note: Note) => Edit): Promise<void> {
+  #withNote(build: (at: Where, note: Note) => Edit, { hear = true }: { hear?: boolean } = {}): Promise<void> {
     const at = this.#where()
     if (!at) return Promise.resolve()
     if (!this.#api.canEdit) return this.#send(build(at, { pitch: at.row, technique: null, tied: false }))
@@ -616,6 +626,7 @@ export class Editor {
         return
       }
       await this.#apply(await this.#api.edit(build(at, note)))
+      if (hear) this.#hear(at)
     })
   }
 
@@ -647,7 +658,7 @@ export class Editor {
     const fret = nextFret({ previous, digit, now })
     this.#typed = { fret, at: now, cell }
     const { row, ...beat } = at
-    return this.#send({ type: 'setFret', ...beat, string: row, fret })
+    return this.#send({ type: 'setFret', ...beat, string: row, fret }, undefined, at)
   }
 
   /** Writes a note at a pitch (a drum piece on drums) on the selected beat of a staff-only track, and selects it. */
@@ -672,18 +683,26 @@ export class Editor {
       if (to === null) return Promise.resolve()
       const { row, ...beat } = at
       this.#typed = null
-      return this.#send({ type: 'movePitch', ...beat, pitch: row, to }, () => {
-        if (this.selection) this.selection = { ...this.selection, row: to }
-      })
+      return this.#send(
+        { type: 'movePitch', ...beat, pitch: row, to },
+        () => {
+          if (this.selection) this.selection = { ...this.selection, row: to }
+        },
+        { ...at, row: to },
+      )
     }
     if (at && this.isPitched && (direction === 'up' || direction === 'down') && this.currentNote) {
       const to = at.row + (direction === 'up' ? 1 : -1)
       if (to < 0 || to > 127) return Promise.resolve()
       const { row, ...beat } = at
       this.#typed = null
-      return this.#send({ type: 'movePitch', ...beat, pitch: row, to }, () => {
-        if (this.selection) this.selection = { ...this.selection, row: to }
-      })
+      return this.#send(
+        { type: 'movePitch', ...beat, pitch: row, to },
+        () => {
+          if (this.selection) this.selection = { ...this.selection, row: to }
+        },
+        { ...at, row: to },
+      )
     }
     if (this.document) {
       const selection = this.selection ?? FIRST_NOTE
@@ -722,8 +741,11 @@ export class Editor {
     return this.#send({ type: 'setDuration', track: at.track, measure: at.measure, beat: at.beat, duration: build(beat) })
   }
 
-  /** Sends an edit. `beforeApply` runs once the edit is accepted, to move the selection. */
-  #send(edit: Edit, beforeApply?: () => void): Promise<void> {
+  /**
+   * Sends an edit. `beforeApply` runs once the edit is accepted, to move the selection; `hear` is
+   * the note the edit wrote, sounded once the edit is accepted (a refused edit stays silent).
+   */
+  #send(edit: Edit, beforeApply?: () => void, hear?: Where): Promise<void> {
     if (!this.#api.canEdit) {
       this.message = { tone: 'error', text: 'Editing needs the desktop app.' }
       return Promise.resolve()
@@ -732,7 +754,15 @@ export class Editor {
       const state = await this.#api.edit(edit)
       beforeApply?.()
       await this.#apply(state)
+      if (hear) this.#hear(hear)
     })
+  }
+
+  /** Sounds the note at a spot of the score as the editor has it now, if there is one. */
+  #hear({ track, measure, beat, row }: Where): void {
+    const note = this.document?.score.tracks[track]?.measures[measure]?.voices[0]?.beats[beat]?.notes.find((n) => noteRow(n) === row)
+    // A plain copy: the notes of the document are reactive proxies.
+    if (note) this.#playback.preview({ track, notes: [$state.snapshot(note) as Note] })
   }
 
   #enqueue(task: () => Promise<void>): Promise<void> {

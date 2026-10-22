@@ -6,7 +6,7 @@ import type { PositionUpdate, Transport } from './transport'
 
 const score = demo as Score
 
-function fakeTransport() {
+function fakeTransport({ failPreview = false }: { failPreview?: boolean } = {}) {
   let listener: (update: PositionUpdate) => void = () => {}
   const calls: string[] = []
   const transport: Transport = {
@@ -16,6 +16,10 @@ function fakeTransport() {
     stop: async () => void calls.push('stop'),
     seek: async (tick) => void calls.push(`seek ${tick}`),
     setAudible: async (audible) => void calls.push(`audible ${audible.map(Number).join('')}`),
+    preview: async ({ track, notes }) => {
+      if (failPreview) throw new Error('no audio')
+      calls.push(`preview ${track} ${notes.length}`)
+    },
     onPosition: async (l) => {
       listener = l
       return () => void calls.push('unsubscribe')
@@ -161,6 +165,61 @@ describe('Playback', () => {
         'audible 01',
         'audible 11',
       ])
+    })
+
+    describe('preview', () => {
+      const notes = [{ string: 2, fret: 3, technique: null, tied: false }]
+
+      it('should ask the engine to sound the notes', async () => {
+        const { transport, calls } = fakeTransport()
+        const playback = new Playback(transport)
+        await playback.setScore(score)
+        playback.preview({ track: 1, notes })
+
+        expect(calls).toContain('preview 1 1')
+      })
+
+      it('should stay silent over the playback', async () => {
+        const { transport, calls, report } = fakeTransport()
+        const playback = new Playback(transport)
+        await playback.start()
+        await playback.setScore(score)
+        report({ tick: 10, isPlaying: true })
+        playback.preview({ track: 0, notes })
+
+        expect(calls.some((c) => c.startsWith('preview'))).toBe(false)
+      })
+
+      it('should follow the mute of the track and ignore the solo of the others', async () => {
+        const { transport, calls } = fakeTransport()
+        const playback = new Playback(transport)
+        await playback.setScore(score)
+        await playback.toggleSolo(1)
+        playback.preview({ track: 0, notes }) // track 1 plays alone in the song, but this one is not muted
+        await playback.toggleMute(0)
+        playback.preview({ track: 0, notes })
+
+        expect(calls.filter((c) => c.startsWith('preview'))).toEqual(['preview 0 1'])
+      })
+
+      it('should say nothing when the engine cannot sound it', async () => {
+        const { transport } = fakeTransport({ failPreview: true })
+        const playback = new Playback(transport)
+        await playback.setScore(score)
+        playback.preview({ track: 0, notes })
+        await Promise.resolve()
+
+        expect(playback.error).toBeNull()
+      })
+
+      it('should not call the engine for no notes', async () => {
+        const { transport, calls } = fakeTransport()
+        const playback = new Playback(transport)
+        await playback.setScore(score)
+        playback.preview({ track: 0, notes: [] })
+
+        expect(calls.some((c) => c.startsWith('preview'))).toBe(false)
+      })
     })
 
     it('should forget the mix of a removed track', async () => {

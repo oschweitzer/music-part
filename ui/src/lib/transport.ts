@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { isTauri } from './score-source'
 import { ticksPerSecond, totalTicks } from './score-time'
-import type { Score } from './score-types'
+import type { Note, Score } from './score-types'
 
 export type PositionUpdate = {
   /** Position in 1/128 of a whole note. */
@@ -20,6 +20,11 @@ export type Transport = {
   seek(tick: number): Promise<void>
   /** `audible[i]` says whether track `i` makes sound. The engine keeps it across score changes. */
   setAudible(audible: boolean[]): Promise<void>
+  /**
+   * Sounds notes of a track for a moment, outside the score: what a note is like as it is written.
+   * Ignored by the engine while the score plays.
+   */
+  preview(args: { track: number; notes: Note[] }): Promise<void>
   /** Subscribes to position updates. Resolves with the function that unsubscribes. */
   onPosition(listener: (update: PositionUpdate) => void): Promise<() => void>
 }
@@ -45,6 +50,7 @@ function createTauriTransport(): Transport {
     stop: () => call('stop'),
     seek: (tick) => call('seek', { tick }),
     setAudible: (audible) => call('set_audible', { audible }),
+    preview: ({ track, notes }) => call('preview_notes', { track, notes }),
     onPosition: (listener) => listen<PositionUpdate>('playback-position', (event) => listener(event.payload)),
   }
 }
@@ -107,6 +113,8 @@ export function createSimulatedTransport(): Transport {
       emit()
     },
     async setAudible() {},
+    // There is no sound to make in a browser.
+    async preview() {},
     async onPosition(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)

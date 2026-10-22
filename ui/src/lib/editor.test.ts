@@ -3,7 +3,7 @@ import demo from '../../public/demo-score.json'
 import type { DocumentApi, DocumentState, Edit, OpenedDocument } from './document-api'
 import { Editor } from './editor.svelte'
 import type { FilePrompts } from './files'
-import type { Score, Technique } from './score-types'
+import type { Note, Score, Technique } from './score-types'
 
 const score = demo as Score
 
@@ -50,7 +50,11 @@ function setup({
   prompts = {},
   now = () => 0,
 }: { api?: DocumentApi; prompts?: Partial<FilePrompts>; now?: () => number } = {}) {
-  const playback = { setScore: vi.fn(async (_score: Score) => {}), dropTrackMix: vi.fn((_track: number) => {}) }
+  const playback = {
+    setScore: vi.fn(async (_score: Score) => {}),
+    dropTrackMix: vi.fn((_track: number) => {}),
+    preview: vi.fn((_args: { track: number; notes: Note[] }) => {}),
+  }
   const filePrompts: FilePrompts = {
     chooseFileToOpen: async () => '/music/chosen.mpart',
     chooseFileToSave: async () => '/music/saved.mpart',
@@ -129,6 +133,102 @@ describe('Editor', () => {
       await editor.run({ type: 'remove' })
 
       expect(edits).toEqual([])
+    })
+  })
+
+  describe('hearing what is written', () => {
+    // The first beat of the demo guitar is a note on string 5, fret 0.
+    const FIRST = { measure: 0, beat: 0, row: 5 }
+    const firstNote = (): Note => score.tracks[0]!.measures[0]!.voices[0]!.beats[0]!.notes.find((n) => 'string' in n && n.string === 5)!
+
+    it('should sound the note when a fret is typed', async () => {
+      const { editor, playback } = setup()
+      await editor.start()
+      editor.select(FIRST, { track: 0 })
+      playback.preview.mockClear()
+      await editor.run({ type: 'digit', digit: 5 })
+
+      expect(playback.preview).toHaveBeenCalledTimes(1)
+      expect(playback.preview).toHaveBeenCalledWith({ track: 0, notes: [firstNote()] })
+    })
+
+    it('should sound the note when a technique or a bend is set', async () => {
+      const { editor, playback } = setup()
+      await editor.start()
+      editor.select(FIRST, { track: 0 })
+      playback.preview.mockClear()
+      await editor.run({ type: 'technique', technique: 'PalmMute' })
+      await editor.run({ type: 'bend', amount: 'full' })
+
+      expect(playback.preview).toHaveBeenCalledTimes(2)
+    })
+
+    it('should not sound a tie', async () => {
+      const { editor, playback } = setup()
+      await editor.start()
+      editor.select(FIRST, { track: 0 })
+      playback.preview.mockClear()
+      await editor.run({ type: 'tie' })
+
+      expect(playback.preview).not.toHaveBeenCalled()
+    })
+
+    it('should stay silent when the arrow keys move the selection', async () => {
+      const { editor, playback } = setup()
+      await editor.start()
+      playback.preview.mockClear()
+      for (const direction of ['right', 'right', 'down', 'left', 'up'] as const) {
+        await editor.run({ type: 'move', direction })
+      }
+
+      expect(playback.preview).not.toHaveBeenCalled()
+    })
+
+    it('should sound a note that is clicked, but not a rest or a range', async () => {
+      const { editor, playback } = setup()
+      await editor.start()
+      playback.preview.mockClear()
+      editor.select(FIRST, { track: 0 })
+      expect(playback.preview).toHaveBeenCalledWith({ track: 0, notes: [firstNote()] })
+
+      playback.preview.mockClear()
+      editor.select({ measure: 0, beat: 1, row: 5 }, { extend: true })
+      editor.select({ measure: 0, beat: 0, row: 1 }) // nothing is written on string 1 of this beat
+      expect(playback.preview).not.toHaveBeenCalled()
+    })
+
+    it('should stay silent when the edit is refused', async () => {
+      const refused = fakeApi({
+        edit: async () => {
+          throw new Error('Fret out of range')
+        },
+      })
+      const { editor, playback } = setup({ api: refused.api })
+      await editor.start()
+      editor.select(FIRST, { track: 0 })
+      playback.preview.mockClear()
+      await editor.run({ type: 'digit', digit: 5 })
+
+      expect(editor.message?.text).toBe('Fret out of range')
+      expect(playback.preview).not.toHaveBeenCalled()
+    })
+
+    it('should sound the note from the state the app sent back, after the edit', async () => {
+      const calls: string[] = []
+      const { api } = fakeApi({
+        edit: async () => {
+          calls.push('edit')
+          return state({ isDirty: true })
+        },
+      })
+      const { editor, playback } = setup({ api })
+      playback.preview.mockImplementation(() => void calls.push('preview'))
+      await editor.start()
+      editor.select(FIRST, { track: 0 })
+      calls.length = 0
+      await editor.run({ type: 'digit', digit: 5 })
+
+      expect(calls).toEqual(['edit', 'preview'])
     })
   })
 

@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use audio::AudioController;
 use document::{Document, DocumentState};
-use score_model::Edit;
+use score_model::{Edit, Note};
 use service::{FoundPacks, OpenedDocument, SoundPacks, Startup};
 
 /// Overrides the bundled SoundFont, for development.
@@ -122,6 +122,19 @@ fn redo(document: State<SharedDocument>, audio: State<AudioController>) -> Docum
     let state = service::redo(&mut document);
     sync_audio(&document, &audio);
     state
+}
+
+/// Lets the user hear notes of a track as they are written. The UI calls it after the edit that
+/// wrote them was accepted, and ignores the answer: a preview must never get in the way of editing.
+#[tauri::command]
+fn preview_notes(
+    track: usize,
+    notes: Vec<Note>,
+    document: State<SharedDocument>,
+    audio: State<AudioController>,
+) -> Result<(), String> {
+    let events = service::preview_events(&locked(&document), track, &notes)?;
+    audio.preview(events)
 }
 
 #[tauri::command]
@@ -240,6 +253,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
         stop,
         seek,
         set_audible,
+        preview_notes,
         sound_packs
     ])
 }
@@ -552,6 +566,39 @@ mod tests {
         let error =
             invoke(&window, "set_audible", json!({ "audible": [true, false] })).unwrap_err();
         assert_eq!(error, json!("no audio in tests"));
+    }
+
+    #[test]
+    fn a_preview_sent_the_way_the_ui_sends_it_reaches_the_audio() {
+        let (_app, window) = app();
+        let notes = json!([{ "string": 2, "fret": 3, "technique": "PalmMute", "tied": false }]);
+        // The notes are understood and the track exists, so the only thing in the way is the audio.
+        let error = invoke(
+            &window,
+            "preview_notes",
+            json!({ "track": 0, "notes": notes }),
+        )
+        .unwrap_err();
+        assert_eq!(error, json!("no audio in tests"));
+    }
+
+    #[test]
+    fn a_preview_of_a_track_that_does_not_exist_says_so_and_a_malformed_one_is_refused() {
+        let (_app, window) = app();
+        let notes = json!([{ "string": 2, "fret": 3, "technique": null, "tied": false }]);
+        let error = invoke(
+            &window,
+            "preview_notes",
+            json!({ "track": 99, "notes": notes }),
+        )
+        .unwrap_err();
+        assert_eq!(error, json!("there is no track 99"));
+        assert!(invoke(
+            &window,
+            "preview_notes",
+            json!({ "track": 0, "notes": "nope" })
+        )
+        .is_err());
     }
 
     #[test]
