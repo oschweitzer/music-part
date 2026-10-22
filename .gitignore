@@ -7,3 +7,6 @@ assets/soundfonts/**/*.part
 assets/soundfonts/**/*.wav
 assets/soundfonts/**/*.sfz
 src-tauri/tests-data/
+
+# Brainstorm mockups of the visual companion
+.superpowers/

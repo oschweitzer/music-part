@@ -162,6 +162,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- UI: the track bar is now two lines. The first holds the track tabs and `+ Track`; the second
+  holds the settings of the selected track (name, instrument, sound, clef, tuning) and starts with
+  that track's name. In the Rows view there are no tabs, so `+ Track` sits at the end of the second
+  line. The `Track to edit` menu is gone: click a tab or a row header instead.
+- UI: in the Tabs view the tablature now uses the whole width of the window instead of stopping at
+  1100 px, with a narrower margin around it.
 - Sound packs: a pack that lists a drum kit is refused; drums always play the SoundFont's kits.
 - Opening a MIDI file that only has drums now opens it instead of saying it has no notes.
 - Import: MIDI and MusicXML parts that are not a string instrument (keyboards, winds, voices...)

@@ -180,10 +180,6 @@
     if ((score?.tracks.length ?? 0) < before) view = dropTrackFromView({ view, track: index })
   }
 
-  function pickTrack(event: Event) {
-    editor.selectTrack(Number((event.currentTarget as HTMLSelectElement).value))
-  }
-
   // With many tracks the tabs scroll sideways: keep the tab of the edited track in view.
   let tabList = $state<HTMLElement>()
   $effect(() => {
@@ -384,129 +380,135 @@
   {/if}
 
   {#if score}
-    <nav class="tracks" aria-label="Tracks">
-      {#if !isRows}
-        <div class="tab-list" bind:this={tabList}>
-          {#each score.tracks as t, i (i)}
-            <div class="track-tab" class:active={i === editor.track}>
-              <button type="button" class="name" onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
-                {t.name}
-                <span class="strings">{hasStrings(t) ? `${t.tuning.length} strings` : instrumentLabel(t.instrument)}</span>
-              </button>
-              <button
-                type="button"
-                class="mix"
-                class:on={playback.muted[i]}
-                aria-pressed={playback.muted[i] === true}
-                aria-label="Mute {t.name}"
-                title="Mute"
-                onmousedown={keepFocus}
-                onclick={() => playback.toggleMute(i)}>M</button>
-              <button
-                type="button"
-                class="mix"
-                class:on={playback.solo[i]}
-                aria-pressed={playback.solo[i] === true}
-                aria-label="Solo {t.name}"
-                title="Solo: play only the soloed tracks"
-                onmousedown={keepFocus}
-                onclick={() => playback.toggleSolo(i)}>S</button>
-              {#if editor.canEdit}
+    {#snippet addTrackMenu(atEnd: boolean)}
+      <details class="add-track" class:end={atEnd}>
+        <summary title="Add a track">+ Track</summary>
+        <div class="menu">
+          {#each INSTRUMENTS as instrument (instrument)}
+            <div class="family" role="group" aria-label={instrumentLabel(instrument)}>
+              <span>{instrumentLabel(instrument)}</span>
+              {#each soundChoices({ instrument, packs: soundPacks.packs }) as sound (sound.id)}
                 <button
                   type="button"
-                  class="mix drop"
-                  aria-label="Remove {t.name}"
-                  title="Remove this track (Ctrl+Z brings it back)"
-                  disabled={score.tracks.length < 2}
+                  class="sound"
+                  aria-label="{instrumentLabel(instrument)}: {sound.name}"
                   onmousedown={keepFocus}
-                  onclick={() => removeTrack(i)}>×</button>
-              {/if}
+                  onclick={(event) => addTrack(event, instrument, sound.id)}>{sound.name}</button>
+              {/each}
             </div>
           {/each}
         </div>
-      {/if}
+      </details>
+    {/snippet}
 
-      {#if editor.canEdit}
-        <details class="add-track">
-          <summary title="Add a track">+ Track</summary>
-          <div class="menu">
-            {#each INSTRUMENTS as instrument (instrument)}
-              <div class="family" role="group" aria-label={instrumentLabel(instrument)}>
-                <span>{instrumentLabel(instrument)}</span>
-                {#each soundChoices({ instrument, packs: soundPacks.packs }) as sound (sound.id)}
+    {#if !isRows || editor.canEdit}
+      <nav class="tracks" aria-label="Tracks">
+        {#if !isRows}
+          <div class="track-row">
+            <div class="tab-list" bind:this={tabList}>
+              {#each score.tracks as t, i (i)}
+                <div class="track-tab" class:active={i === editor.track}>
+                  <button type="button" class="name" onmousedown={keepFocus} onclick={() => editor.selectTrack(i)}>
+                    {t.name}
+                    <span class="strings">{hasStrings(t) ? `${t.tuning.length} strings` : instrumentLabel(t.instrument)}</span>
+                  </button>
                   <button
                     type="button"
-                    class="sound"
-                    aria-label="{instrumentLabel(instrument)}: {sound.name}"
+                    class="mix"
+                    class:on={playback.muted[i]}
+                    aria-pressed={playback.muted[i] === true}
+                    aria-label="Mute {t.name}"
+                    title="Mute"
                     onmousedown={keepFocus}
-                    onclick={(event) => addTrack(event, instrument, sound.id)}>{sound.name}</button>
-                {/each}
-              </div>
-            {/each}
+                    onclick={() => playback.toggleMute(i)}>M</button>
+                  <button
+                    type="button"
+                    class="mix"
+                    class:on={playback.solo[i]}
+                    aria-pressed={playback.solo[i] === true}
+                    aria-label="Solo {t.name}"
+                    title="Solo: play only the soloed tracks"
+                    onmousedown={keepFocus}
+                    onclick={() => playback.toggleSolo(i)}>S</button>
+                  {#if editor.canEdit}
+                    <button
+                      type="button"
+                      class="mix drop"
+                      aria-label="Remove {t.name}"
+                      title="Remove this track (Ctrl+Z brings it back)"
+                      disabled={score.tracks.length < 2}
+                      onmousedown={keepFocus}
+                      onclick={() => removeTrack(i)}>×</button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+
+            {#if editor.canEdit}
+              {@render addTrackMenu(false)}
+            {/if}
           </div>
-        </details>
-      {/if}
+        {/if}
 
-      <select class="track-picker" value={editor.track} aria-label="Track to edit" title="The track to edit" onchange={pickTrack}>
-        {#each score.tracks as t, i (i)}
-          <option value={i}>{i + 1}. {t.name}</option>
-        {/each}
-      </select>
-
-      {#if editor.canEdit}
-        {#if track}
-          <label class="track-field" title="Name of this track">
-            Name
-            <input
-              type="text"
-              value={track.name}
-              maxlength="64"
-              spellcheck="false"
-              aria-label="Name of this track"
-              onchange={changeName}
-            />
-          </label>
-          <label class="track-field" title="The instrument of this track. Between string instruments the strings stay as they are.">
-            Instrument
-            <select value={track.instrument} aria-label="Instrument of this track" onchange={changeInstrument}>
-              {#each INSTRUMENTS as instrument (instrument)}
-                <option value={instrument}>{instrumentLabel(instrument)}</option>
-              {/each}
-            </select>
-          </label>
-          <label class="track-field" title="How this track sounds, among the sounds of its instrument and those your sound packs add.">
-            Sound
-            <select value={track.sound} aria-label="Sound of this track" onchange={changeSound}>
-              {#each soundChoices({ instrument: track.instrument, packs: soundPacks.packs, track }) as sound (sound.id)}
-                <option value={sound.id} class={sound.kind}>{sound.name}</option>
-              {/each}
-            </select>
-          </label>
-          {#if hasClefChoice(track.instrument)}
-            <label class="track-field" title="The clef this voice is written in: treble for soprano and alto, treble 8vb for tenor, bass for baritone and bass.">
-              Clef
-              <select value={track.clef ?? 'treble'} aria-label="Clef of this track" onchange={changeClef}>
-                {#each CLEF_CHOICES as choice (choice.clef)}
-                  <option value={choice.clef}>{choice.label}</option>
+        {#if editor.canEdit && track}
+          <div class="instrument-row" role="group" aria-label="Settings of {track.name}">
+            <span class="owner" title="The track these settings apply to">{track.name}</span>
+            <label class="track-field" title="Name of this track">
+              Name
+              <input
+                type="text"
+                value={track.name}
+                maxlength="64"
+                spellcheck="false"
+                aria-label="Name of this track"
+                onchange={changeName}
+              />
+            </label>
+            <label class="track-field" title="The instrument of this track. Between string instruments the strings stay as they are.">
+              Instrument
+              <select value={track.instrument} aria-label="Instrument of this track" onchange={changeInstrument}>
+                {#each INSTRUMENTS as instrument (instrument)}
+                  <option value={instrument}>{instrumentLabel(instrument)}</option>
                 {/each}
               </select>
             </label>
-          {/if}
-          {#if hasStrings(track)}
-            <label class="tuning" title="Open strings from the highest to the lowest, e.g. E4 B3 G3 D3 A2 D2">
-              Tuning
-              <input
-                type="text"
-                value={formatTuning(track.tuning)}
-                spellcheck="false"
-                aria-label="Tuning of this track"
-                onchange={changeTuning}
-              />
+            <label class="track-field" title="How this track sounds, among the sounds of its instrument and those your sound packs add.">
+              Sound
+              <select value={track.sound} aria-label="Sound of this track" onchange={changeSound}>
+                {#each soundChoices({ instrument: track.instrument, packs: soundPacks.packs, track }) as sound (sound.id)}
+                  <option value={sound.id} class={sound.kind}>{sound.name}</option>
+                {/each}
+              </select>
             </label>
-          {/if}
+            {#if hasClefChoice(track.instrument)}
+              <label class="track-field" title="The clef this voice is written in: treble for soprano and alto, treble 8vb for tenor, bass for baritone and bass.">
+                Clef
+                <select value={track.clef ?? 'treble'} aria-label="Clef of this track" onchange={changeClef}>
+                  {#each CLEF_CHOICES as choice (choice.clef)}
+                    <option value={choice.clef}>{choice.label}</option>
+                  {/each}
+                </select>
+              </label>
+            {/if}
+            {#if hasStrings(track)}
+              <label class="tuning" title="Open strings from the highest to the lowest, e.g. E4 B3 G3 D3 A2 D2">
+                Tuning
+                <input
+                  type="text"
+                  value={formatTuning(track.tuning)}
+                  spellcheck="false"
+                  aria-label="Tuning of this track"
+                  onchange={changeTuning}
+                />
+              </label>
+            {/if}
+            {#if isRows}
+              {@render addTrackMenu(true)}
+            {/if}
+          </div>
         {/if}
-      {/if}
-    </nav>
+      </nav>
+    {/if}
 
     <EditBar {editor} />
   {/if}
@@ -719,10 +721,38 @@
 
   .tracks {
     display: flex;
-    gap: 6px;
-    padding: 10px 20px 0;
+    flex-direction: column;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
+  }
+
+  .track-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 20px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* The settings of the selected track: its name leads, so it is clear what the fields apply to. */
+  .instrument-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    padding: 8px 20px;
+  }
+
+  .owner {
+    max-width: 200px;
+    padding-right: 16px;
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tab-list {
@@ -789,10 +819,6 @@
     color: var(--on-accent);
   }
 
-  .tracks {
-    align-items: center;
-  }
-
   .add-track {
     position: relative;
   }
@@ -813,6 +839,16 @@
     position: absolute;
     top: 100%;
     left: 0;
+  }
+
+  /* At the right edge of the settings row, the menu opens leftwards so it stays on screen. */
+  .instrument-row .add-track {
+    margin-left: auto;
+  }
+
+  .add-track.end .menu {
+    left: auto;
+    right: 0;
     z-index: 2;
     display: flex;
     flex-direction: column;
@@ -837,18 +873,6 @@
 
   .add-track .menu button:hover {
     background: var(--surface-2);
-  }
-
-  .track-picker {
-    max-width: 160px;
-    margin-left: auto;
-    padding: 4px 6px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--paper);
-    color: var(--ink);
-    font: inherit;
-    font-size: 13px;
   }
 
   .view-switch {
@@ -939,7 +963,7 @@
     position: relative;
     flex: 1;
     overflow: auto;
-    padding: 24px;
+    padding: 12px;
   }
 
   .stage.rows {
@@ -963,8 +987,6 @@
   }
 
   .paper {
-    max-width: 1100px;
-    margin: 0 auto;
     background: var(--paper);
     border: 1px solid var(--border);
     border-radius: 10px;

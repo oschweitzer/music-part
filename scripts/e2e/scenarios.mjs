@@ -94,9 +94,12 @@ async function clickOn(page, selector) {
 const rowLabels = (page) => page.eval(`[...document.querySelectorAll('section.row')].map(r => r.getAttribute('aria-label'))`)
 const selectedRow = (page) => page.eval(`document.querySelector('section.row.selected')?.getAttribute('aria-label') ?? null`)
 
-/** Picks the track to edit from the track menu. */
+/** Picks the track to edit by clicking its tab, or its row header in the rows view. */
 const pickTrack = (page, index) =>
-  page.eval(`(() => { const s = document.querySelector('select[aria-label="Track to edit"]'); s.value = '${index}'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+  page.eval(`(() => {
+    const tab = document.querySelectorAll('.track-tab .name')[${index}]
+    ;(tab ?? document.querySelectorAll('section.row header .name')[${index}]).click()
+  })()`)
 
 /** Adds a piano track (the third, after the demo's guitar and bass) and shows it. */
 async function withPiano({ page, backend }) {
@@ -988,6 +991,8 @@ export const scenarios = [
       await inRows(page, async () => {
         assert.deepEqual(await rowLabels(page), ['Track 1: Guitar', 'Track 2: Bass'])
         assert.equal(await exists(page, '.track-tab'), false, 'the row headers replace the tabs')
+        assert.equal(await exists(page, '.track-row'), false, 'there is no line of tabs to leave empty')
+        assert.ok(await exists(page, '.instrument-row .add-track'), '+ Track moves to the settings line')
         assert.equal(await page.eval(`document.querySelectorAll('section.row svg.tab').length`), 2)
         assert.equal(await page.eval(`localStorage.getItem('music-part-view')`), 'rows')
 
@@ -1112,14 +1117,14 @@ export const scenarios = [
   ],
 
   [
-    'the track menu picks the track to edit, in tabs and in rows',
+    'a tab or a row header picks the track to edit, and the instrument row follows it',
     async ({ page }) => {
-      const pick = (index) =>
-        page.eval(`(() => { const s = document.querySelector('select[aria-label="Track to edit"]'); s.value = '${index}'; s.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      const pick = (index) => pickTrack(page, index)
       await pick(1)
       await settle()
       assert.match(await text(page, '.track-tab.active .name'), /^Bass/)
       assert.equal(await page.eval(`document.querySelector('input[aria-label="Name of this track"]').value`), 'Bass')
+      assert.equal(await text(page, '.instrument-row .owner'), 'Bass', 'the instrument row names the track it applies to')
 
       await inRows(page, async () => {
         await pick(0)
