@@ -10,7 +10,7 @@ mod validate;
 
 pub use chords::{drum_segments, pitched_segments, Segment, Span};
 pub use demo::{blank_score, demo_score};
-pub use edit::{apply_edit, Edit, EditError};
+pub use edit::{apply_edit, BeatAddress, Edit, EditError};
 pub use fretting::{place_chord, place_pitch};
 pub use percussion::{
     drum_piece, drum_piece_at, is_played_by_foot, DrumPiece, NoteHead, DRUM_PIECES, PIECES,

@@ -52,7 +52,7 @@ the number of nodes and the expansion of entities; compressed files are read up 
   percussion notes in a pitched part, notes beyond 16 voices, notes squeezed out by overlapping
   voices or by the end of the measure.
 - Parts of different lengths are padded with rests so that every track has the same number of
-  measures. At most 64 parts and 5000 measures are read.
+  measures (a track shortened in the editor gets a measure of rest back). At most 64 parts and 5000 measures are read.
 
 Techniques the model has but MusicXML has no standard way to say (palm mute) are not imported.
 

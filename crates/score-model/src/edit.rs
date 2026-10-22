@@ -212,10 +212,11 @@ pub enum Edit {
         pitch: u8,
         tied: bool,
     },
-    /// Takes the rests from `from` to `to` out of the timeline of every track: what follows moves
-    /// earlier and the measure gets shorter (its time signature follows), or disappears when it
-    /// has no time left. Refused unless every track has only rests over that time, so no note is
-    /// ever lost.
+    /// Takes the rests from `from` to `to` out of the timeline of `track` alone: what follows moves
+    /// earlier and the measure gets shorter (its time signature follows), or disappears from the
+    /// track when it has no time left. The other tracks are not touched, so from there on their
+    /// barlines no longer line up with this track's. Refused unless every voice of the track has
+    /// only rests over that time, so no note is ever lost.
     RemoveRests {
         track: usize,
         from: BeatAddress,
@@ -256,7 +257,7 @@ pub enum EditError {
     InvalidName,
     /// Only rests can be removed from the timeline.
     NotARest,
-    /// Another track has a note, or a beat that cannot be cut, in the time to remove.
+    /// Another voice of the track has a note, or a beat that cannot be cut, in the time to remove.
     RestInUse,
     /// The track has no strings: its notes are pitches.
     NoStrings,
@@ -308,7 +309,7 @@ impl fmt::Display for EditError {
             Self::NotARest => write!(f, "only a rest can be removed: clear its notes first"),
             Self::RestInUse => write!(
                 f,
-                "another track has notes at this place, so the rest cannot be removed"
+                "another voice of this track has notes at this place, so the rest cannot be removed"
             ),
             Self::TooManyTracks => write!(f, "a score cannot have more than {MAX_TRACKS} tracks"),
             Self::NoStrings => write!(
@@ -1462,7 +1463,8 @@ fn remove_rests(
         spans.push((measure, start, end));
     }
 
-    let mut edited = score.clone();
+    // Only this track changes: tracks are independent, and a note of another track is never at risk.
+    let mut edited = source.clone();
     let mut emptied = Vec::new();
     for (measure, start, end) in spans {
         let old = source.measures[measure].time_signature;
@@ -1471,27 +1473,18 @@ fn remove_rests(
         if remaining > 0 && signature.is_none() {
             return Err(EditError::RestInUse);
         }
-        for other in &mut edited.tracks {
-            let current = other
-                .measures
-                .get_mut(measure)
-                .ok_or(EditError::RestInUse)?;
-            // Tracks are kept the same length; one that is not cannot be cut in step.
-            if current.time_signature != old {
-                return Err(EditError::RestInUse);
-            }
-            for voice in &mut current.voices {
-                voice.beats = if remaining == 0 {
-                    // Checked below: the whole measure has to be rests in every voice.
-                    cut_span(&voice.beats, start, end)?;
-                    Vec::new()
-                } else {
-                    cut_span(&voice.beats, start, end)?
-                };
-            }
-            if let Some(signature) = signature {
-                current.time_signature = signature;
-            }
+        let current = &mut edited.measures[measure];
+        for voice in &mut current.voices {
+            voice.beats = if remaining == 0 {
+                // Checked below: the whole measure has to be rests in every voice.
+                cut_span(&voice.beats, start, end)?;
+                Vec::new()
+            } else {
+                cut_span(&voice.beats, start, end)?
+            };
+        }
+        if let Some(signature) = signature {
+            current.time_signature = signature;
         }
         if remaining == 0 {
             emptied.push(measure);
@@ -1499,17 +1492,14 @@ fn remove_rests(
     }
 
     if !emptied.is_empty() {
-        let measures = edited.tracks.first().map_or(0, |t| t.measures.len());
-        if emptied.len() >= measures {
+        if emptied.len() >= edited.measures.len() {
             return Err(EditError::LastMeasure);
         }
-        for track in &mut edited.tracks {
-            for &measure in emptied.iter().rev() {
-                track.measures.remove(measure);
-            }
+        for &measure in emptied.iter().rev() {
+            edited.measures.remove(measure);
         }
     }
-    *score = edited;
+    score.tracks[track] = edited;
     Ok(())
 }
 
@@ -1953,9 +1943,7 @@ mod tests {
         assert_eq!(score.validate(), Ok(()));
     }
 
-    #[test]
-    fn removing_the_only_rest_of_a_measure_deletes_the_measure_in_every_track() {
-        let mut score = blank_score("t");
+    fn with_bass(mut score: Score) -> Score {
         apply_edit(
             &mut score,
             &Edit::AddTrack {
@@ -1965,29 +1953,32 @@ mod tests {
             },
         )
         .unwrap();
+        score
+    }
+
+    fn measure_ticks(score: &Score, track: usize) -> Vec<u32> {
+        score.tracks[track]
+            .measures
+            .iter()
+            .map(|m| m.time_signature.ticks())
+            .collect()
+    }
+
+    #[test]
+    fn removing_the_only_rest_of_a_measure_deletes_the_measure_from_that_track_only() {
+        let mut score = with_bass(blank_score("t"));
         let measures = score.tracks[0].measures.len();
 
         apply_edit(&mut score, &remove_rest(at(1, 0), at(1, 0))).unwrap();
 
-        assert!(score
-            .tracks
-            .iter()
-            .all(|t| t.measures.len() == measures - 1));
+        assert_eq!(score.tracks[0].measures.len(), measures - 1);
+        assert_eq!(score.tracks[1].measures.len(), measures);
         assert_eq!(score.validate(), Ok(()));
     }
 
     #[test]
-    fn removing_a_rest_is_refused_while_another_track_plays_there() {
-        let mut score = blank_score("t");
-        apply_edit(
-            &mut score,
-            &Edit::AddTrack {
-                instrument: Instrument::Bass,
-                sound: None,
-                fallback_program: None,
-            },
-        )
-        .unwrap();
+    fn removing_a_rest_is_allowed_while_another_track_plays_there() {
+        let mut score = with_bass(blank_score("t"));
         apply_edit(
             &mut score,
             &Edit::SetFret {
@@ -1999,6 +1990,47 @@ mod tests {
             },
         )
         .unwrap();
+        let bass_before = score.tracks[1].clone();
+
+        apply_edit(&mut score, &remove_rest(at(1, 0), at(1, 0))).unwrap();
+
+        assert_eq!(score.tracks[1], bass_before, "the bass keeps every note");
+        assert_eq!(
+            score.tracks[0].measures.len() + 1,
+            score.tracks[1].measures.len()
+        );
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn removing_a_rest_shortens_the_measure_of_that_track_and_not_the_others() {
+        let mut score = with_bass(note_rest_note_rest());
+
+        apply_edit(&mut score, &remove_rest(at(0, 1), at(0, 1))).unwrap();
+
+        let guitar = score.tracks[0].measures[0].time_signature;
+        assert_eq!((guitar.numerator, guitar.denominator), (3, 4));
+        let bass = score.tracks[1].measures[0].time_signature;
+        assert_eq!((bass.numerator, bass.denominator), (4, 4));
+        let bass_beats: u32 = score.tracks[1].measures[0].voices[0]
+            .beats
+            .iter()
+            .map(|b| b.duration.ticks())
+            .sum();
+        assert_eq!(bass_beats, 128);
+        assert_eq!(measure_ticks(&score, 0)[0], 96);
+        assert_eq!(score.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_rest_stays_while_another_voice_of_the_same_track_plays_there() {
+        let mut score = blank_score("t");
+        score.tracks[0].measures[1].voices.push(Voice {
+            beats: vec![Beat {
+                duration: dur(NoteValue::Whole, 0),
+                notes: vec![Note::fretted(2, 0)],
+            }],
+        });
         let before = score.clone();
 
         assert_eq!(
@@ -2009,28 +2041,19 @@ mod tests {
     }
 
     #[test]
-    fn removing_a_rest_works_when_another_track_has_a_longer_rest_there() {
-        let mut score = note_rest_note_rest();
-        apply_edit(
-            &mut score,
-            &Edit::AddTrack {
-                instrument: Instrument::Bass,
-                sound: None,
-                fallback_program: None,
-            },
-        )
-        .unwrap();
+    fn the_last_measure_of_a_track_cannot_be_removed_as_a_rest_even_when_others_have_more() {
+        let mut score = with_bass(blank_score("t"));
+        let count = score.tracks[0].measures.len();
+        apply_edit(&mut score, &remove_rest(at(0, 0), at(count - 2, 0))).unwrap();
+        assert_eq!(score.tracks[0].measures.len(), 1);
+        assert_eq!(score.tracks[1].measures.len(), count);
 
-        // The bass has a whole rest; the guitar's second quarter goes out of it.
-        apply_edit(&mut score, &remove_rest(at(0, 1), at(0, 1))).unwrap();
-
-        let bass: u32 = score.tracks[1].measures[0].voices[0]
-            .beats
-            .iter()
-            .map(|b| b.duration.ticks())
-            .sum();
-        assert_eq!(bass, 96);
-        assert_eq!(score.validate(), Ok(()));
+        let before = score.clone();
+        assert_eq!(
+            apply_edit(&mut score, &remove_rest(at(0, 0), at(0, 0))),
+            Err(EditError::LastMeasure)
+        );
+        assert_eq!(score, before);
     }
 
     #[test]

@@ -572,7 +572,8 @@ function layoutColumns({ drafts, width, head }: { drafts: DraftMeasure[][]; widt
   const raw = Array.from({ length: count }, (_, index) => {
     const inMeasure = drafts.flatMap((d) => d[index] ?? [])
     const first = inMeasure[0]
-    const ticks = first ? measureTicks(first.measure.time_signature) : TICKS_PER_WHOLE
+    // Tracks can have measures of different lengths here: the column fits the longest.
+    const ticks = Math.max(0, ...inMeasure.map((d) => measureTicks(d.measure.time_signature))) || TICKS_PER_WHOLE
     const starts = new Set<number>()
     for (const draft of inMeasure) {
       let tick = 0

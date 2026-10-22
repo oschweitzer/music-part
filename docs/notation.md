@@ -132,7 +132,7 @@ beat. `TabView.svelte` only draws; the glyphs (clefs, accidentals, rests, flags)
   written there if there is one. On a pitched track the selection row is that pitch; on the staff
   of a fretted track it is the string of the note clicked (an empty spot keeps the string).
 - **Rows view**: rows have different heights (a grand staff, staff and tablature) but share their
-  measure columns, so barlines, notes and the cursor still line up across rows.
+  measure columns, so barlines, notes and the cursor line up across rows by measure number.
 
 ## Keyboards and voice
 

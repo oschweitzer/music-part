@@ -759,6 +759,51 @@ mod tests {
     }
 
     #[test]
+    fn each_track_follows_its_own_measures_once_they_stop_lining_up() {
+        let mut score = blank_score("uneven");
+        let fret = |track, measure| Edit::SetFret {
+            track,
+            measure,
+            beat: 0,
+            string: 1,
+            fret: 3,
+        };
+        for edit in [
+            Edit::AddTrack {
+                instrument: Instrument::Bass,
+                sound: None,
+                fallback_program: None,
+            },
+            fret(0, 2),
+            fret(1, 2),
+            Edit::RemoveRests {
+                track: 0,
+                from: BeatAddress {
+                    measure: 1,
+                    beat: 0,
+                },
+                to: BeatAddress {
+                    measure: 1,
+                    beat: 0,
+                },
+            },
+        ] {
+            apply_edit(&mut score, &edit).unwrap();
+        }
+
+        let events = schedule(&score);
+        let first_note_of = |track: usize| {
+            events
+                .iter()
+                .find(|e| e.track == track && matches!(e.action, Action::NoteOn { .. }))
+                .map(|e| e.tick)
+        };
+        // The guitar's third measure now starts one measure (128 ticks) after its first.
+        assert_eq!(first_note_of(0), Some(128));
+        assert_eq!(first_note_of(1), Some(256));
+    }
+
+    #[test]
     fn a_bend_rises_as_far_as_its_amount_says() {
         let wheel_for = |semitones: f64| {
             BEND_CENTER

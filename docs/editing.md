@@ -83,9 +83,15 @@ in text: what follows moves earlier and the measure gets shorter, and its time s
 (a 4/4 measure that loses a quarter becomes 3/4, one that loses an eighth becomes 7/8). A measure
 with no time left disappears, so deleting its last rest deletes the measure.
 
-The measures are the same length in every track, so the time is taken out of every track at once,
-and only when all of them have rests there. If another track has a note in that time, `Delete`
-does nothing and says so: no note is ever lost. Ctrl+Z undoes it.
+Tracks are independent: the time is taken out of the current track only, whatever the other
+tracks play there. They keep their measures, so from then on the barlines of this track no longer
+line up with theirs (it can end up shorter), and its notes play earlier than before against the
+other tracks. If another voice of the same track has a note in that time, `Delete` does nothing
+and says so: no note is ever lost. A track keeps at least one measure. Ctrl+Z undoes it.
+
+A MIDI file has one meter for all the tracks: the export writes the time signatures of the first
+track, and every note keeps its exact time. MusicXML keeps the measures of each part, and the import
+pads a shorter part with a measure of rest.
 
 ## Copy and paste
 
@@ -124,8 +130,9 @@ A measure is always exactly full. Changing the length of a beat keeps it that wa
 - A tie copies the fret of the note it continues, and needs a note on the same string just before
   (across a barline too). Retyping the fret of a tied note unties it.
 - Ties and techniques apply to a note; on a rest the app asks for a note first.
-- Inserting or deleting a measure applies to every track, so tracks always have the same length. The
-  last measure cannot be deleted.
+- Inserting or deleting a measure applies to every track, by measure number. Tracks start with the
+  same measures, but removing rests (above) shortens one track, so they can differ. The last
+  measure cannot be deleted.
 - Right-click the tablature for a menu: cut, copy, paste, the bend of the note under the click
   (a "Bend" submenu with 1/4, 1/2 and full, and "Remove the bend" on a bent note), insert a measure
   before or after, and delete the measure. When a range of beats is selected (Shift+arrows, or dragging the mouse) and
@@ -190,7 +197,7 @@ between runs, like the theme.
 The `Tab` / `Staff` / `Both` switch next to it says how string instruments are written: as
 tablature, on a standard staff, or on a staff above the tablature. It applies to every string
 track, in both views, and is kept between runs. A piano is always written on its grand staff.
-Rows of different heights still share their barlines and their time axis.
+Rows of different heights still share their barlines: measure n is at the same x in every row.
 
 Selecting is the same in both: a click or a drag in a row selects in that row's track, and the
 keys, paste and the track fields act on the track of the selection. A drag stays in the row it
@@ -206,10 +213,11 @@ is another way to fill that list; the layout and the rows already take any list 
 track being edited is where the selection is (`Editor.track`), separate from what is shown.
 
 Rows use **one wide line per track** (DAW-like), not systems that wrap together as on a printed full
-score. The measures are the same length in every track, so the rows share their barlines: measure n
-is at the same x in every row, as wide as the track that needs most room, and notes that start at
-the same moment are at the same x (`layoutRows` in `ui/src/lib/tab-layout.ts`). Reasons for one wide
-line:
+score. Measure n is at the same x in every row, as wide as the track that needs most room, and
+notes that start at the same moment of that measure are at the same x (`layoutRows` in
+`ui/src/lib/tab-layout.ts`). Tracks start with the same measures, but removing rests shortens one
+track: its measure n then has another length, and the column fits the longest. The playback cursor
+follows the first track that has the measure. Reasons for one wide line:
 
 - With many tracks (up to 64), wrapped systems would each be taller than the screen, so reading one
   track across a line break would mean scrolling past all the others. One line per track keeps every
@@ -243,7 +251,8 @@ notes than strings).
 ## Time signature
 
 The two fields on the toolbar show the time signature of the selected measure. Changing one applies
-to that measure and to the measures after it that had the same signature, in every track. In a
+to that measure and to the measures after it that had the same signature, in every track (each
+track from its own measure of that number). In a
 shorter measure the notes that no longer fit are cut: a note that crosses the new end is shortened,
 and when its new length needs two durations the second part is tied on. A longer measure is filled
 with rests. The denominator is 1, 2, 4, 8, 16 or 32, and a measure must be a whole number of 32nd

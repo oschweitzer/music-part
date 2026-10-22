@@ -357,6 +357,17 @@ describe('layoutRows', () => {
     expect(measuresOf(1)[0]!.width).toBeCloseTo(busyAlone.rows[0]!.layout!.systems[0]!.measures[0]!.width, 3)
   })
 
+  it('should lay a measure out on the longest length the tracks give it, when they stopped lining up', () => {
+    const short = trackWith([measureOf(eighths(6))])
+    short.measures[0]!.time_signature = { numerator: 3, denominator: 4 }
+    const long = trackWith([measureOf(eighths(8))], bass.tuning)
+    const mixed = layoutRows({ tracks: [short, long], shown: both, width: 400 })
+    const xs = mixed.rows[1]!.layout!.systems[0]!.measures[0]!.beats.map((b) => b.x)
+
+    expect(new Set(xs).size).toBe(8)
+    expect(xs).toEqual([...xs].sort((a, b) => a - b))
+  })
+
   it('should put notes that start together at the same x', () => {
     expect(measuresOf(1)[1]!.beats[0]!.x).toBe(measuresOf(0)[1]!.beats[0]!.x)
   })

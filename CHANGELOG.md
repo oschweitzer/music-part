@@ -168,6 +168,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Deleting rests: `Delete` on a rest now takes it out of the current track only, even where another
+  track has notes. Tracks are independent, so from there the barlines of that track no longer line
+  up with the others; its measure shortens, or disappears when it has no time left (a track keeps at
+  least one). It is only refused when another voice of the same track has a note there. The MIDI
+  export writes the time signatures of the first track.
 - UI: the track bar is now two lines. The first holds the track tabs and `+ Track`; the second
   holds the settings of the selected track (name, instrument, sound, clef, tuning) and starts with
   that track's name. In the Rows view there are no tabs, so `+ Track` sits at the end of the second

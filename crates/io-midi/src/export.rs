@@ -286,6 +286,51 @@ mod tests {
     }
 
     #[test]
+    fn tracks_that_stopped_lining_up_keep_the_time_of_their_notes() {
+        let mut score = blank_score("uneven");
+        let fret = |track, measure| Edit::SetFret {
+            track,
+            measure,
+            beat: 0,
+            string: 1,
+            fret: 3,
+        };
+        for edit in [
+            Edit::AddTrack {
+                instrument: Instrument::Bass,
+                sound: None,
+                fallback_program: None,
+            },
+            fret(0, 0),
+            fret(0, 2),
+            fret(1, 2),
+            // The guitar loses its second measure, so its third one now starts a measure earlier.
+            Edit::RemoveRests {
+                track: 0,
+                from: score_model::BeatAddress {
+                    measure: 1,
+                    beat: 0,
+                },
+                to: score_model::BeatAddress {
+                    measure: 1,
+                    beat: 0,
+                },
+            },
+        ] {
+            score_model::apply_edit(&mut score, &edit).unwrap();
+        }
+        assert_ne!(sounding(&score.tracks[0]), sounding(&score.tracks[1]));
+
+        let imported = import_midi(&export_midi(&score).unwrap()).unwrap().score;
+
+        assert_eq!(imported.tracks.len(), 2);
+        for (a, b) in score.tracks.iter().zip(&imported.tracks) {
+            assert_eq!(sounding(a), sounding(b), "track {}", a.name);
+        }
+        assert_eq!(imported.validate(), Ok(()));
+    }
+
+    #[test]
     fn exporting_then_importing_gives_back_the_same_notes() {
         let original = demo_score();
         let imported = import_midi(&export_midi(&original).unwrap()).unwrap().score;

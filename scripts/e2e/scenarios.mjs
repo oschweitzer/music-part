@@ -961,18 +961,26 @@ export const scenarios = [
   ],
 
   [
-    'Delete on a rest is refused while another track plays there, and says why',
+    'Delete on a rest takes it out of that track only, even where another track plays, and Ctrl+Z brings it back',
     async (context) => {
       const { page } = context
-      const before = (await document_(context)).score.tracks.map((t) => t.measures.length)
+      const signatures = async () => (await document_(context)).score.tracks.map((t) => t.measures[0].time_signature)
+      const before = await signatures()
+
       await clickFret(page, 0)
       await page.press('Delete') // the note goes, leaving a rest
       await settle()
-      await page.press('Delete') // the rest cannot go: the bass plays on that beat
+      await page.press('Delete') // the rest leaves the guitar's timeline; the bass plays on that beat
       await settle()
-      assert.match(await text(page, '.notice span'), /another track/)
-      assert.deepEqual((await document_(context)).score.tracks.map((t) => t.measures.length), before)
-      assert.equal(beatsOf(await document_(context), 0).length, 8, 'the rest is still there')
+      const after = await signatures()
+      assert.deepEqual(after[0], { numerator: 7, denominator: 8 }, 'the guitar measure is one eighth shorter')
+      assert.deepEqual(after[1], before[1], 'the bass keeps its measure')
+      assert.equal(await exists(page, '.notice'), false, 'nothing is refused')
+      assert.ok(beatsOf(await document_(context), 0).length < 8, 'the rest is gone')
+
+      await page.press('z', ['ctrl'])
+      await settle()
+      assert.deepEqual(await signatures(), before)
     },
   ],
 

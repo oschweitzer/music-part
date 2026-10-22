@@ -1138,8 +1138,8 @@ fn push_beat(
     Ok(())
 }
 
-/// Parts of different lengths are padded with measures of rest, so that every track has the same
-/// number of measures (the editor relies on it).
+/// Parts of different lengths are padded with measures of rest, so that every track starts with the
+/// same number of measures. The editor can shorten one track later, but a score opens aligned.
 fn pad_to_same_length(tracks: &mut [Track]) -> Result<(), MusicXmlImportError> {
     let longest = tracks.iter().map(|t| t.measures.len()).max().unwrap_or(0);
     for track in tracks {

@@ -765,6 +765,50 @@ mod tests {
     }
 
     #[test]
+    fn tracks_of_different_lengths_survive_a_round_trip() {
+        let mut score = blank_score("uneven");
+        for edit in [
+            Edit::AddTrack {
+                instrument: Instrument::Bass,
+                sound: None,
+                fallback_program: None,
+            },
+            Edit::SetFret {
+                track: 1,
+                measure: 1,
+                beat: 0,
+                string: 1,
+                fret: 3,
+            },
+            // The guitar loses its second measure; the bass keeps it, notes included.
+            Edit::RemoveRests {
+                track: 0,
+                from: score_model::BeatAddress {
+                    measure: 1,
+                    beat: 0,
+                },
+                to: score_model::BeatAddress {
+                    measure: 1,
+                    beat: 0,
+                },
+            },
+        ] {
+            apply_edit(&mut score, &edit).unwrap();
+        }
+        assert_ne!(
+            score.tracks[0].measures.len(),
+            score.tracks[1].measures.len()
+        );
+
+        // The importer completes a shorter part with a measure of rest: no note is lost, the
+        // track just ends with one more measure.
+        let mut padded = score.clone();
+        let rest = padded.tracks[0].measures.last().unwrap().clone();
+        padded.tracks[0].measures.push(rest);
+        assert_same_music(&roundtrip(&score), &padded);
+    }
+
+    #[test]
     fn a_bend_keeps_its_amount_in_the_file() {
         let mut score = blank_score("bends");
         for (measure, technique) in [
