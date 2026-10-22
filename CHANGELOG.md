@@ -166,6 +166,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   holds the settings of the selected track (name, instrument, sound, clef, tuning) and starts with
   that track's name. In the Rows view there are no tabs, so `+ Track` sits at the end of the second
   line. The `Track to edit` menu is gone: click a tab or a row header instead.
+- UI: pressing the right arrow on the last beat of the score adds an empty measure and moves onto
+  it, in every track. Nothing is added while the last measure of the track is still empty.
 - UI: in the Tabs view the tablature now uses the whole width of the window instead of stopping at
   1100 px, with a narrower margin around it.
 - Sound packs: a pack that lists a drum kit is refused; drums always play the SoundFont's kits.

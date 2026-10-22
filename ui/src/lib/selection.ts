@@ -62,6 +62,18 @@ function beatCount(score: Score, track: number, measure: number): number {
 }
 
 /**
+ * True when an arrow to the right has nothing after the selection (the last beat of the last
+ * measure) and that measure already holds a note, so the editor may open a new measure there. An
+ * empty last measure says no: holding the key would otherwise pile up blank measures.
+ */
+export function canGrowPastEnd({ score, track, selection }: { score: Score; track: number; selection: Selection }): boolean {
+  const { measure, beat } = clampSelection({ score, track, selection })
+  const measures = score.tracks[track]?.measures ?? []
+  if (measure !== measures.length - 1 || beat !== beatCount(score, track, measure) - 1) return false
+  return measures[measure]?.voices.some((voice) => voice.beats.some((b) => b.notes.length > 0)) ?? false
+}
+
+/**
  * Moves along the beats (crossing barlines), or between strings, or on a pitched track one step of
  * the staff (a line or a space) up or down, or on a drum track to the next piece up or down the
  * staff. Stays put at the edges.

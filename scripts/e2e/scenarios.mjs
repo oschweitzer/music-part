@@ -828,6 +828,21 @@ export const scenarios = [
   ],
 
   [
+    'the right arrow at the end of the score adds one empty measure, and no more while it is empty',
+    async (context) => {
+      const { page } = context
+      const count = async () => (await document_(context)).score.tracks.map((t) => t.measures.length)
+      const before = await count()
+
+      await clickFret(page, 0)
+      // More presses than there are beats: the first one past the last note adds the measure.
+      for (let i = 0; i < 40; i++) await page.press('ArrowRight')
+      await settle()
+      assert.deepEqual(await count(), before.map((n) => n + 1), 'every track gets the measure, once')
+    },
+  ],
+
+  [
     'dragging over part of a chord selects those strings, and Delete clears only them',
     async (context) => {
       const { page } = context

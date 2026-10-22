@@ -237,6 +237,99 @@ describe('Editor', () => {
       expect(edits).toEqual([{ type: 'insertMeasure', at: 3 }])
     })
 
+    describe('the right arrow at the end of the score', () => {
+      const lastMeasure = score.tracks[0]!.measures.length - 1
+      const lastBeat = score.tracks[0]!.measures[lastMeasure]!.voices[0]!.beats.length - 1
+
+      it('should add an empty measure and select its first beat, on the same string', async () => {
+        // The score the app answers with has the new measure, as the real one does.
+        const grown = structuredClone(score)
+        for (const track of grown.tracks) {
+          const blank = structuredClone(track.measures[0]!)
+          for (const voice of blank.voices) for (const beat of voice.beats) beat.notes = []
+          track.measures.push(blank)
+        }
+        const edits: Edit[] = []
+        const { api } = fakeApi({
+          edit: async (edit) => {
+            edits.push(edit)
+            return state({ score: grown, isDirty: true, canUndo: true })
+          },
+        })
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: lastMeasure, beat: lastBeat, row: 3 })
+        await editor.run({ type: 'move', direction: 'right' })
+
+        expect(edits).toEqual([{ type: 'insertMeasure', at: lastMeasure + 1 }])
+        expect(editor.selection).toEqual({ measure: lastMeasure + 1, beat: 0, row: 3 })
+      })
+
+      it('should add one measure when the key is pressed again before the first one is in', async () => {
+        const grown = structuredClone(score)
+        for (const track of grown.tracks) {
+          const blank = structuredClone(track.measures[0]!)
+          for (const voice of blank.voices) for (const beat of voice.beats) beat.notes = []
+          track.measures.push(blank)
+        }
+        const edits: Edit[] = []
+        const { api } = fakeApi({
+          edit: async (edit) => {
+            edits.push(edit)
+            await Promise.resolve()
+            return state({ score: grown, isDirty: true, canUndo: true })
+          },
+        })
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: lastMeasure, beat: lastBeat, row: 3 })
+        await Promise.all([
+          editor.run({ type: 'move', direction: 'right' }),
+          editor.run({ type: 'move', direction: 'right' }),
+          editor.run({ type: 'move', direction: 'right' }),
+        ])
+
+        expect(edits).toEqual([{ type: 'insertMeasure', at: lastMeasure + 1 }])
+        expect(editor.selection).toEqual({ measure: lastMeasure + 1, beat: 0, row: 3 })
+      })
+
+      it('should only move the selection while a beat follows', async () => {
+        const { api, edits } = fakeApi()
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: lastMeasure - 1, beat: 0, row: 3 })
+        await editor.run({ type: 'move', direction: 'right' })
+
+        expect(edits).toEqual([])
+        expect(editor.selection).toEqual({ measure: lastMeasure - 1, beat: 1, row: 3 })
+      })
+
+      it('should not add a second blank measure when the last one is still empty', async () => {
+        const blank = structuredClone(score)
+        for (const voice of blank.tracks[0]!.measures[lastMeasure]!.voices) for (const beat of voice.beats) beat.notes = []
+        const { api, edits } = fakeApi({ startup: async () => opened({ document: state({ score: blank }) }) })
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: lastMeasure, beat: lastBeat, row: 3 })
+        await editor.run({ type: 'move', direction: 'right' })
+
+        expect(edits).toEqual([])
+        expect(editor.selection).toEqual({ measure: lastMeasure, beat: lastBeat, row: 3 })
+      })
+
+      it('should stay put, without an error, when the score cannot be edited', async () => {
+        const { api, edits } = fakeApi({ canEdit: false })
+        const { editor } = setup({ api })
+        await editor.start()
+        editor.select({ measure: lastMeasure, beat: lastBeat, row: 3 })
+        await editor.run({ type: 'move', direction: 'right' })
+
+        expect(edits).toEqual([])
+        expect(editor.message).toBeNull()
+        expect(editor.selection).toEqual({ measure: lastMeasure, beat: lastBeat, row: 3 })
+      })
+    })
+
     it('should keep a range when the menu opens inside it, and select the spot otherwise', async () => {
       const { api } = fakeApi()
       const { editor } = setup({ api })

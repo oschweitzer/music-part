@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import demo from '../../public/demo-score.json'
 import type { Score } from './score-types'
-import { clampSelection, extendSelection, FIRST_NOTE, firstSelection, isBeatSelected, moveSelection, moveToTrack, nextFret, selectedRange, selectedRows } from './selection'
+import { canGrowPastEnd, clampSelection, extendSelection, FIRST_NOTE, firstSelection, isBeatSelected, moveSelection, moveToTrack, nextFret, selectedRange, selectedRows } from './selection'
 import type { Selection } from './selection'
 import { durationTicks } from './tab-layout'
 
@@ -254,5 +254,31 @@ describe('on a pitched track', () => {
     expect(down).toEqual({ track: 2, selection: { measure: 0, beat: 0, row: 60 } })
     const up = moveToTrack({ score: withPiano, track: 2, selection: { measure: 0, beat: 0, row: 72 }, step: -1 })
     expect(up.selection.row).toBe(1)
+  })
+})
+
+describe('canGrowPastEnd', () => {
+  const lastMeasure = score.tracks[0]!.measures.length - 1
+  const lastBeat = beatsIn(lastMeasure) - 1
+  const grows = (selection: Selection, from: Score = score) => canGrowPastEnd({ score: from, track: 0, selection })
+
+  /** The demo with every note of the last measure of the first track taken out. */
+  const withBlankEnd = (): Score => {
+    const blank = structuredClone(score)
+    for (const voice of blank.tracks[0]!.measures[lastMeasure]!.voices) for (const beat of voice.beats) beat.notes = []
+    return blank
+  }
+
+  it('should be true on the last beat of the last measure when it holds notes', () => {
+    expect(grows({ measure: lastMeasure, beat: lastBeat, row: 1 })).toBe(true)
+  })
+
+  it('should be false while there is a beat or a measure after the selection', () => {
+    expect(grows({ measure: lastMeasure - 1, beat: 0, row: 1 })).toBe(false)
+    expect(grows({ measure: lastMeasure - 1, beat: beatsIn(lastMeasure - 1) - 1, row: 1 })).toBe(false)
+  })
+
+  it('should be false when the last measure is still empty, so the key never piles up blank measures', () => {
+    expect(grows({ measure: lastMeasure, beat: lastBeat, row: 1 }, withBlankEnd())).toBe(false)
   })
 })

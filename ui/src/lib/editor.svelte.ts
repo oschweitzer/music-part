@@ -7,6 +7,7 @@ import { isPercussionTrack, isPitchedTrack, noteKindOf } from './instruments'
 import { notePitch, noteRow } from './notes'
 import type { Beat, Instrument, Note, NoteValue, SoundId, TimeSignature, TrackClef } from './score-types'
 import {
+  canGrowPastEnd,
   clampSelection,
   DEFAULT_PITCH,
   extendSelection,
@@ -663,15 +664,33 @@ export class Editor {
       })
     }
     if (this.document) {
-      this.selection = moveSelection({
-        score: this.document.score,
-        track: this.track,
-        selection: this.selection ?? FIRST_NOTE,
-        direction,
-      })
+      const selection = this.selection ?? FIRST_NOTE
+      // Past the last note the right arrow opens the next measure, as writing on does.
+      if (direction === 'right' && this.canEdit && canGrowPastEnd({ score: this.document.score, track: this.track, selection })) {
+        this.#typed = null
+        return this.#growScore()
+      }
+      this.selection = moveSelection({ score: this.document.score, track: this.track, selection, direction })
     }
     this.#typed = null
     return Promise.resolve()
+  }
+
+  /**
+   * Adds an empty measure at the end and selects its first beat. Decided when its turn comes, so a
+   * key held down adds one measure: the presses behind it find the new, empty measure and stop.
+   */
+  #growScore(): Promise<void> {
+    return this.#enqueue(async () => {
+      const document = this.document
+      const selection = this.selection
+      if (!document || !selection || !canGrowPastEnd({ score: document.score, track: this.track, selection })) return
+      const at = document.score.tracks[this.track]?.measures.length ?? 0
+      const state = await this.#api.edit({ type: 'insertMeasure', at })
+      this.selection = { measure: at, beat: 0, row: selection.row }
+      this.#typed = null
+      await this.#apply(state)
+    })
   }
 
   #setDuration(build: (beat: Beat) => { value: NoteValue; dots: number }): Promise<void> {
