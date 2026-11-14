@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Notes are heard as they are written: typing a fret, setting a technique or a bend, writing a note
+  on a staff or striking a drum piece, or clicking a note, plays it for half a second with the
+  sound and the technique of its track, without pressing Play. It follows the mute of the track,
+  ignores solo, stays silent while the score plays and on arrow-key moves. See `docs/editing.md`.
 - Bends have an amount: a quarter tone (1/4), a half tone (1/2) or a whole tone (full, the default).
   The arrow next to `B` in the toolbar and a "Bend" submenu of the right-click menu on a note choose
   it, and `+` / `-` on a bent note step through the three. The tablature shows the amount above the

@@ -9,6 +9,8 @@ use crate::sfz::{self, SfzInstrument, SfzSound};
 
 /// Silence kept after the last event so the notes can ring out.
 const RELEASE_TAIL_SECS: u64 = 2;
+/// How long a preview rings on after its notes are released.
+const PREVIEW_TAIL_SECS: u64 = 1;
 
 #[derive(Debug)]
 pub enum PlayerError {
@@ -221,6 +223,42 @@ impl Program {
     }
 }
 
+/// A few notes to hear at once, outside the timeline of the score: what a note sounds like as it is
+/// written. Build it away from the real-time audio thread, like a [`Program`].
+pub struct Preview {
+    /// The track whose sound plays it.
+    track: usize,
+    events: Vec<Event>,
+    /// Start position in samples of each event (same order as `events`).
+    event_samples: Vec<u64>,
+    end_sample: u64,
+    /// Where the preview is, in samples since it started, and the next event to play.
+    position: u64,
+    next: usize,
+}
+
+impl Preview {
+    /// A preview of `events` (see `sequencer::preview`), or `None` if there is nothing to hear.
+    pub fn new(events: Vec<Event>, sample_rate: u32) -> Option<Self> {
+        let track = events.first()?.track;
+        let event_samples: Vec<u64> = events
+            .iter()
+            .map(|e| sequencer::tick_to_sample(e.tick, sequencer::PREVIEW_TEMPO_BPM, sample_rate))
+            .collect();
+        let end_sample = event_samples
+            .last()
+            .map_or(0, |last| last + PREVIEW_TAIL_SECS * u64::from(sample_rate));
+        Some(Self {
+            track,
+            events,
+            event_samples,
+            end_sample,
+            position: 0,
+            next: 0,
+        })
+    }
+}
+
 /// Bank Select (most significant byte) controller.
 const BANK_SELECT_MSB: u8 = 0;
 /// Controllers of a SoundFont NRPN message: the select number (120 for a generator, then the
@@ -280,6 +318,8 @@ pub struct Player {
     sfz_voices: sfz::Voices,
     /// Every bank, SoundFont or SFZ, in the order added: the last one of a sound plays it.
     order: Vec<(Sound, BankKind)>,
+    /// The notes being previewed, if any. Only heard while the score is not playing.
+    preview: Option<Preview>,
 }
 
 /// The two kinds of sample bank a sound can have.
@@ -319,6 +359,7 @@ impl Player {
             sfz: Vec::with_capacity(usize::from(MAX_BANKS)),
             sfz_voices: sfz::Voices::new(),
             order: Vec::with_capacity(2 * usize::from(MAX_BANKS)),
+            preview: None,
         })
     }
 
@@ -585,12 +626,48 @@ impl Player {
     }
 
     pub fn play(&mut self) {
+        self.cut_preview();
         self.playing = true;
     }
 
     pub fn pause(&mut self) {
         self.playing = false;
+        self.cut_preview();
         self.silence();
+    }
+
+    /// Sounds a preview on the track it names, whatever the mute and solo (the caller decides
+    /// whether a track may be heard), and cuts the one still ringing. Ignored while the score is
+    /// playing, so a preview never mixes with the song. Like [`Player::load`], it frees the
+    /// previous preview here, on a user action.
+    pub fn preview(&mut self, preview: Preview) {
+        if self.playing {
+            return;
+        }
+        self.cut_preview();
+        self.preview = Some(preview);
+    }
+
+    /// True while a preview sounds or rings on.
+    pub fn is_previewing(&self) -> bool {
+        self.preview.is_some()
+    }
+
+    /// Stops the preview now, with no release.
+    fn cut_preview(&mut self) {
+        let Some(preview) = self.preview.take() else {
+            return;
+        };
+        if let Some(voice) = self.program.voices.get(preview.track) {
+            for channel in voice.channels() {
+                let _ = self.synth.send_event(MidiEvent::AllSoundOff { channel });
+                let _ = self.synth.send_event(MidiEvent::PitchBend {
+                    channel,
+                    value: BEND_CENTER,
+                });
+            }
+        }
+        self.sfz_voices.cut_all();
     }
 
     /// Stops and rewinds to the start.
@@ -680,7 +757,9 @@ impl Player {
         let (frames, _) = out.as_chunks_mut::<2>();
         for frame in frames {
             if !self.playing {
-                frame.fill(0.0);
+                let (l, r) = self.next_preview_frame();
+                frame[0] = l;
+                frame[1] = r;
                 continue;
             }
             while self.next < self.program.events.len()
@@ -698,6 +777,36 @@ impl Player {
                 self.stop();
             }
         }
+    }
+
+    /// One frame of the preview, silence when there is none.
+    fn next_preview_frame(&mut self) -> (f32, f32) {
+        if self.preview.is_none() {
+            return (0.0, 0.0);
+        }
+        while let Some(event) = self.due_preview_event() {
+            self.sound(event);
+        }
+        let (l, r) = self.synth.read_next();
+        let (sfz_l, sfz_r) = self.sfz_voices.next_frame(&self.sfz);
+        if let Some(preview) = &mut self.preview {
+            preview.position += 1;
+            if preview.position >= preview.end_sample {
+                self.cut_preview();
+            }
+        }
+        (l + sfz_l, r + sfz_r)
+    }
+
+    /// The next event of the preview that is due, if any.
+    fn due_preview_event(&mut self) -> Option<Event> {
+        let preview = self.preview.as_mut()?;
+        let event = *preview.events.get(preview.next)?;
+        if preview.event_samples[preview.next] > preview.position {
+            return None;
+        }
+        preview.next += 1;
+        Some(event)
     }
 
     /// Plays an event with the SFZ instrument of `sound`, if it has one. True when nothing is
@@ -742,6 +851,11 @@ impl Player {
         if matches!(e.action, Action::NoteOn { .. }) && !self.is_audible(e.track) {
             return;
         }
+        self.sound(e);
+    }
+
+    /// Plays an event on the channels of its track, audible or not.
+    fn sound(&mut self, e: Event) {
         let Some((sound, is_percussion)) = self
             .program
             .voices
@@ -950,6 +1064,169 @@ pub(crate) mod tests {
         player.load_score(&one_note_score());
         assert_eq!(player.position(), 0);
         assert!(!player.is_playing());
+    }
+
+    /// A player loaded with `score`, and a preview of `notes` on its first track.
+    fn previewing(path: &std::path::Path, score: &Score, notes: &[Note]) -> Player {
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(score);
+        player.preview(preview_of(score, notes));
+        player
+    }
+
+    fn preview_of(score: &Score, notes: &[Note]) -> Preview {
+        let events = sequencer::preview(0, &score.tracks[0], notes);
+        Preview::new(events, 44_100).expect("notes to hear")
+    }
+
+    fn render_frames(player: &mut Player, seconds: f64) -> Vec<f32> {
+        let mut buf = vec![0.0f32; 2 * (44_100.0 * seconds) as usize];
+        player.render(&mut buf);
+        buf
+    }
+
+    fn peak_of(buf: &[f32]) -> f32 {
+        buf.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn a_preview_sounds_without_the_playback_running() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = previewing(&path, &one_note_score(), &[Note::fretted(2, 3)]);
+
+        let heard = render_frames(&mut player, 0.2);
+        assert!(peak_of(&heard) > 0.01, "the preview is silent");
+        assert!(!player.is_playing());
+        assert_eq!(player.position(), 0, "the playback position does not move");
+    }
+
+    #[test]
+    fn a_preview_has_a_fixed_length_whatever_the_beat_it_was_written_in() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        // The score holds a whole note; the preview is a quarter note and a release.
+        let mut player = previewing(&path, &one_note_score(), &[Note::fretted(1, 0)]);
+
+        let heard = render_frames(&mut player, 3.0);
+        assert!(peak_of(&heard[..2 * 44_100 / 2]) > 0.01);
+        assert!(!player.is_previewing(), "the preview is over after 3 s");
+        let last_second = &heard[2 * 2 * 44_100..];
+        assert!(
+            peak_of(last_second) == 0.0,
+            "nothing rings after the preview"
+        );
+    }
+
+    #[test]
+    fn a_preview_is_ignored_while_the_score_plays() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = one_note_score();
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&score);
+        player.play();
+
+        player.preview(preview_of(&score, &[Note::fretted(2, 3)]));
+        assert!(!player.is_previewing());
+    }
+
+    #[test]
+    fn starting_the_playback_cuts_a_preview() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let mut player = previewing(&path, &one_note_score(), &[Note::fretted(2, 3)]);
+        render_frames(&mut player, 0.1);
+
+        player.play();
+        assert!(!player.is_previewing());
+    }
+
+    #[test]
+    fn loading_a_score_cuts_a_preview() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = one_note_score();
+        let mut player = previewing(&path, &score, &[Note::fretted(2, 3)]);
+        render_frames(&mut player, 0.1);
+
+        player.load_score(&score);
+        assert!(!player.is_previewing());
+        assert_eq!(peak_of(&render_frames(&mut player, 0.1)), 0.0);
+    }
+
+    #[test]
+    fn a_preview_ignores_the_solo_of_other_tracks() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = one_note_score();
+        let mut player = Player::new(&mut File::open(path).unwrap(), 44_100).unwrap();
+        player.load_score(&score);
+        // What the caller sends when another track is soloed: this one is not audible.
+        player.set_audible(vec![false]);
+        player.preview(preview_of(&score, &[Note::fretted(2, 3)]));
+
+        assert!(peak_of(&render_frames(&mut player, 0.2)) > 0.01);
+    }
+
+    #[test]
+    fn a_new_preview_cuts_the_one_still_ringing() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        let score = one_note_score();
+        let mut player = previewing(&path, &score, &[Note::fretted(6, 0)]);
+        render_frames(&mut player, 0.1);
+
+        player.preview(preview_of(&score, &[Note::fretted(1, 12)]));
+        let after = render_frames(&mut player, 0.05);
+        let alone = {
+            let mut fresh = previewing(&path, &score, &[Note::fretted(1, 12)]);
+            render_frames(&mut fresh, 0.05)
+        };
+        let (after, alone) = (energy(&after, 0.0, 0.05), energy(&alone, 0.0, 0.05));
+        assert!(
+            // The reverb of the synthesizer keeps a little of the cut note; a note left ringing
+            // would double the energy.
+            (after - alone).abs() <= alone * 0.1,
+            "the first preview still sounds: {after} against {alone}"
+        );
+    }
+
+    #[test]
+    fn a_palm_muted_preview_is_duller_than_the_same_note_open() {
+        let Some(path) = test_soundfont() else {
+            eprintln!("no SoundFont available, test skipped");
+            return;
+        };
+        // The score uses the muted timbre, so its lane is set up.
+        let score = two_notes(Some(Technique::PalmMute));
+        let open = Note::fretted(1, 0);
+        let muted = Note {
+            technique: Some(Technique::PalmMute),
+            ..Note::fretted(1, 0)
+        };
+        let mut muted_player = previewing(&path, &score, &[muted]);
+        let mut open_player = previewing(&path, &score, &[open]);
+
+        let (muted, open) = (
+            brightness(&render_frames(&mut muted_player, 0.5), 0.0, 0.4),
+            brightness(&render_frames(&mut open_player, 0.5), 0.0, 0.4),
+        );
+        assert!(muted < open * 0.5, "muted {muted}, open {open}");
     }
 
     /// Two half notes, the first one optionally a slide up to the second.

@@ -68,6 +68,28 @@ Double-click a line to strike its drum, Up and Down move a hit to the next line.
 
 On macOS, `Cmd` replaces `Ctrl`. The same actions are in the toolbars.
 
+### Hearing what you write
+
+A note sounds for a moment as soon as it is written, without pressing Play: when a fret is typed, a
+technique or a bend is set (`B`, `M`, `/`, `+`, `-`), a note is written or moved on a staff, a drum
+piece is struck, and when an existing note is clicked. Moving the selection with the arrow keys,
+extending it with `Shift`, clicking a rest, tying and taking a note away stay silent.
+
+- Only the note that was written or clicked sounds, not the whole beat, so a chord is heard as it
+  is built, string by string.
+- It uses the sound of the track and the technique of the note (a bend rises, a palm mute is dull
+  and short), on guitars, staves and drums alike. A slide has no note to glide to and is a plain note.
+- It has a fixed length, a quarter note at 120 bpm (half a second) and its release, whatever the
+  value of the beat or the tempo of the score. A new preview cuts the previous one.
+- It follows the mute of the track and ignores solo: a soloed track elsewhere does not keep the
+  note you are writing silent. Nothing is heard while the score plays.
+- It is asked for after the edit was accepted (a refused edit stays silent), never waits for the
+  engine and never reports a failure. There is no sound in a browser, where nothing can be edited.
+
+How it works: the `preview_notes` command builds the events with `sequencer::preview` (the same code
+as the playback, for one beat of fixed length), and the audio thread hands them to the player,
+which plays them on the channels of the track outside the timeline of the score.
+
 ## Selecting with the mouse
 
 Drag over the tablature to select, like text: a rectangle from where you pressed to where you

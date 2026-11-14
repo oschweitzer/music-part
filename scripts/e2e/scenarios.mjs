@@ -190,6 +190,43 @@ export const scenarios = [
   ],
 
   [
+    'a note is heard when it is clicked or written, not when the selection moves, and not on a muted track',
+    async ({ page }) => {
+      const previews = () => page.eval(`window.__e2e.audio.filter(c => c.command === 'preview_notes').map(c => c.args)`)
+      const placed = (heard) => heard.notes.map((n) => [n.string, n.fret])
+
+      await clickFret(page, 0)
+      await settle()
+      let heard = await previews()
+      assert.equal(heard.length, 1, 'clicking a note sounds it')
+      assert.equal(heard[0].track, 0)
+      assert.deepEqual(placed(heard[0]), [[5, 0]])
+
+      await page.press('7')
+      await settle()
+      heard = await previews()
+      assert.equal(heard.length, 2, 'typing a fret sounds the new note')
+      assert.deepEqual(placed(heard[1]), [[5, 7]])
+
+      await page.press('b')
+      await settle()
+      heard = await previews()
+      assert.equal(heard.length, 3, 'setting a technique sounds the note')
+      assert.equal(heard[2].notes[0].technique, 'Bend')
+
+      for (const key of ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp']) await page.press(key)
+      await settle()
+      assert.equal((await previews()).length, 3, 'the arrow keys move in silence')
+
+      await clickButton(page, 'Mute Guitar')
+      await clickFret(page, 0)
+      await page.press('3')
+      await settle()
+      assert.equal((await previews()).length, 3, 'a muted track stays silent')
+    },
+  ],
+
+  [
     'two digits typed quickly make one fret number',
     async (context) => {
       const { page } = context

@@ -59,6 +59,8 @@
     convertFileSrc: (path) => path,
     invoke(command, args) {
       if (command.startsWith('plugin:')) return plugin(command, args)
+      // A preview is noted like the audio commands, and also goes on to the backend, which checks it.
+      if (command === 'preview_notes') window.__e2e.audio.push({ command, args: args ?? {} })
       if (AUDIO_COMMANDS.includes(command)) {
         window.__e2e.audio.push({ command, args: args ?? {} })
         return Promise.resolve(null)
